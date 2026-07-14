@@ -1,0 +1,12 @@
+{
+  "name": "gumbo",
+  "private": true,
+  "workspaces": [
+    "daemon",
+    "dashboard"
+  ],
+  "scripts": {
+    "dev:daemon": "npm run dev --workspace daemon",
+    "dev:dashboard": "npm run dev --workspace dashboard"
+  }
+}
