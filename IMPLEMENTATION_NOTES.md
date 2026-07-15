@@ -156,8 +156,14 @@ Two Opus reviewers (debugger + auditor) reviewed the M1 codebase. **All findings
 
 **Shell (`shell/` real app — builds + runs ad-hoc signed on the 27.0 beta):**
 - `project.yml`: LSUIElement, mic usage string, sandbox off, bundle id `ai.scalinity.Gumbo`,
-  DynamicNotchKit pinned `exactVersion: 1.1.0`. Still ad-hoc (`CODE_SIGN_IDENTITY: "-"`) — flip to
-  `Automatic` + `DEVELOPMENT_TEAM` once the Apple Development cert exists (risk #3 pending).
+  DynamicNotchKit pinned `exactVersion: 1.1.0`. Signs with the real **Apple Development** cert
+  (Manual style + `DEVELOPMENT_TEAM: REDACTED-TEAM-ID` — signs straight from the keychain, no portal).
+- **GOTCHA (signing): a fresh Xcode-created cert can still be "0 valid identities".** the user's
+  cert (issued 2026-07-15, WWDR **G3** issuer) sat invalid in the keychain because the only WWDR
+  intermediate present was the **G1 that expired Feb 2023** — the chain couldn't build. Fix:
+  `curl -sO https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer && security import
+  AppleWWDRCAG3.cer -k ~/Library/Keychains/login.keychain-db` → identity immediately valid;
+  app now signs with the full the user → WWDR G3 → Apple Root CA chain.
 - **GOTCHA (macOS 27 beta, probed 4 orderings): VPIO enable order is load-bearing.** Enabling
   `setVoiceProcessingEnabled(true)` *before* touching the playback graph → engine start fails
   with **-10875** (output unit kAUInitialize). Working order: attach player + connect to
@@ -199,10 +205,10 @@ commit-on-release `hadSpeech/speechActive/sawCommit` all correct, `response.crea
 notch listening/speaking states live. Also verified pre-live: daemon-only PTT/VAD-pause/
 barge-in/text smokes, WS reconnect across `tsx watch` restarts. **Still pending:** live
 *voice* barge-in (proven at the protocol level in the daemon smoke, not yet exercised by
-voice), idle-close observation in real use, and TCC grant persistence across rebuilds —
-blocked on the Apple Development cert; ad-hoc rebuilds may re-prompt mic and need an
-Accessibility toggle. `shell/spike/` deleted (real shell supersedes it; findings recorded
-here).
+voice), idle-close observation in real use, and the TCC persistence check itself — the app now
+signs with the real cert (one fresh mic + Accessibility grant needed after the ad-hoc→signed
+identity change), then one rebuild must confirm grants stick (risk #3). `shell/spike/` deleted
+(real shell supersedes it; findings recorded here).
 
 ### Forward-compat: keep the Realtime layer modular (GPT-Live)
 GPT-Live API availability has **not** been announced. The integration relies on

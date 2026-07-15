@@ -18,10 +18,11 @@ settings:
     PRODUCT_BUNDLE_IDENTIFIER: ai.scalinity.Gumbo
     MARKETING_VERSION: "0.1"
     CURRENT_PROJECT_VERSION: "1"
-    # Ad-hoc until the Apple Development cert lands in the keychain (risk #3): then switch to
-    # CODE_SIGN_STYLE: Automatic + DEVELOPMENT_TEAM so TCC grants survive rebuilds.
+    # Real Apple Development signing (stable identity + bundle id ⇒ TCC grants survive
+    # rebuilds). Manual style: signs straight from the keychain identity, no portal lookup.
     CODE_SIGN_STYLE: Manual
-    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: REDACTED-TEAM-ID
     ENABLE_HARDENED_RUNTIME: NO
 targets:
   Gumbo:
