@@ -1,15 +1,23 @@
 import AVFoundation
 import Foundation
 
-/// Capture + playback for the voice loop, built on Voice-Processing I/O (spike 1a/1b findings):
-/// VPIO gives acoustic echo cancellation (Gumbo on speakers doesn't trigger its own barge-in),
-/// automatic gain, and Bluetooth full-duplex (plain taps go silent on AirPods-as-mic).
+/// Capture + playback for the voice loop. Two graph modes so the mic is only open while
+/// push-to-talk actually needs it (the macOS orange indicator tracks the input unit, not
+/// whether frames are streamed):
+///   · duplex — Voice-Processing I/O + input tap (spike 1a/1b findings: AEC so Gumbo on
+///     speakers doesn't trigger its own barge-in, AGC, Bluetooth full-duplex). Used from
+///     ⌃⌥ press until the conversation goes idle.
+///   · playbackOnly — player graph only, inputNode never touched → no mic indicator.
+///     Used for spoken replies and M3 announcements arriving with no press.
+/// A ⌃⌥ press mid-playback swaps the graph live: unscheduled audio survives the switch
+/// (the in-flight buffers — a fraction of a second — are lost, accepted).
 /// Gotcha -10851: with VPIO the graph must stay in the unit's native I/O format — all PCM
-/// conversion happens at the buffer level (capture → 24 kHz mono pcm16 wire format; incoming
-/// wire pcm16 → hardware-rate float for playback). `start(reason:)` is the wake-word seam:
-/// a future `.wakeWord` reason runs the same tap into a local detector first.
+/// conversion happens at the buffer level. Gotcha -10875: build the playback graph BEFORE
+/// enabling VPIO. `start(reason:)` is the wake-word seam: a future `.wakeWord` reason runs
+/// the same duplex tap into a local detector first.
 final class AudioEngine {
     enum StartReason { case ptt, playback }
+    private enum Mode { case duplex, playbackOnly }
 
     var onMicFrame: ((Data) -> Void)?
     var onMicLevel: ((Float) -> Void)?
@@ -22,6 +30,7 @@ final class AudioEngine {
 
     private var engine: AVAudioEngine?
     private var player: AVAudioPlayerNode?
+    private var mode: Mode?
     private var captureConverter: AVAudioConverter?
     private var captureMonoFormat: AVAudioFormat?
     private var playbackConverter: AVAudioConverter?
@@ -30,46 +39,74 @@ final class AudioEngine {
 
     private let lock = NSLock()
     private var armed = false
-    private var pendingBuffers = 0
+    private var inFlight = 0 // buffers scheduled on the player, not yet played back
     private var generation = 0 // invalidates completion handlers of flushed buffers
+    private var drainingActive = false
     private var micPermission = false
     private var running = false
     private var lastStartFailure: Date?
-    // Chunks that arrive before the engine is up (first spoken reply of a session with no
-    // prior ⌃⌥ press — dashboard text turns, M3 announcements). Drained on engine start.
-    private var pendingPlayback: [Data] = []
+    // Unscheduled pcm chunks. Also the pre-start queue (spoken reply with no prior press)
+    // and what carries playback across a live playbackOnly → duplex graph switch.
+    private var playbackQueue: [Data] = []
 
     // MARK: lifecycle
 
     func start(reason: StartReason) {
-        guard !running else { return }
-        if micPermission {
-            setupAndStart()
-            return
-        }
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            guard let self, granted else {
-                NSLog("[audio] microphone denied — enable Gumbo in System Settings > Privacy & Security")
+        switch reason {
+        case .playback:
+            // Playback never needs the mic. If a duplex engine is already up (armed
+            // conversation), play through it — VPIO's echo cancellation even helps.
+            if !running { setupAndStart(.playbackOnly) }
+        case .ptt:
+            if running && mode == .duplex { return }
+            if micPermission {
+                switchTo(.duplex)
                 return
             }
-            self.micPermission = true
-            DispatchQueue.main.async { self.setupAndStart() }
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                guard let self, granted else {
+                    NSLog("[audio] microphone denied — enable Gumbo in System Settings > Privacy & Security")
+                    return
+                }
+                self.micPermission = true
+                DispatchQueue.main.async { self.switchTo(.duplex) }
+            }
         }
     }
 
     func stop() {
+        stopEngine(keepQueue: false)
+    }
+
+    private func switchTo(_ target: Mode) {
+        if running {
+            if mode == target { return }
+            stopEngine(keepQueue: true) // keep queued audio: press-and-stay-silent must still hear the rest
+        }
+        setupAndStart(target)
+    }
+
+    private func stopEngine(keepQueue: Bool) {
         guard running else { return }
         running = false
-        engine?.inputNode.removeTap(onBus: 0)
+        lock.lock()
+        generation += 1 // completion handlers of dying buffers become stale
+        inFlight = 0
+        if !keepQueue { playbackQueue = [] }
+        let queueEmpty = playbackQueue.isEmpty
+        lock.unlock()
+        if mode == .duplex { engine?.inputNode.removeTap(onBus: 0) }
         player?.stop()
         engine?.stop()
         engine = nil
         player = nil
+        mode = nil
         captureConverter = nil
+        captureMonoFormat = nil
         playbackConverter = nil
         playFormat = nil
-        setDraining(false)
-        NSLog("[audio] engine stopped (idle)")
+        if queueEmpty { setDraining(false) }
+        NSLog("[audio] engine stopped%@", keepQueue && !queueEmpty ? " (graph switch, queue retained)" : "")
     }
 
     func setArmed(_ value: Bool) {
@@ -81,17 +118,69 @@ final class AudioEngine {
 
     // MARK: playback
 
-    /// Incoming speaker pcm16 (arbitrary chunk sizes) → hardware-rate float → player queue.
+    /// Incoming speaker pcm16 (arbitrary chunk sizes) → queue → player. Chunks arriving
+    /// before any engine is up wait in the queue and drain on the next start.
     func playChunk(_ pcm: Data) {
-        guard running, let player, let playFormat, let converter = playbackConverter else {
-            pendingPlayback.append(pcm)
-            if pendingPlayback.count > 120 { pendingPlayback.removeFirst() }
-            return
+        lock.lock()
+        playbackQueue.append(pcm)
+        if playbackQueue.count > 512 { playbackQueue.removeFirst() }
+        lock.unlock()
+        if running { pumpPlayback() }
+    }
+
+    /// Keep a few buffers scheduled ahead; the rest stays as Data in the queue so a graph
+    /// switch or flush loses at most the in-flight fraction, never the whole stream.
+    private func pumpPlayback() {
+        guard running, let player, let playFormat, let converter = playbackConverter else { return }
+        var scheduled = false
+        while true {
+            lock.lock()
+            guard inFlight < 3, !playbackQueue.isEmpty else {
+                lock.unlock()
+                break
+            }
+            let pcm = playbackQueue.removeFirst()
+            inFlight += 1
+            let gen = generation
+            lock.unlock()
+
+            guard let outBuf = convertForPlayback(pcm, converter: converter, to: playFormat) else {
+                lock.lock()
+                if gen == generation { inFlight -= 1 }
+                lock.unlock()
+                continue
+            }
+            if let ch = outBuf.floatChannelData?[0] {
+                var peak: Float = 0
+                for i in 0..<Int(outBuf.frameLength) { peak = max(peak, abs(ch[i])) }
+                onPlaybackLevel?(peak)
+            }
+            player.scheduleBuffer(outBuf, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                guard let self else { return }
+                self.lock.lock()
+                let live = gen == self.generation
+                if live { self.inFlight -= 1 }
+                let drained = live && self.inFlight == 0 && self.playbackQueue.isEmpty
+                self.lock.unlock()
+                if drained {
+                    self.setDraining(false)
+                } else if live {
+                    self.pumpPlayback()
+                }
+            }
+            scheduled = true
         }
+        if scheduled {
+            setDraining(true)
+            if !player.isPlaying { player.play() }
+        }
+    }
+
+    private func convertForPlayback(_ pcm: Data, converter: AVAudioConverter, to playFormat: AVAudioFormat) -> AVAudioPCMBuffer? {
         let inFrames = pcm.count / MemoryLayout<Int16>.size
         guard inFrames > 0,
               let inBuf = AVAudioPCMBuffer(pcmFormat: wireFormat, frameCapacity: AVAudioFrameCount(inFrames))
-        else { return }
+        else { return nil }
         inBuf.frameLength = AVAudioFrameCount(inFrames)
         pcm.withUnsafeBytes { raw in
             inBuf.int16ChannelData![0].update(from: raw.bindMemory(to: Int16.self).baseAddress!, count: inFrames)
@@ -99,7 +188,7 @@ final class AudioEngine {
 
         let ratio = playFormat.sampleRate / wireFormat.sampleRate
         let capacity = AVAudioFrameCount(Double(inFrames) * ratio) + 32
-        guard let outBuf = AVAudioPCMBuffer(pcmFormat: playFormat, frameCapacity: capacity) else { return }
+        guard let outBuf = AVAudioPCMBuffer(pcmFormat: playFormat, frameCapacity: capacity) else { return nil }
         var provided = false
         var convErr: NSError?
         let status = converter.convert(to: outBuf, error: &convErr) { _, outStatus in
@@ -108,41 +197,16 @@ final class AudioEngine {
             outStatus.pointee = .haveData
             return inBuf
         }
-        guard status != .error, outBuf.frameLength > 0 else { return }
-
-        if let ch = outBuf.floatChannelData?[0] {
-            var peak: Float = 0
-            for i in 0..<Int(outBuf.frameLength) { peak = max(peak, abs(ch[i])) }
-            onPlaybackLevel?(peak)
-        }
-
-        lock.lock()
-        pendingBuffers += 1
-        let gen = generation
-        let becameActive = pendingBuffers == 1
-        lock.unlock()
-        if becameActive {
-            NSLog("[audio] playback active")
-            setDraining(true)
-        }
-
-        player.scheduleBuffer(outBuf, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            guard let self else { return }
-            self.lock.lock()
-            let live = gen == self.generation
-            if live { self.pendingBuffers -= 1 }
-            let drained = live && self.pendingBuffers == 0
-            self.lock.unlock()
-            if drained { self.setDraining(false) }
-        }
-        if !player.isPlaying { player.play() }
+        guard status != .error, outBuf.frameLength > 0 else { return nil }
+        return outBuf
     }
 
     /// Barge-in: drop everything queued, immediately.
     func flushPlayback() {
         lock.lock()
         generation += 1
-        pendingBuffers = 0
+        inFlight = 0
+        playbackQueue = []
         lock.unlock()
         player?.stop()
         playbackConverter?.reset()
@@ -153,20 +217,25 @@ final class AudioEngine {
     }
 
     private func setDraining(_ value: Bool) {
+        lock.lock()
+        let changed = drainingActive != value
+        drainingActive = value
+        lock.unlock()
+        guard changed else { return }
+        if value { NSLog("[audio] playback active") }
         onPlaybackStateChange?(value)
     }
 
     // MARK: engine graph
 
-    private func setupAndStart() {
+    private func setupAndStart(_ target: Mode) {
         guard !running else { return }
         if let last = lastStartFailure, Date().timeIntervalSince(last) < 3 { return } // no retry storms
         let engine = AVAudioEngine()
-        let input = engine.inputNode
 
         // Order is load-bearing (probed on this macOS 27 beta): materialize the playback
-        // graph FIRST, then enable VPIO — enabling VPIO before touching mainMixerNode makes
-        // engine start fail with -10875 (output unit kAUInitialize).
+        // graph FIRST, then (duplex only) enable VPIO — enabling VPIO before touching
+        // mainMixerNode makes engine start fail with -10875 (output unit kAUInitialize).
         let player = AVAudioPlayerNode()
         engine.attach(player)
         // Keep the connection in a native-rate format (mono float at the output hardware rate);
@@ -177,25 +246,31 @@ final class AudioEngine {
         self.playFormat = playFormat
         playbackConverter = AVAudioConverter(from: wireFormat, to: playFormat)
 
-        do {
-            try input.setVoiceProcessingEnabled(true)
-        } catch {
-            NSLog("[audio] voice processing unavailable (\(error)) — echo cancellation degraded")
-        }
+        var inDescription = "none (playback-only, mic untouched)"
+        if target == .duplex {
+            let input = engine.inputNode
+            do {
+                try input.setVoiceProcessingEnabled(true)
+            } catch {
+                NSLog("[audio] voice processing unavailable (\(error)) — echo cancellation degraded")
+            }
 
-        // Input format only settles after the VPIO switch — here a 48 kHz **9-channel** array
-        // with a discrete layout. AVAudioConverter does NOT downmix discrete multichannel to
-        // mono (its default channel map produced pure silence — live-debug finding); the
-        // voice-processed signal is on channel 0, so captureTapped extracts ch0 into a mono
-        // buffer and the converter only ever does mono 48 kHz float → mono 24 kHz int16.
-        let hwInFormat = input.outputFormat(forBus: 0)
-        let monoIn = AVAudioFormat(standardFormatWithSampleRate: hwInFormat.sampleRate, channels: 1)!
-        captureMonoFormat = monoIn
-        captureConverter = AVAudioConverter(from: monoIn, to: wireFormat)
-        loggedChannelPeaks = false
+            // Input format only settles after the VPIO switch — here a 48 kHz **9-channel**
+            // array with a discrete layout. AVAudioConverter does NOT downmix discrete
+            // multichannel to mono (its default channel map produced pure silence — live-debug
+            // finding); the voice-processed signal is on channel 0, so captureTapped extracts
+            // ch0 into a mono buffer and the converter only ever does mono float → mono int16.
+            let hwInFormat = input.outputFormat(forBus: 0)
+            let monoIn = AVAudioFormat(standardFormatWithSampleRate: hwInFormat.sampleRate, channels: 1)!
+            captureMonoFormat = monoIn
+            captureConverter = AVAudioConverter(from: monoIn, to: wireFormat)
+            loggedChannelPeaks = false
 
-        input.installTap(onBus: 0, bufferSize: 1024, format: hwInFormat) { [weak self] buffer, _ in
-            self?.captureTapped(buffer)
+            input.installTap(onBus: 0, bufferSize: 1024, format: hwInFormat) { [weak self] buffer, _ in
+                self?.captureTapped(buffer)
+            }
+            inDescription = String(format: "%.0f Hz/%d ch, VPIO %@", hwInFormat.sampleRate,
+                                   hwInFormat.channelCount, input.isVoiceProcessingEnabled ? "on" : "OFF")
         }
 
         engine.prepare()
@@ -203,18 +278,16 @@ final class AudioEngine {
             try engine.start()
             self.engine = engine
             self.player = player
+            self.mode = target
             running = true
             lastStartFailure = nil
-            NSLog("[audio] engine started — in %.0f Hz/%d ch, out %.0f Hz, VPIO %@",
-                  hwInFormat.sampleRate, hwInFormat.channelCount, hwRate,
-                  input.isVoiceProcessingEnabled ? "on" : "OFF")
-            let queued = pendingPlayback
-            pendingPlayback = []
-            for chunk in queued { playChunk(chunk) }
+            NSLog("[audio] engine started (%@) — in %@, out %.0f Hz",
+                  target == .duplex ? "duplex" : "playback-only", inDescription, hwRate)
+            pumpPlayback() // drain anything queued before/across the start
         } catch {
             NSLog("[audio] engine start failed: \(error)")
             lastStartFailure = Date()
-            input.removeTap(onBus: 0)
+            if target == .duplex { engine.inputNode.removeTap(onBus: 0) }
             captureConverter = nil
             playbackConverter = nil
         }

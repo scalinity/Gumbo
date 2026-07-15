@@ -382,3 +382,29 @@ and voice barge-in should stop playback <200 ms.
 **Known edge (accepted for M3):** pressing ⌃⌥ *during* a cold announcement can briefly
 overlap realtime reply audio with the TTS tail in the shared player; barge-in's
 `playback_flush` clears both. Fixing it properly means separate playback channels — deferred.
+
+### Follow-up — mic-free playback graph (2026-07-15, from the user's live report)
+
+the user saw the **orange mic indicator whenever the app ran**. Cause: the M2 engine was a
+single always-VPIO graph — macOS lights the indicator when the *input unit is open*, not
+when frames stream, so pure playback (replies, announcements) and the 75 s idle linger all
+kept it lit even though mic frames only ever flow while ⌃⌥ is held. Fix, per the user's ask:
+
+- `AudioEngine` now has **two graph modes**: `playbackOnly` (player graph only, `inputNode`
+  never touched → **no mic indicator**; also plays without mic permission) for `.playback`
+  starts, and `duplex` (VPIO + tap, the full M2 graph) for `.ptt`. All the M2 ordering
+  gotchas (-10875 / -10851 / ch0 extraction) unchanged inside the duplex branch.
+- Playback became **queue-based** (≤3 buffers scheduled ahead, rest stays as pcm `Data`):
+  a ⌃⌥ press during mic-free playback swaps the graph **live** and the unscheduled queue
+  survives the switch — press-and-stay-silent still hears the rest of an announcement.
+  Only the in-flight fraction (≲⅓ s) is lost at the swap. This queue also subsumes the old
+  `pendingPlayback` pre-start buffer.
+- Engine idle-stop **75 s → 8 s** (long linger existed only because stopping was the sole
+  way to drop the indicator; now playback restarts are mic-free anyway).
+
+**Trade-offs (flagged to the user):** the indicator legitimately stays on from press until
+~8 s after the reply finishes draining — rebuilding the graph at press instead would add
+~150 ms+ to barge-in and risk the <200 ms bar; and ⌃⌥ during a mic-free announcement can
+clip a beat of that audio at the graph swap. Verified: builds + signs clean; relaunched
+live. To observe: no dot at idle / during cold announcements; dot appears on press, clears
+~8 s after the reply.

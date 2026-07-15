@@ -168,12 +168,14 @@ final class GumboController {
         scheduleEngineIdleStop()
     }
 
-    /// VPIO keeps the mic unit hot (orange indicator) while the engine runs, so stop the
-    /// engine once the session is over: idle daemon state, not armed, playback drained.
+    /// A duplex engine keeps the mic unit hot (orange indicator), so stop the engine soon
+    /// after the conversation is over: idle daemon state, not armed, playback drained.
+    /// 8 s covers quick follow-up turns without paying an engine restart; anything longer
+    /// and the mic indicator has no business staying lit (playback-only starts are mic-free).
     private func scheduleEngineIdleStop() {
         engineIdleTimer?.invalidate()
         guard !armed, !playbackDraining, daemonState == "idle" else { return }
-        engineIdleTimer = Timer.scheduledTimer(withTimeInterval: 75, repeats: false) { [weak self] _ in
+        engineIdleTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
             guard let self, !self.armed, !self.playbackDraining, self.daemonState == "idle" else { return }
             self.audio.stop()
         }
