@@ -13,7 +13,10 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 ## Status
 
 - **M1 — Brain, text-driven:** ✅ complete and verified end-to-end.
-- **M2–M6:** not started. See SPEC §9.
+- **M2 — Swift shell + voice:** ✅ complete — live-validated with the user (voice round-trips
+  through the signed shell). Two follow-ups to observe in daily use: voice-exercised barge-in
+  and the TCC rebuild-persistence check.
+- **M3–M6:** not started. See SPEC §9.
 
 ---
 
@@ -119,7 +122,7 @@ Two Opus reviewers (debugger + auditor) reviewed the M1 codebase. **All findings
 
 ---
 
-## M2 — Swift shell + voice (in progress)
+## M2 — Swift shell + voice (complete)
 
 ### Build — daemon audio path + real shell (2026-07-14/15)
 

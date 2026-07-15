@@ -191,7 +191,8 @@ Even as a personal tool, the daemon holds API keys and can spend money, so:
 
 ## 9. Phases
 
-Each phase is independently demoable. **M1 is complete.** Later phases list scope, not final code.
+Each phase is independently demoable. **M1 and M2 are complete.** Later phases list scope, not
+final code.
 
 ### M1 — Brain, text-driven  ✅ DONE
 
@@ -217,7 +218,7 @@ done?" → grounded answer. Survives daemon restart (history from sqlite).
 **Verification:** driven end-to-end via the dashboard; `save_note`, cancel, restart-reaper, loopback
 bind, CORS removal, and `/files` db-protection all confirmed live. See IMPLEMENTATION_NOTES.
 
-### M2 — Swift shell + voice
+### M2 — Swift shell + voice  ✅ DONE
 
 **Goal:** the always-alive notch presence and real voice.
 
@@ -235,6 +236,11 @@ bind, CORS removal, and `/files` db-protection all confirmed live. See IMPLEMENT
 
 **Demo:** hold ⌃⌥, speak the M1 scenario, interrupt mid-sentence; walk away and the session closes
 itself.
+
+**Verification:** live hold-⌃⌥ voice round-trips through the signed shell (VAD, PTT commit
+semantics, transcripts, notch states); daemon-only smokes covered barge-in and both release
+styles. Voice-exercised barge-in + the TCC rebuild-persistence check remain to observe in daily
+use. See IMPLEMENTATION_NOTES §M2 for the build log and gotchas.
 
 **Deferred:** wake word.
 
