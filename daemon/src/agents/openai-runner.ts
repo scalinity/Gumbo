@@ -24,11 +24,20 @@ const webSearch = tool({
   },
 });
 
-const INSTRUCTIONS = `You are a background sub-agent working for Gumbo, a personal voice assistant.
+// Rebuilt per run so the date is always current — without it the model assumes its
+// training-data "today" and returns stale results for time-sensitive briefs.
+function instructions(): string {
+  const today = new Date().toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  });
+  return `You are a background sub-agent working for Gumbo, a personal voice assistant.
+Today is ${today} — treat words like "today", "latest", and "recent" relative to that date.
 You were spawned to complete one task. Work autonomously — nobody will answer questions.
-Use web_search whenever current or factual information matters; cite source URLs.
+Use web_search whenever current or factual information matters; include the current month and
+year in queries about recent events, prefer recently-published results, and cite source URLs.
 Your FINAL message must be the complete deliverable as a well-structured markdown report
 (it is saved verbatim as report.md and read back to the user), starting with a one-paragraph summary.`;
+}
 
 function itemText(item: unknown): string {
   const raw = (item as { rawItem?: { content?: unknown } }).rawItem;
@@ -49,7 +58,7 @@ export async function runSubagent(opts: {
   const { taskId, brief, store, signal } = opts;
   const agent = new Agent({
     name: `subagent-${taskId}`,
-    instructions: INSTRUCTIONS,
+    instructions: instructions(),
     model: config.models.subagent,
     tools: [webSearch, codeInterpreterTool()],
   });

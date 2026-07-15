@@ -81,7 +81,7 @@ final class BubbleController {
         panel.isMovable = false
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(
+        panel.contentView = FirstMouseHostingView(
             rootView: BubbleView(model: model) { [weak self] in self?.onTap?(taskId) })
         return panel
     }
@@ -99,6 +99,13 @@ final class BubbleController {
             bubbles[id]?.panel.animator().setFrame(frame(forIndex: index), display: true)
         }
     }
+}
+
+/// The bubble panel is borderless + non-activating, so it never becomes key — which makes
+/// EVERY click a "first mouse", and NSView discards those by default (the tap gesture never
+/// fired; live finding from the user). Accepting first mouse delivers the click to SwiftUI.
+private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 final class BubbleModel: ObservableObject {

@@ -7,17 +7,25 @@ import { AUDIO_REALTIME } from '../ws/protocol.ts';
 import { announcementText, speakAnnouncement } from '../audio/announce.ts';
 import { createOrchestratorTools } from './tools.ts';
 
-const INSTRUCTIONS = `You are Gumbo, the user's personal agent. You speak in short, natural, conversational
-replies — you are a voice assistant even when the channel is text. Address the user as the user.
+// Rebuilt per session so the date is always current (sessions are short-lived).
+function instructions(): string {
+  const today = new Date().toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  });
+  return `You are Gumbo, the user's personal agent. Today is ${today}. You speak in short, natural,
+conversational replies — you are a voice assistant even when the channel is text. Address the user
+as the user.
 Your superpower is delegation: for anything that takes real work (research, analysis, writing,
 comparisons), call spawn_subagent with a short title and a detailed self-contained brief, tell the user
 it's running, and move on — never make the user wait while work happens.
 When asked about progress, use list_tasks / get_task_status / read_report and answer from what they
 return; never guess or fabricate task states. When a task-finished notice arrives, relay it briefly.
+Task ids are internal plumbing: NEVER say a task id out loud — always refer to tasks by their title.
 You keep an organized home directory (tasks, images, notes). Use save_note to retain durable
 knowledge — facts about the user, decisions, standing context — one topic per note, so it survives
 across sessions; keep it tidy rather than dumping everything into one note.
 Only answer directly yourself when it's quicker than delegating (chat, quick facts, opinions).`;
+}
 
 type SessionState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
@@ -119,7 +127,7 @@ export class Orchestrator {
       try {
         const agent = new RealtimeAgent({
           name: 'Gumbo',
-          instructions: INSTRUCTIONS,
+          instructions: instructions(),
           tools: createOrchestratorTools(this.manager, this.store),
         });
         const session = new RealtimeSession(agent, {
@@ -346,12 +354,12 @@ export class Orchestrator {
       return;
     }
     this.resetIdleTimer();
-    const instructions = `Briefly tell the user that the background task "${task.title}" (id ${task.id}) just finished with status "${task.status}". One or two sentences; offer to share details.`;
+    const announceInstructions = `Briefly tell the user that the background task "${task.title}" just finished with status "${task.status}". One or two sentences; offer to share details. Do not mention any task id.`;
     const transport = this.session.transport as TransportLike;
     if (typeof transport.requestResponse === 'function') {
-      transport.requestResponse({ instructions });
+      transport.requestResponse({ instructions: announceInstructions });
     } else {
-      transport.sendEvent({ type: 'response.create', response: { instructions } });
+      transport.sendEvent({ type: 'response.create', response: { instructions: announceInstructions } });
     }
   }
 }

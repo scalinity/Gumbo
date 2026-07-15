@@ -408,3 +408,35 @@ kept it lit even though mic frames only ever flow while ⌃⌥ is held. Fix, per
 clip a beat of that audio at the graph swap. Verified: builds + signs clean; relaunched
 live. To observe: no dot at idle / during cold announcements; dot appears on press, clears
 ~8 s after the reply.
+
+### Fixes from the user's first real M3 run (2026-07-15, evening)
+
+the user ran a real "latest AI news today" task: cold announcement spoke ✅, **voice barge-in
+verified live ✅** (M2 follow-up #2 closed). Three defects + one TCC finding, all fixed:
+
+- **Bubbles weren't clickable.** The panel is borderless + non-activating, so it never
+  becomes key → **every click is a "first mouse" and NSView discards those by default** —
+  the SwiftUI tap gesture never fired. Fix: `FirstMouseHostingView` (NSHostingView subclass,
+  `acceptsFirstMouse → true`). Click opens the dashboard filtered to that task (SPEC M3
+  behavior; the §1 "expand its activity" mini-panel-on-the-bubble remains a possible later
+  enhancement).
+- **Models thought "today" was March 31st.** Nothing injected the current date, so both the
+  orchestrator and sub-agents fell back to training-data time — a "latest news" brief
+  returned stale results and Gumbo answered the date question wrong. Fix: both instruction
+  sets are now built per-session/per-run with today's date (orchestrator sessions are
+  short-lived, so session-creation time is fresh enough); sub-agents are told to put the
+  current month/year into recency-sensitive searches and prefer recently-published results.
+- **Task ids were read aloud.** The live announce instructions literally included
+  `(id ${task.id})`, and the voice model echoes `spawn_subagent`'s "Started background task
+  91e71759…" verbatim. Fix: id removed from announce instructions ("do not mention any task
+  id"), a hard "NEVER say a task id out loud — refer to tasks by title" rule in the
+  orchestrator instructions, and the spawn tool result marks its id as internal.
+- **TCC (risk #3, root-caused): Accessibility re-prompted on every launch.** The app's
+  designated requirement is correct and stable (`identifier + anchor + cert leaf`, no
+  cdhash — verified with `codesign -d -r-`), so rebuilds *should* keep the grant. The stale
+  **ad-hoc-era TCC row** was the culprit: ad-hoc requirements are cdhash-based (per-build),
+  and re-toggling that old row in System Settings after the cert change kept the obsolete
+  requirement → untrusted at every launch. Fixed with `tccutil reset Accessibility
+  ai.scalinity.Gumbo` + one fresh grant against the real-cert build. **The next rebuild is
+  the persistence proof.** (Mic never re-prompted — its row was created fresh post-cert,
+  which corroborates the diagnosis.)
