@@ -35,6 +35,10 @@ export const config = {
   models: {
     realtime: 'gpt-realtime-2.1',
     subagent: 'gpt-5.6-terra',
+    // M3 cold announcements. Verified live (2026-07-15): /v1/audio/speech accepts the
+    // 'marin' voice on this model with response_format 'pcm' → 24 kHz mono pcm16, the
+    // exact shell wire format — same voice as the realtime session, zero transcoding.
+    tts: 'gpt-4o-mini-tts',
   },
   // M2: the orchestrator speaks. Typed dashboard input still works — replies are spoken
   // and the transcript still streams to the dashboard via output_audio_transcript deltas.
@@ -55,6 +59,8 @@ export const config = {
   // A ⌃⌥ tap shorter than this has no usable audio — the API rejects commits under ~100 ms.
   minPttAudioBytes: 4800, // 100 ms @ 24 kHz mono 16-bit (48 bytes/ms)
   sessionIdleMs: 60_000,
+  // How long a finished task's bubble lingers before the daemon sends bubble_remove.
+  bubbleLingerMs: 12_000,
   reportMaxChars: 12_000,
   activityLogMaxChars: 500, // truncation for tool args / outputs in the activity log
 };

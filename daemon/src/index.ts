@@ -29,6 +29,39 @@ manager.onFinished = (task) => orchestrator.announceTaskFinished(task);
 
 store.onEvent((event) => hub.broadcast({ type: 'event', event }, 'dashboard'));
 
+// M3 completion presence: mirror the task lifecycle to the shell as bubbles, pulse the
+// notch on completion, and remove finished bubbles after a linger (registered after the
+// restart reaper ran, so reaped tasks from a previous run don't pulse on boot).
+const bubbleRemoveTimers = new Map<string, NodeJS.Timeout>();
+store.onEvent((event) => {
+  if (!event.task_id) return;
+  if (event.type === 'task.created') {
+    const payload = event.payload as { title?: string };
+    hub.broadcast({ type: 'bubble_upsert', task_id: event.task_id, title: payload?.title ?? event.task_id, status: 'running' }, 'shell');
+  } else if (event.type === 'task.finished') {
+    const task = store.getTask(event.task_id);
+    if (!task || task.status === 'running' || task.status === 'needs_input') return;
+    hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status: task.status }, 'shell');
+    hub.broadcast({ type: 'notch_pulse', status: task.status }, 'shell');
+    const previous = bubbleRemoveTimers.get(task.id);
+    if (previous) clearTimeout(previous);
+    bubbleRemoveTimers.set(task.id, setTimeout(() => {
+      bubbleRemoveTimers.delete(task.id);
+      hub.broadcast({ type: 'bubble_remove', task_id: task.id }, 'shell');
+    }, config.bubbleLingerMs));
+  }
+});
+
+// A shell that (re)connects mid-run must not miss its bubbles — shell relaunches and
+// tsx-watch daemon restarts are routine.
+hub.onHello((role) => {
+  if (role !== 'shell') return;
+  for (const task of store.listTasks()) {
+    if (task.status !== 'running') continue;
+    hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status: 'running' }, 'shell');
+  }
+});
+
 hub.onMessage((msg, role) => {
   if (msg.type === 'debug_text' && typeof msg.text === 'string' && msg.text.trim()) {
     orchestrator.handleDebugText(msg.text).catch((err: unknown) => {

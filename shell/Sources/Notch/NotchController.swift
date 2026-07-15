@@ -18,6 +18,27 @@ final class NotchController {
     private var notch: DynamicNotch<NotchContentView, EmptyView, EmptyView>?
     private var visible = false
     private var hideWork: DispatchWorkItem?
+    private var pulseWork: DispatchWorkItem?
+
+    /// M3 completion pulse: briefly surface the notch with a status-colored flourish when
+    /// a background task finishes. Purely transient — session state resumes afterwards.
+    func pulse(status: String) {
+        DispatchQueue.main.async { [self] in
+            model.pulse = status
+            hideWork?.cancel()
+            hideWork = nil
+            show()
+            pulseWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.model.pulse = nil
+                self.pulseWork = nil
+                if self.model.state == .idle { self.scheduleHide() }
+            }
+            pulseWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.6, execute: work)
+        }
+    }
 
     func setState(_ state: NotchState) {
         DispatchQueue.main.async { [self] in
@@ -66,7 +87,7 @@ final class NotchController {
     private func scheduleHide() {
         guard visible, hideWork == nil else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.model.state == .idle, let notch = self.notch else { return }
+            guard let self, self.model.state == .idle, self.model.pulse == nil, let notch = self.notch else { return }
             self.visible = false
             self.hideWork = nil
             Task { await notch.hide() }
@@ -80,19 +101,28 @@ final class NotchModel: ObservableObject {
     @Published var state: NotchState = .idle
     @Published var level: Float = 0
     @Published var transcript = ""
+    @Published var pulse: String? // task completion status while the M3 pulse is live
     var transcriptItem = ""
     var onTap: (() -> Void)?
 }
 
 private let ember = Color(red: 1.0, green: 0.478, blue: 0.282) // dashboard's ember accent
 private let bay = Color(red: 0.608, green: 0.706, blue: 0.475) // bay green (input/done)
+private let alarm = Color(red: 0.886, green: 0.365, blue: 0.365) // --alarm (failed)
+private let faint = Color(red: 0.42, green: 0.376, blue: 0.333) // --faint (cancelled)
 
 struct NotchContentView: View {
     @ObservedObject var model: NotchModel
 
+    // The completion pulse decorates the idle notch; a live session display wins —
+    // during a spoken announcement 'speaking' is the more truthful presence.
+    private var activePulse: String? {
+        model.state == .idle ? model.pulse : nil
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            SimmerBars(state: model.state, level: model.level)
+            SimmerBars(state: model.state, level: model.level, pulse: activePulse)
                 .frame(width: 34, height: 22)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
@@ -115,6 +145,12 @@ struct NotchContentView: View {
     }
 
     private var title: String {
+        switch activePulse {
+        case "done": return "Task finished"
+        case "failed": return "Task failed"
+        case "cancelled": return "Task cancelled"
+        default: break
+        }
         switch model.state {
         case .idle: return "Gumbo"
         case .listening: return "Listening…"
@@ -128,6 +164,7 @@ struct NotchContentView: View {
 struct SimmerBars: View {
     let state: NotchState
     let level: Float
+    var pulse: String? = nil // completion pulse: overrides color + motion while set
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
@@ -143,6 +180,12 @@ struct SimmerBars: View {
     }
 
     private var color: Color {
+        switch pulse {
+        case "done": return bay
+        case "failed": return alarm
+        case "cancelled": return faint
+        default: break
+        }
         switch state {
         case .listening: return bay
         case .speaking, .thinking: return ember
@@ -152,6 +195,11 @@ struct SimmerBars: View {
 
     private func barHeight(index: Int, time: TimeInterval) -> CGFloat {
         let base: CGFloat = 4
+        if pulse != nil {
+            // celebratory ripple — quicker than 'thinking', reads as an arrival
+            let phase = sin(time * 6.2 + Double(index) * 1.3) * 0.5 + 0.5
+            return base + CGFloat(phase) * 10
+        }
         switch state {
         case .idle:
             return base

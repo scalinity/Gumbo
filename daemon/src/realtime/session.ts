@@ -4,6 +4,7 @@ import type { Store, TaskRow } from '../events/store.ts';
 import type { Hub } from '../ws/hub.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import { AUDIO_REALTIME } from '../ws/protocol.ts';
+import { announcementText, speakAnnouncement } from '../audio/announce.ts';
 import { createOrchestratorTools } from './tools.ts';
 
 const INSTRUCTIONS = `You are Gumbo, the user's personal agent. You speak in short, natural, conversational
@@ -331,8 +332,17 @@ export class Orchestrator {
 
   async announceTaskFinished(task: TaskRow) {
     if (!this.session) {
-      // No live session: queued for the M3 one-shot TTS path; dashboard still shows task.finished.
+      // No live session — never open one just to announce (locked decision). Persist the
+      // pending marker for the dashboard, then speak it cold via one-shot TTS. Skipped
+      // when no shell is connected: nobody would hear it, so don't spend on synthesis.
       this.store.addEvent(task.id, 'announce.pending', { title: task.title, status: task.status });
+      if (this.hub.hasRole('shell')) {
+        try {
+          await speakAnnouncement(this.hub, announcementText(task));
+        } catch (err) {
+          this.store.addEvent(task.id, 'session.error', { message: `announce tts: ${String(err)}` });
+        }
+      }
       return;
     }
     this.resetIdleTimer();

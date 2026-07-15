@@ -16,7 +16,9 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 - **M2 — Swift shell + voice:** ✅ complete — live-validated with the user (voice round-trips
   through the signed shell). Two follow-ups to observe in daily use: voice-exercised barge-in
   and the TCC rebuild-persistence check.
-- **M3–M6:** not started. See SPEC §9.
+- **M3 — Completion presence:** built + smoke-verified (branch `m3-completion-presence`);
+  awaiting the live demo with the user (cold announce + bubble flip + pulse) before marking done.
+- **M4–M6:** not started. See SPEC §9.
 
 ---
 
@@ -303,3 +305,80 @@ Risk #5 retired — clear to build the real notch UI on DynamicNotchKit 1.1.0.
   DashboardWindow (WKWebView → localhost:5173).
 - **Loose end:** Apple Development cert still not in keychain (`security find-identity` = 0);
   needed for the signed build + TCC grant-persistence check (risk #3).
+
+---
+
+## M3 — Completion presence (built; live demo pending)
+
+### Build — daemon cold TTS + bubble/pulse wiring, shell bubbles + pulse (2026-07-15)
+
+**Daemon:**
+- `config.ts`: `models.tts: 'gpt-4o-mini-tts'` + `bubbleLingerMs: 12_000`. **Verified against
+  the live API before building:** `/v1/audio/speech` accepts the **`marin`** voice on this
+  model (announcements match the realtime session's voice) with `response_format: 'pcm'` →
+  **24 kHz mono pcm16 — the shell's exact wire format, zero transcoding** (a one-line test
+  sentence returned 194,400 bytes ≈ 4.05 s at 48,000 B/s, confirming the rate).
+- `audio/announce.ts`: plain template text per terminal status (no LLM call) +
+  `speakAnnouncement` — streams HTTP chunks out as `0x02` frames *as they arrive* (playback
+  starts before synthesis finishes). Two deliberate details: a **carry byte** keeps every
+  frame sample-aligned (an HTTP chunk can split a 16-bit sample; an odd frame would
+  byte-shift the rest of the stream into static), and announcements are **serialized through
+  a promise queue** (two tasks finishing together must not interleave frames into the
+  shell's single player). The queue swallows its own rejections so one failed TTS can't
+  wedge all future announcements.
+- `realtime/session.ts` cold branch: still persists `announce.pending` (dashboard record),
+  then speaks cold **only if a shell is connected** (`hub.hasRole('shell')` — no listener,
+  no synthesis spend). Never opens a realtime session to announce (locked decision).
+- `index.ts`: a second `store.onEvent` listener maps the task lifecycle to shell messages —
+  `task.created` → `bubble_upsert` (running); `task.finished` → `bubble_upsert` (terminal) +
+  `notch_pulse`, then `bubble_remove` after the linger. Registered **after** the restart
+  reaper runs, so tasks reaped on boot don't pulse a shell that isn't even connected yet.
+  `hub.onHello` re-sends running bubbles to a (re)connecting shell — shell relaunches and
+  tsx-watch daemon restarts are routine, so bubbles must be re-syncable, not fire-and-forget.
+- `ws/hub.ts`: `onHello(handler)` + `hasRole(role)`. `ws/protocol.ts`: `bubble_upsert` /
+  `bubble_remove` / `notch_pulse` shapes (`BubbleStatus` = running|done|failed|cancelled).
+
+**Shell:**
+- `Bubbles/BubbleController.swift` (new): one borderless **non-activating** `NSPanel` per
+  task (`.statusBar` level, joins all Spaces, never activates the app on click), stacked
+  upper-right inside `visibleFrame`, newest on top, animated restack. Visuals reuse the
+  dashboard's exact tokens (`--bg`/`--line`/`--ember`/`--bay`/`--alarm`/`--faint`); the
+  running dot breathes on the dashboard's 1.6 s pulse cadence. Click → dashboard at that
+  task's view. A **30 s local failsafe** removes terminal bubbles even if the daemon dies
+  during its 12 s linger window (otherwise a zombie bubble would sit there forever).
+- `NotchController.pulse(status:)`: 2.6 s transient — bay/alarm/faint ripple + "Task
+  finished/failed/cancelled" title. It only decorates the **idle** notch: if a live session
+  is displaying (e.g. the shell is playing the announcement, so `playbackDraining` holds
+  'speaking'), the session display wins — 'speaking' is the more truthful presence. The
+  hide-debounce now also refuses to hide mid-pulse.
+- `DashboardWindow.show(taskId:)`: deep-links via `window.__gumboSelectTask(id)` — a
+  module-scope hook added in `dashboard/src/ws.ts` (no `useEffect`; the store's existing
+  `selectTask` already renders the task-filtered feed + report panel). Retries 5×/0.6 s
+  because the hook isn't installed until the page finishes loading on first open. Task id
+  is sanitized (alphanumeric + hyphen) before JS interpolation.
+- `App.swift`: `0x02` frames take the **exact `0x01` playback path** — `start(reason:
+  .playback)` + `playChunk`; the M2 `pendingPlayback` queue already covers the cold engine
+  start, so nothing in AudioEngine changed.
+
+**Verified (smokes, 2026-07-15):**
+- *Cold path* (real daemon modules on a test port, fake shell WS client): calling
+  `announceTaskFinished` with no session persisted exactly one `announce.pending`, produced
+  **zero `session.opened`**, zero `session.error`, and delivered **81 `0x02` frames, every
+  one sample-aligned** — 3.45 s of pcm, peak 18,102 (healthy speech), 2.5 s end-to-end.
+- *Lifecycle* (the real `src/index.ts`, real spawned sub-agent via `debug_text`):
+  `bubble_upsert` running on spawn → dropped + reconnected the fake shell mid-task and the
+  running bubble was **re-sent on hello** → `bubble_upsert` done + `notch_pulse` on finish →
+  `bubble_remove` arrived after the 12 s linger; the live-path announcement flowed as `0x01`
+  audio (session was open — M1/M2 path intact).
+- Shell builds clean and **signs with the real Apple Development cert** (identity valid in
+  keychain; no WWDR re-import needed this time).
+
+**Still to observe live with the user (SPEC M3 demo — SPEC stays unmarked until then):**
+voice-spawn a task → walk away → session idle-closes → bubble flips bay + notch pulses +
+**cold** spoken announcement (verify via events: no `session.opened` around it); plus the
+two M2 carry-overs on this rebuild — TCC grants (mic + Accessibility) must NOT re-prompt,
+and voice barge-in should stop playback <200 ms.
+
+**Known edge (accepted for M3):** pressing ⌃⌥ *during* a cold announcement can briefly
+overlap realtime reply audio with the TTS tail in the shared player; barge-in's
+`playback_flush` clears both. Fixing it properly means separate playback channels — deferred.

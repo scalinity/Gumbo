@@ -5,6 +5,7 @@ import type { ClientRole, InboundMessage, OutboundMessage } from './protocol.ts'
 
 type MessageHandler = (msg: InboundMessage, role: ClientRole) => void;
 type BinaryHandler = (frame: Buffer, role: ClientRole) => void;
+type HelloHandler = (role: ClientRole) => void;
 
 const ROLES: ReadonlySet<string> = new Set(['shell', 'dashboard']);
 
@@ -12,6 +13,7 @@ export class Hub {
   private clients = new Map<WebSocket, ClientRole>();
   private handlers: MessageHandler[] = [];
   private binaryHandlers: BinaryHandler[] = [];
+  private helloHandlers: HelloHandler[] = [];
 
   constructor(server: Server) {
     const wss = new WebSocketServer({
@@ -39,7 +41,10 @@ export class Hub {
           return;
         }
         if (msg.type === 'hello') {
-          if (ROLES.has(msg.role)) this.clients.set(socket, msg.role);
+          if (ROLES.has(msg.role)) {
+            this.clients.set(socket, msg.role);
+            for (const handler of this.helloHandlers) handler(msg.role);
+          }
           return;
         }
         const role = this.clients.get(socket);
@@ -56,6 +61,17 @@ export class Hub {
 
   onBinary(handler: BinaryHandler) {
     this.binaryHandlers.push(handler);
+  }
+
+  /** Fires after a client identifies itself — reconnects included (shell relaunches and
+   *  tsx-watch restarts are routine, so state like bubbles must be re-syncable). */
+  onHello(handler: HelloHandler) {
+    this.helloHandlers.push(handler);
+  }
+
+  hasRole(role: ClientRole): boolean {
+    for (const r of this.clients.values()) if (r === role) return true;
+    return false;
   }
 
   sendBinary(frame: Uint8Array, to: ClientRole) {

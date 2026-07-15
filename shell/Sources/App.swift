@@ -47,6 +47,7 @@ final class GumboController {
     private let audio = AudioEngine()
     private let hotkeys = Hotkeys()
     private let notch = NotchController()
+    private let bubbles = BubbleController()
     private lazy var dashboard = DashboardWindow()
 
     private var daemonState = "idle"
@@ -59,11 +60,12 @@ final class GumboController {
         wireWS()
         wireHotkeys()
         notch.onTap = { [weak self] in self?.showDashboard() }
+        bubbles.onTap = { [weak self] taskId in self?.showDashboard(taskId: taskId) }
         ws.connect()
     }
 
-    func showDashboard() {
-        dashboard.show()
+    func showDashboard(taskId: String? = nil) {
+        dashboard.show(taskId: taskId)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -117,14 +119,29 @@ final class GumboController {
                 self.notch.appendTranscript(itemId: msg["item_id"] as? String ?? "", delta: msg["delta"] as? String ?? "")
             case "playback_flush":
                 self.audio.flushPlayback()
+            case "bubble_upsert":
+                if let taskId = msg["task_id"] as? String, !taskId.isEmpty {
+                    self.bubbles.upsert(
+                        taskId: taskId,
+                        title: msg["title"] as? String ?? taskId,
+                        status: msg["status"] as? String ?? "running")
+                }
+            case "bubble_remove":
+                if let taskId = msg["task_id"] as? String {
+                    self.bubbles.remove(taskId: taskId)
+                }
+            case "notch_pulse":
+                self.notch.pulse(status: msg["status"] as? String ?? "done")
             default:
                 break
             }
         }
         ws.onBinary = { [weak self] data in
             guard let self, data.count > 1 else { return }
-            if data[0] == 0x01 { // realtime speaker pcm16 (0x02 one-shot TTS lands in M3)
-                self.audio.start(reason: .playback) // spoken reply with no prior press still plays
+            // 0x01 realtime speaker pcm16; 0x02 one-shot TTS announcement — same wire
+            // format, same playback path (pendingPlayback covers the cold engine start).
+            if data[0] == 0x01 || data[0] == 0x02 {
+                self.audio.start(reason: .playback) // spoken audio with no prior press still plays
                 self.audio.playChunk(data.dropFirst())
             }
         }
