@@ -119,5 +119,178 @@ Two Opus reviewers (debugger + auditor) reviewed the M1 codebase. **All findings
 
 ---
 
-## M2+ — not started
-(Append notes here as phases land.)
+## M2 — Swift shell + voice (in progress)
+
+### Build — daemon audio path + real shell (2026-07-14/15)
+
+**Daemon (additive — M1 text path still works, now with spoken replies):**
+- `config.ts`: `outputModalities ['audio']`, `voice: 'marin'`, `realtimeAudio` (pcm16 both ways,
+  input transcription via `gpt-4o-mini-transcribe` so voice turns persist with real user text,
+  `turnDetection { type:'server_vad', createResponse:false, interruptResponse:true }`),
+  `minPttAudioBytes` (100 ms @ 24 kHz — the API rejects commits under ~100 ms of audio).
+- `ws/protocol.ts`: inbound `ptt_press`/`ptt_release`; outbound `playback_flush`; binary framing
+  documented (shell→daemon raw mic pcm16; daemon→shell `0x01` + speaker pcm16, `0x02` reserved).
+- `ws/hub.ts`: `onBinary(handler)` + `sendBinary(frame, role)`; binary frames require a prior
+  `hello` like text frames.
+- `realtime/session.ts`: PTT state machine. Press arms + lazily connects; mic frames stream via
+  `session.sendAudio`; frames arriving mid-connect are buffered (cap 500) and flushed in-order
+  after connect, so the first words of a cold-start turn aren't clipped; a release that beats the
+  connect is remembered (`pendingRelease`) and committed after connect. `session.on('audio')` →
+  `hub.sendBinary` to shell; `audio_interrupted` → `playback_flush`. `assistant_delta` now
+  broadcasts to **all** clients (shell notch transcript + dashboard). `connection_change:
+  disconnected` cleans up a dead transport so the next press reopens fresh.
+- **Commit semantics (the runtime-untested half of the PTT model — now verified):** with
+  `createResponse:false` the server VAD still auto-commits at speech pauses; on release we commit
+  manually **only** when `speechActive || (hadSpeech && !sawCommit)` — an unconditional commit
+  errors on an empty buffer. Then `response.create` (via `transport.requestResponse?.()`) only if
+  the window actually had speech; then `input_audio_buffer.clear` to drop trailing silence.
+- **GOTCHA (cost a debugging round): server-VAD speech state sticks across PTT windows.** The
+  normal PTT gesture — release mid-speech, faster than the VAD silence window — leaves the
+  server VAD in "speech". The next armed window then never fires `speech_started` (deaf turn,
+  no barge-in). `input_audio_buffer.clear` does NOT reset it. Fix: after every turn, toggle
+  `turnDetection` null → config via `transport.updateSessionConfig` (two `session.update`s).
+  Verified with a 4-window mixed-mode smoke on one session: all four rounds green.
+- **Daemon-only smoke (throwaway scratchpad clients, `say`-generated 24 kHz pcm16):** PTT
+  fast-release ✅, VAD-pause release ✅, barge-in ✅ (`playback_flush` ~150 ms after speech onset
+  mid-reply, second response clean), `debug_text` → spoken reply ✅. Zero `session.error`s.
+
+**Shell (`shell/` real app — builds + runs ad-hoc signed on the 27.0 beta):**
+- `project.yml`: LSUIElement, mic usage string, sandbox off, bundle id `ai.scalinity.Gumbo`,
+  DynamicNotchKit pinned `exactVersion: 1.1.0`. Still ad-hoc (`CODE_SIGN_IDENTITY: "-"`) — flip to
+  `Automatic` + `DEVELOPMENT_TEAM` once the Apple Development cert exists (risk #3 pending).
+- **GOTCHA (macOS 27 beta, probed 4 orderings): VPIO enable order is load-bearing.** Enabling
+  `setVoiceProcessingEnabled(true)` *before* touching the playback graph → engine start fails
+  with **-10875** (output unit kAUInitialize). Working order: attach player + connect to
+  `mainMixerNode` (mono float at the **hardware output rate** — a 24 kHz connection is the
+  spike's -10851 trap) **first**, then enable VPIO, then read the input format (it changes under
+  VPIO — the mic becomes a 48 kHz/9-ch array here) and install the tap. All PCM conversion at the
+  buffer level via `AVAudioConverter` both directions.
+- **GOTCHA (found in live validation): `AVAudioConverter` does NOT downmix the VPIO mic.** The
+  9-channel discrete input → mono conversion "succeeds" but outputs **pure silence** (default
+  channel map maps nothing) — the daemon received perfectly-paced frames of `peak=0.000`, the
+  server VAD rightly never fired, so Gumbo never answered while the notch bars (raw ch0 level)
+  looked alive. Fix: extract **channel 0** (the voice-processed signal) into a mono buffer by
+  hand; the converter only ever does mono 48 kHz float → mono 24 kHz int16. The engine now logs
+  per-channel capture peaks once per start and converter errors loudly — silent-audio failures
+  must never be invisible again.
+- `AudioEngine`: `start(reason:)` seam (`.ptt`, `.playback`; `.wakeWord` later). Mic frames gated
+  by `armed` (set strictly around ⌃⌥). Playback: chunks arriving before the engine is up are
+  queued (spoken reply with no prior press — dashboard text turns, M3 announcements) and drained
+  on start; flush bumps a generation counter so stale completion handlers can't corrupt the
+  drain state; engine auto-stops after ~75 s fully idle (VPIO otherwise holds the mic indicator).
+- `Hotkeys`: `.flagsChanged` global+local monitors; press = ⌃⌥ down with ⌘/⇧ absent; release =
+  either lifting; extra modifiers joining mid-hold don't cancel. Prompts for Accessibility via
+  `AXIsProcessTrustedWithOptions` on first launch.
+- `NotchController`: DynamicNotchKit. **1.1.0 API notes:** `DynamicNotch` is generic over
+  ⟨Expanded, CompactLeading, CompactTrailing⟩ — store it as
+  `DynamicNotch<Content, EmptyView, EmptyView>`; its init is `@MainActor`. Simmer bars (ember
+  when thinking/speaking, bay when listening) + head-truncated transcript line; hide is debounced
+  1.4 s so back-to-back turns don't flap; tap → dashboard window.
+- Shell/daemon state merge: daemon `speaking` tracks *generation*, which ends seconds before
+  audible playback — the shell holds `speaking` while its own queue drains (`playbackDraining`).
+  While armed, `listening` wins the display.
+- `WSClient`: URLSessionWebSocketTask, auto-reconnect (1.5 s), hello on open — survives daemon
+  restarts under `tsx watch`. `DashboardWindow`: WKWebView → `http://localhost:5173` exactly.
+
+**Verified end-to-end (2026-07-15, live with the user):** hold-⌃⌥-speak-release → spoken answer
+through the shell (multiple turns; mic peaks 0.008–0.452 at the daemon, VAD speech events,
+commit-on-release `hadSpeech/speechActive/sawCommit` all correct, `response.created/done`,
+`playback active`); both voice transcripts persisted with real text (input transcription);
+notch listening/speaking states live. Also verified pre-live: daemon-only PTT/VAD-pause/
+barge-in/text smokes, WS reconnect across `tsx watch` restarts. **Still pending:** live
+*voice* barge-in (proven at the protocol level in the daemon smoke, not yet exercised by
+voice), idle-close observation in real use, and TCC grant persistence across rebuilds —
+blocked on the Apple Development cert; ad-hoc rebuilds may re-prompt mic and need an
+Accessibility toggle. `shell/spike/` deleted (real shell supersedes it; findings recorded
+here).
+
+### Forward-compat: keep the Realtime layer modular (GPT-Live)
+GPT-Live API availability has **not** been announced. The integration relies on
+`gpt-realtime-2.1`; keep the Realtime transport + event-handling layer modular — model ID
+stays a single `config.ts` constant, and session lifecycle / audio I/O / event wiring stay
+isolated in `realtime/` — so migrating to GPT-Live is a localized swap when it drops.
+(the user's note, 2026-07-14.)
+
+### Spike 1a — audio pipe (echo) ✅ pipeline proven
+Throwaway target at `shell/spike/` (its generated `.xcodeproj` + `DerivedData/` are
+gitignored). SwiftUI app: mic → `AVAudioEngine` tap → `AVAudioConverter` → 24 kHz mono
+PCM16 → 20 ms WS binary frames → `echo-server.mjs` (127.0.0.1:**8788**) → back →
+`AVAudioPlayerNode`.
+
+**Proven:** the full capture → 24 kHz PCM16 convert → WS framing → playback chain works
+end-to-end with the **built-in mic**. WS round-trip ~1 ms. Output path + device routing
+are clean — a mic-free 440 Hz test tone plays perfectly, including to AirPods.
+
+**Findings that shape the real shell (M2 audio):**
+- **A Bluetooth headset (AirPods) as mic + speaker simultaneously → silent input tap.**
+  The plain `installTap` path captures nothing (level meter flat). Fix = **Voice-Processing
+  I/O** (`inputNode.setVoiceProcessingEnabled(true)`), which also gives the two things the
+  real system needs regardless: **acoustic echo cancellation** (so Gumbo's voice on
+  speakers doesn't leak into the mic and false-trigger barge-in) and **automatic gain**
+  (fixes the low, muffled built-in-mic level seen here). ⇒ **`AudioEngine.swift` must run in
+  VPIO mode.**
+- Enabling VPIO in the spike tripped `-10851` (kAudioUnitErr_InvalidPropertyValue) at
+  engine start because playback used a custom 24 kHz player→mixer connection. Lesson: with
+  VPIO, keep the whole graph in the unit's native I/O format and convert PCM at the buffer
+  level, not via a mismatched connection format. (Left OFF in the throwaway spike — belongs
+  in the real AudioEngine.)
+- **Bluetooth output latency (~150–200 ms) is inherent** on AirPods; it read as bad delay
+  only because the spike echoes *your own* voice. For one-way Gumbo speech it's normal.
+  Wired/built-in output is much tighter.
+- Dev loop confirmed: `xcodegen generate` + `xcodebuild` from CLI (the user authorized builds
+  for this project); Xcode-beta **27.0** selected via `sudo xcode-select`. App runs
+  **ad-hoc signed** (`CODE_SIGN_IDENTITY=-`), enough to test but re-prompts mic on each
+  identity change.
+
+**Still open (quick):** TCC grant-persistence check (risk #3) needs a real **Apple
+Development certificate** in the keychain — signing into Xcode with an Apple ID is NOT
+enough; create the cert (Xcode ▸ Settings ▸ Accounts ▸ team ▸ Manage Certificates ▸ + Apple
+Development), then `security find-identity -v -p codesigning` lists it. Deferred to the
+first signed build.
+
+### Spike 1b — Realtime round-trip ✅ voice loop proven
+Throwaway `shell/spike/realtime-server.mjs` (port 8788, drop-in for the echo server): opens
+a real `gpt-realtime-2.1` `RealtimeSession` (websocket transport), forwards the spike app's
+mic PCM16 → `session.sendAudio`, streams `session.on('audio')` chunks back to the shell.
+
+**Proven live against the installed SDK + model:**
+- `gpt-realtime-2.1` connects and answers in voice — **response time excellent**, intelligible.
+- Server-VAD turns fire (`input_audio_buffer.speech_started` / `speech_stopped`); responses
+  generate (`response.created` / `response.done`).
+- **Barge-in works**: `interruptResponse:true` → `audio_interrupted` fired on every speech
+  onset during a response. (Seen via the feedback loop, but it's the same interrupt path
+  ⌃⌥-barge-in uses.) `sendAudio` + `on('audio')` + `on('audio_interrupted')` all confirmed.
+- Config shape confirmed: `config.outputModalities = ['audio']`,
+  `config.audio.input.turnDetection = { type:'server_vad', createResponse, interruptResponse }`.
+
+**Confirmed the AEC requirement the hard way:** on **speakers** (no headphones) it runs away —
+Gumbo hears itself, VAD fires, it interrupts + re-responds forever. The real shell avoids
+this two ways: (1) **PTT mic-gating** — mic streams only while ⌃⌥ is held, so Gumbo isn't fed
+its own voice while speaking; (2) **VPIO acoustic echo cancellation** — cancels Gumbo's voice
+from the mic even when armed for barge-in. Spike has neither ⇒ headphones needed for the
+**spike only**, not the finished product.
+
+**Not yet runtime-tested (deferred to real shell):** the PTT turn config proper
+(`createResponse:false` + manual commit-on-release + `requestResponse`) — 1b used server-VAD
+auto-turns. The *interrupt* half of barge-in is proven; the *manual-commit* half is not.
+
+### Spike 2 — DynamicNotchKit on macOS 27 beta ✅ renders cleanly
+Throwaway `shell/spike/notch/` (separate project so the SPM dep stays isolated).
+DynamicNotchKit **1.1.0** (pinned `exactVersion`) fetched + compiled against Xcode 27.0 with
+no changes; both `DynamicNotchInfo(icon:title:description:)` and the custom-content
+`DynamicNotch { … }` builder APIs are correct for 1.1.0. Live on the 27.0 beta: info + custom
+notches both render, anchored correctly, expand/hide animations smooth, nothing visually off.
+Risk #5 retired — clear to build the real notch UI on DynamicNotchKit 1.1.0.
+
+### All pre-build risks cleared → build the real M2
+- **Daemon** (additive; keep the M1 text path working): `config.ts` (outputModalities
+  `['audio']`, `audio.input.turnDetection`, voice), `ws/protocol.ts`
+  (ptt_press/ptt_release, playback_flush), `ws/hub.ts` (binary routing: onBinary/sendBinary),
+  `realtime/session.ts` (audio config, sendAudio, forward `audio` → shell, audio_interrupted →
+  flush, ptt commit + requestResponse, session_state), `index.ts` (wire it up).
+- **Shell** (`shell/` real app): project.yml (LSUIElement, mic + reminders usage, sandbox off,
+  signing), WSClient, **AudioEngine in VPIO mode** (AEC/AGC/Bluetooth — solve the -10851 by
+  keeping the graph in the unit's native format), ⌃⌥ `.flagsChanged` chord, NotchController,
+  DashboardWindow (WKWebView → localhost:5173).
+- **Loose end:** Apple Development cert still not in keychain (`security find-identity` = 0);
+  needed for the signed build + TCC grant-persistence check (risk #3).

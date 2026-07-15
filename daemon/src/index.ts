@@ -29,14 +29,23 @@ manager.onFinished = (task) => orchestrator.announceTaskFinished(task);
 
 store.onEvent((event) => hub.broadcast({ type: 'event', event }, 'dashboard'));
 
-hub.onMessage((msg) => {
+hub.onMessage((msg, role) => {
   if (msg.type === 'debug_text' && typeof msg.text === 'string' && msg.text.trim()) {
     orchestrator.handleDebugText(msg.text).catch((err: unknown) => {
       store.addEvent(null, 'session.error', { message: String(err) });
     });
   } else if (msg.type === 'task_action' && msg.action === 'cancel' && typeof msg.task_id === 'string') {
     manager.cancel(msg.task_id);
+  } else if (msg.type === 'ptt_press' && role === 'shell') {
+    orchestrator.handlePttPress();
+  } else if (msg.type === 'ptt_release' && role === 'shell') {
+    orchestrator.handlePttRelease();
   }
+});
+
+// Binary frames from the shell are raw mic pcm16 (streamed only while ⌃⌥ is armed).
+hub.onBinary((frame, role) => {
+  if (role === 'shell') orchestrator.handleMicFrame(frame);
 });
 
 server.listen(config.port, config.host, () => {

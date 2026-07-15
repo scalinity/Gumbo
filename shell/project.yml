@@ -1,0 +1,42 @@
+# Gumbo.app — the native shell (SPEC §9 M2): notch presence, ⌃⌥ push-to-talk, VPIO audio,
+# WKWebView dashboard window. Generated project + DerivedData are gitignored; regenerate with
+# `xcodegen generate` from this directory.
+name: Gumbo
+options:
+  bundleIdPrefix: ai.scalinity
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  DynamicNotchKit:
+    url: https://github.com/mrkai77/dynamicnotchkit.git
+    exactVersion: 1.1.0 # pinned — proven on the macOS 27.0 beta (spike 2)
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    # Stable bundle id from day one — TCC grants (mic, Accessibility) attach to it.
+    PRODUCT_BUNDLE_IDENTIFIER: ai.scalinity.Gumbo
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    # Ad-hoc until the Apple Development cert lands in the keychain (risk #3): then switch to
+    # CODE_SIGN_STYLE: Automatic + DEVELOPMENT_TEAM so TCC grants survive rebuilds.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    ENABLE_HARDENED_RUNTIME: NO
+targets:
+  Gumbo:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    dependencies:
+      - package: DynamicNotchKit
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleName: Gumbo
+        CFBundleDisplayName: Gumbo
+        LSMinimumSystemVersion: "26.0"
+        LSUIElement: true # agent app — no Dock icon; presence is the notch + status item
+        NSHighResolutionCapable: true
+        NSMicrophoneUsageDescription: "Gumbo listens while you hold Control-Option to talk to it."

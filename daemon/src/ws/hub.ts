@@ -4,12 +4,14 @@ import { config } from '../config.ts';
 import type { ClientRole, InboundMessage, OutboundMessage } from './protocol.ts';
 
 type MessageHandler = (msg: InboundMessage, role: ClientRole) => void;
+type BinaryHandler = (frame: Buffer, role: ClientRole) => void;
 
 const ROLES: ReadonlySet<string> = new Set(['shell', 'dashboard']);
 
 export class Hub {
   private clients = new Map<WebSocket, ClientRole>();
   private handlers: MessageHandler[] = [];
+  private binaryHandlers: BinaryHandler[] = [];
 
   constructor(server: Server) {
     const wss = new WebSocketServer({
@@ -23,7 +25,13 @@ export class Hub {
     });
     wss.on('connection', (socket) => {
       socket.on('message', (data, isBinary) => {
-        if (isBinary) return; // audio frames arrive in M2
+        if (isBinary) {
+          const role = this.clients.get(socket);
+          if (!role) return; // must hello first
+          const frame = Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data);
+          for (const handler of this.binaryHandlers) handler(frame, role);
+          return;
+        }
         let msg: InboundMessage;
         try {
           msg = JSON.parse(data.toString());
@@ -44,6 +52,17 @@ export class Hub {
 
   onMessage(handler: MessageHandler) {
     this.handlers.push(handler);
+  }
+
+  onBinary(handler: BinaryHandler) {
+    this.binaryHandlers.push(handler);
+  }
+
+  sendBinary(frame: Uint8Array, to: ClientRole) {
+    for (const [socket, role] of this.clients) {
+      if (role !== to) continue;
+      if (socket.readyState === WebSocket.OPEN) socket.send(frame, { binary: true });
+    }
   }
 
   broadcast(msg: OutboundMessage, to: ClientRole | 'all' = 'all') {
