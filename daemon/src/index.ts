@@ -27,7 +27,9 @@ const manager = new TaskManager(store);
 const orchestrator = new Orchestrator(store, hub, manager);
 manager.onFinished = (task) => orchestrator.announceTaskFinished(task);
 
-store.onEvent((event) => hub.broadcast({ type: 'event', event }, 'dashboard'));
+// Events go to dashboards AND the shell (M3.1): the bubble mini-panel live-tails its
+// task's activity. The shell ignores types it doesn't render.
+store.onEvent((event) => hub.broadcast({ type: 'event', event }));
 
 // M3 completion presence: mirror the task lifecycle to the shell as bubbles, pulse the
 // notch on completion, and remove finished bubbles after a linger (registered after the
@@ -73,7 +75,14 @@ hub.onMessage((msg, role) => {
     orchestrator.handlePttPress();
   } else if (msg.type === 'ptt_release' && role === 'shell') {
     orchestrator.handlePttRelease();
+  } else if (msg.type === 'playback_state' && role === 'shell') {
+    orchestrator.handlePlaybackState(msg.draining === true);
   }
+});
+
+// A shell that dies mid-drain must not leave 'speaking' (and the idle-close guard) stuck.
+hub.onClose((role) => {
+  if (role === 'shell' && !hub.hasRole('shell')) orchestrator.handlePlaybackState(false);
 });
 
 // Binary frames from the shell are raw mic pcm16 (streamed only while ⌃⌥ is armed).

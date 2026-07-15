@@ -60,7 +60,8 @@ final class GumboController {
         wireWS()
         wireHotkeys()
         notch.onTap = { [weak self] in self?.showDashboard() }
-        bubbles.onTap = { [weak self] taskId in self?.showDashboard(taskId: taskId) }
+        // Bubble clicks expand in place (mini panel); the dashboard is its corner link.
+        bubbles.onOpenDashboard = { [weak self] taskId in self?.showDashboard(taskId: taskId) }
         ws.connect()
     }
 
@@ -102,9 +103,18 @@ final class GumboController {
         }
         audio.onPlaybackStateChange = { [weak self] draining in
             DispatchQueue.main.async {
-                self?.playbackDraining = draining
-                self?.refreshState()
+                guard let self else { return }
+                self.playbackDraining = draining
+                // The daemon needs the truth about audible playback: generation ends long
+                // before the speaker drains, and both the dashboard's session state and
+                // the session idle-close must track what the user actually hears.
+                self.ws.sendJSON(["type": "playback_state", "draining": draining])
+                self.notch.setPacing(draining)
+                self.refreshState()
             }
+        }
+        audio.onPlaybackProgress = { [weak self] fraction in
+            self?.notch.setPlaybackProgress(fraction)
         }
     }
 
@@ -132,6 +142,11 @@ final class GumboController {
                 }
             case "notch_pulse":
                 self.notch.pulse(status: msg["status"] as? String ?? "done")
+            case "event":
+                // Task-scoped activity for the bubble mini-panel live tail.
+                if let event = msg["event"] as? [String: Any] {
+                    self.bubbles.ingest(event: event)
+                }
             default:
                 break
             }

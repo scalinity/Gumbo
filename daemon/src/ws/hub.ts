@@ -14,6 +14,7 @@ export class Hub {
   private handlers: MessageHandler[] = [];
   private binaryHandlers: BinaryHandler[] = [];
   private helloHandlers: HelloHandler[] = [];
+  private closeHandlers: HelloHandler[] = [];
 
   constructor(server: Server) {
     const wss = new WebSocketServer({
@@ -51,7 +52,11 @@ export class Hub {
         if (!role) return; // must hello first
         for (const handler of this.handlers) handler(msg, role);
       });
-      socket.on('close', () => this.clients.delete(socket));
+      socket.on('close', () => {
+        const role = this.clients.get(socket);
+        this.clients.delete(socket);
+        if (role) for (const handler of this.closeHandlers) handler(role);
+      });
     });
   }
 
@@ -67,6 +72,12 @@ export class Hub {
    *  tsx-watch restarts are routine, so state like bubbles must be re-syncable). */
   onHello(handler: HelloHandler) {
     this.helloHandlers.push(handler);
+  }
+
+  /** Fires when an identified client disconnects (e.g. clear shell-owned state like
+   *  playback-draining so a dead shell can't wedge the session state machine). */
+  onClose(handler: HelloHandler) {
+    this.closeHandlers.push(handler);
   }
 
   hasRole(role: ClientRole): boolean {

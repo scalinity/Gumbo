@@ -80,6 +80,10 @@ export class Orchestrator {
   private hadSpeech = false; // any VAD speech this armed window → worth responding to
   private sawCommit = false; // VAD auto-committed this window → don't double-commit
   private responding = false; // a response is in flight (thinking or speaking)
+  // The shell's speaker-queue state. Generation ends long before audible playback (a
+  // multi-minute report read finishes generating in seconds), so 'speaking' and the
+  // session's lifetime must track the shell's drain, not the model's turn.
+  private shellDraining = false;
 
   constructor(
     private store: Store,
@@ -95,7 +99,11 @@ export class Orchestrator {
 
   private resetIdleTimer() {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => this.closeSession(), config.sessionIdleMs);
+    this.idleTimer = setTimeout(() => {
+      // Never tear the session down while the user is still hearing it speak.
+      if (this.shellDraining) this.resetIdleTimer();
+      else this.closeSession();
+    }, config.sessionIdleMs);
   }
 
   private resetPtt() {
@@ -192,7 +200,9 @@ export class Orchestrator {
         });
         session.transport.on('turn_done', () => {
           this.responding = false;
-          this.setState(this.armed ? 'listening' : 'idle');
+          // Generation is done, but the shell may still be playing buffered audio —
+          // hold 'speaking' until it reports its queue drained (playback_state).
+          this.setState(this.armed ? 'listening' : this.shellDraining ? 'speaking' : 'idle');
           this.resetIdleTimer();
         });
         session.transport.on('connection_change', (status) => {
@@ -209,7 +219,20 @@ export class Orchestrator {
           }
         });
         session.on('error', (err) => {
-          this.store.addEvent(null, 'session.error', { message: String((err as { error?: unknown }).error ?? err) });
+          // SDK errors are nested objects; String() flattens them to "[object Object]"
+          // and loses the actual failure (seen repeatedly in the live event log).
+          const detail = (err as { error?: unknown }).error ?? err;
+          let message: string;
+          if (typeof detail === 'string') {
+            message = detail;
+          } else {
+            try {
+              message = JSON.stringify(detail)?.slice(0, 400) ?? String(detail);
+            } catch {
+              message = String(detail);
+            }
+          }
+          this.store.addEvent(null, 'session.error', { message });
         });
 
         await session.connect({ apiKey: process.env.OPENAI_API_KEY! });
@@ -255,6 +278,18 @@ export class Orchestrator {
       transport.requestResponse();
     } else {
       transport.sendEvent({ type: 'response.create' });
+    }
+  }
+
+  handlePlaybackState(draining: boolean) {
+    this.shellDraining = draining;
+    if (draining) {
+      // Covers cold announcements too (no session): Gumbo is audibly speaking.
+      if (!this.armed && (this.state === 'idle' || this.state === 'speaking')) this.setState('speaking');
+      if (this.session || this.connecting) this.resetIdleTimer();
+    } else if (this.state === 'speaking' && !this.responding) {
+      this.setState(this.armed ? 'listening' : 'idle');
+      if (this.session || this.connecting) this.resetIdleTimer();
     }
   }
 

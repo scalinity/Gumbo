@@ -23,6 +23,10 @@ final class AudioEngine {
     var onMicLevel: ((Float) -> Void)?
     var onPlaybackLevel: ((Float) -> Void)?
     var onPlaybackStateChange: ((Bool) -> Void)? // true while queued audio is draining
+    // Fraction (0–1) of this playback stream actually *heard* so far. Generation runs
+    // several× faster than speech, so transcript display must pace against this, not
+    // against delta arrival, for read-along to work on long report reads.
+    var onPlaybackProgress: ((Double) -> Void)?
 
     /// 24 kHz mono interleaved Int16 — the Realtime API wire format both directions.
     private let wireFormat = AVAudioFormat(
@@ -47,7 +51,13 @@ final class AudioEngine {
     private var lastStartFailure: Date?
     // Unscheduled pcm chunks. Also the pre-start queue (spoken reply with no prior press)
     // and what carries playback across a live playbackOnly → duplex graph switch.
+    // Cap sized for multi-minute report reads: 4096 × ~200 ms chunks ≫ any real reply
+    // (the old 512 could overflow → dropped chunks → skipped audio mid-read).
     private var playbackQueue: [Data] = []
+    // Wire-format (24 kHz) frame counters for the current playback stream; reset when
+    // the stream fully drains or is flushed.
+    private var framesEnqueued = 0
+    private var framesPlayed = 0
 
     // MARK: lifecycle
 
@@ -92,7 +102,11 @@ final class AudioEngine {
         lock.lock()
         generation += 1 // completion handlers of dying buffers become stale
         inFlight = 0
-        if !keepQueue { playbackQueue = [] }
+        if !keepQueue {
+            playbackQueue = []
+            framesEnqueued = 0
+            framesPlayed = 0
+        }
         let queueEmpty = playbackQueue.isEmpty
         lock.unlock()
         if mode == .duplex { engine?.inputNode.removeTap(onBus: 0) }
@@ -123,7 +137,8 @@ final class AudioEngine {
     func playChunk(_ pcm: Data) {
         lock.lock()
         playbackQueue.append(pcm)
-        if playbackQueue.count > 512 { playbackQueue.removeFirst() }
+        if playbackQueue.count > 4096 { playbackQueue.removeFirst() }
+        framesEnqueued += pcm.count / MemoryLayout<Int16>.size
         lock.unlock()
         if running { pumpPlayback() }
     }
@@ -142,6 +157,7 @@ final class AudioEngine {
             let pcm = playbackQueue.removeFirst()
             inFlight += 1
             let gen = generation
+            let wireFrames = pcm.count / MemoryLayout<Int16>.size
             lock.unlock()
 
             guard let outBuf = convertForPlayback(pcm, converter: converter, to: playFormat) else {
@@ -159,9 +175,21 @@ final class AudioEngine {
                 guard let self else { return }
                 self.lock.lock()
                 let live = gen == self.generation
-                if live { self.inFlight -= 1 }
+                var progress: Double? = nil
+                if live {
+                    self.inFlight -= 1
+                    self.framesPlayed += wireFrames
+                    if self.framesEnqueued > 0 {
+                        progress = Double(self.framesPlayed) / Double(self.framesEnqueued)
+                    }
+                }
                 let drained = live && self.inFlight == 0 && self.playbackQueue.isEmpty
+                if drained { // stream over — next playback stream starts its own ratio
+                    self.framesEnqueued = 0
+                    self.framesPlayed = 0
+                }
                 self.lock.unlock()
+                if let progress { self.onPlaybackProgress?(min(1, progress)) }
                 if drained {
                     self.setDraining(false)
                 } else if live {
@@ -207,6 +235,8 @@ final class AudioEngine {
         generation += 1
         inFlight = 0
         playbackQueue = []
+        framesEnqueued = 0
+        framesPlayed = 0
         lock.unlock()
         player?.stop()
         playbackConverter?.reset()

@@ -440,3 +440,45 @@ verified live ✅** (M2 follow-up #2 closed). Three defects + one TCC finding, a
   ai.scalinity.Gumbo` + one fresh grant against the real-cert build. **The next rebuild is
   the persistence proof.** (Mic never re-prompted — its row was created fresh post-cert,
   which corroborates the diagnosis.)
+
+### M3.1 — playback-truthful state, read-along transcript, coal orbs + mini panel (2026-07-15, late)
+
+the user's second real run surfaced two bugs (dashboard flipped to *idle* mid-report-read;
+notch transcript froze at "Here are the highlights, the user.") and two design asks (bubble
+should expand **in place** into a mini observability panel, not open the dashboard; and
+become a breathing orb). Diagnosed from the **event store, not guesswork** — the sqlite log
+had the whole turn (also confirmed there: the date fix works — the 7 PM sub-agent searched
+"July 15 2026" vs the 6:49 run's "March 31, 2026" — and announcements no longer speak ids).
+
+- **Notch transcript freeze, root cause:** the persisted reply is markdown with hard
+  newlines; the notch line renders with `lineLimit(1)`, and SwiftUI shows only the text
+  before the first `\n` — head truncation never gets to act. Deltas were flowing fine.
+  Fix: flatten `\n` on append.
+- **Read-along pacing:** generation runs several× faster than speech, so even unfrozen,
+  the line would show the report's *end* within seconds. AudioEngine now reports playback
+  progress (wire-frames played ÷ enqueued, per drain-stream) and the notch reveals
+  `transcript.prefix(fraction)` — the line now tracks what the user is actually *hearing*.
+  Unpaced (no active playback) → reveal immediately.
+- **Dashboard idle-while-speaking + mid-read session close:** daemon state tracked
+  *generation* (`turn_done`), which ended at 19:01:49 while audio played for minutes (the
+  session even idle-closed at 19:02:49 mid-read). Shell now sends `playback_state
+  {draining}`; the daemon holds `speaking` (incl. for cold announcements — truthful
+  presence with no session), never idle-closes while draining, and clears the flag if the
+  shell disconnects (`hub.onClose`). Dashboard needed no changes.
+- **`session.error` was logging `"[object Object]"`** (three in tonight's log) — SDK errors
+  are nested objects; now JSON-stringified. Next real error will actually say something.
+- **Playback queue cap 512 → 4096:** the M3 pump refactor routed *all* audio through the
+  capped queue; 512 × ~200 ms ≈ 100 s — a long report read would have silently dropped
+  chunks mid-read. Caught by review, not observed live (tonight's read fit).
+- **Coal orbs (design):** bubbles are now breathing orbs grounded in Gumbo's own idiom —
+  a **live coal** (the thing that simmers the pot): molten seams drifting under a darker
+  crust, heat bloom, detuned double-sine breath (never reads as a loop). Done = cooled
+  bay sea-glass (breath decays, one cooling ripple at the flip); failed = ash-red; reduce-
+  motion honored. Panel is transparent/shadowless — the bloom is the halo.
+- **Mini observability panel:** clicking the orb expands the same panel in place (332×408,
+  top-right anchored, like the notch) — header coal + title + status, live activity feed
+  (tool calls ▸, results ◂, agent messages ●), autoscroll. History backfills over the
+  existing `/api/events?task_id=` HTTP API; live tail comes from the store's event
+  fan-out, which now broadcasts to the shell too. `bubble_remove` / the 30 s failsafe are
+  **deferred while expanded** — never yank a panel the user is reading. Full dashboard is
+  the ⤴ link in the header (deep-link path reused). One expanded at a time.

@@ -66,8 +66,32 @@ final class NotchController {
             if itemId != model.transcriptItem {
                 model.transcriptItem = itemId
                 model.transcript = ""
+                model.revealedChars = 0
             }
+            // The line renders with lineLimit(1): a hard newline (report reads are full
+            // markdown) would freeze the display at the first line forever — flatten it.
             model.transcript += delta
+                .replacingOccurrences(of: "\r", with: "")
+                .replacingOccurrences(of: "\n", with: " ")
+            if !model.paced { model.revealedChars = model.transcript.count }
+        }
+    }
+
+    /// While audio is draining, the transcript reveals in proportion to what's actually
+    /// been HEARD (generation runs several× faster than speech — without pacing, a long
+    /// report read shows its final words within seconds and freezes there).
+    func setPacing(_ paced: Bool) {
+        DispatchQueue.main.async { [self] in
+            model.paced = paced
+            if !paced { model.revealedChars = model.transcript.count }
+        }
+    }
+
+    func setPlaybackProgress(_ fraction: Double) {
+        DispatchQueue.main.async { [self] in
+            guard model.paced else { return }
+            let target = Int(Double(model.transcript.count) * min(1, max(0, fraction)))
+            if target > model.revealedChars { model.revealedChars = target }
         }
     }
 
@@ -100,10 +124,16 @@ final class NotchController {
 final class NotchModel: ObservableObject {
     @Published var state: NotchState = .idle
     @Published var level: Float = 0
-    @Published var transcript = ""
+    @Published var transcript = "" // full text (newline-flattened)
+    @Published var revealedChars = 0 // how much has been *heard* (playback pacing)
+    @Published var paced = false // true while speaker audio is draining
     @Published var pulse: String? // task completion status while the M3 pulse is live
     var transcriptItem = ""
     var onTap: (() -> Void)?
+
+    var visibleTranscript: String {
+        paced ? String(transcript.prefix(revealedChars)) : transcript
+    }
 }
 
 private let ember = Color(red: 1.0, green: 0.478, blue: 0.282) // dashboard's ember accent
@@ -128,8 +158,8 @@ struct NotchContentView: View {
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.92))
-                if !model.transcript.isEmpty {
-                    Text(model.transcript)
+                if !model.visibleTranscript.isEmpty {
+                    Text(model.visibleTranscript)
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.55))
                         .lineLimit(1)
