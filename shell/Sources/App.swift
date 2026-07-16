@@ -286,9 +286,18 @@ final class GumboController {
                        let payload = event["payload"] as? [String: Any] {
                         if type == "image.created", let file = payload["file"] as? String {
                             let parent = payload["edited_from"] as? String
-                            self.imageBubbles.present(file: file, editedFrom: parent)
+                            self.imageBubbles.present(file: file, editedFrom: parent,
+                                                      genId: payload["gen_id"] as? String)
                             self.imageViewer.handleCreated(file: file, editedFrom: parent)
+                        } else if type == "image.generating", let genId = payload["gen_id"] as? String {
+                            // A render just started: hold its slot with a working orb.
+                            self.imageBubbles.beginWork(key: "gen:" + genId)
+                        } else if type == "image.generate_failed", let genId = payload["gen_id"] as? String {
+                            self.imageBubbles.failWork(key: "gen:" + genId)
+                        } else if type == "image.edit_requested", let file = payload["file"] as? String {
+                            self.imageBubbles.beginWork(key: "edit:" + file)
                         } else if type == "image.edit_failed", let file = payload["file"] as? String {
+                            self.imageBubbles.failWork(key: "edit:" + file)
                             self.imageViewer.handleEditFailed(file: file)
                         } else if type == "file.edit_failed", let path = payload["path"] as? String {
                             // The edited doc's new content arrives via file_present (success);

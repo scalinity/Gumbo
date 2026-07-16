@@ -235,7 +235,9 @@ export const config = {
   // M5 images: generation runs in the background off the voice turn (the tool acks
   // instantly), so the budget is generous like other background calls.
   images: {
-    timeoutMs: 180_000,
+    // Was 180 s — quality:high renders run long, and a timeout mid-render reads to
+    // the user as a failed request. 300 s stays a hard bound (the failure IS spoken).
+    timeoutMs: 300_000,
     // The voice model picks a shape; sizes verified against the live API (÷16 rule).
     sizes: { square: '1024x1024', landscape: '1536x1024', portrait: '1024x1536' } as Record<string, string>,
     // Highest-fidelity defaults (the user, 2026-07-16 — his "highest quality" ask was

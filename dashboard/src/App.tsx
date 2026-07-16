@@ -264,11 +264,22 @@ const Row = memo(function Row({ event }: { event: EventRow }) {
           {time}
         </div>
       );
+    case 'image.generating':
+      return (
+        <div className="machine" data-kind="image">
+          <span className="tag">image</span>
+          <span className="body">generating — {String(p.prompt ?? '').slice(0, 200)}</span>
+          {time}
+        </div>
+      );
+    case 'image.generate_failed':
     case 'image.edit_failed':
       return (
         <div className="machine" data-kind="error">
           <span className="tag">image</span>
-          <span className="body">edit failed — {String(p.error ?? '').slice(0, 200)}</span>
+          <span className="body">
+            {event.type === 'image.generate_failed' ? 'generation' : 'edit'} failed — {String(p.error ?? '').slice(0, 200)}
+          </span>
           {time}
         </div>
       );

@@ -73,6 +73,12 @@ export async function saveImageResponse(res: Response): Promise<string> {
  * instant ack, so this delivers the outcome when it lands (seconds later): image.created
  * with the FILENAME only, then a brief spoken completion via the M3 announce path. A
  * failure is spoken too — the user was told the image is coming; silence reads as a hang.
+ *
+ * LIFECYCLE (live failure 2026-07-16): image.generating {gen_id} is emitted SYNCHRONOUSLY
+ * before any await — it's what pops the shell's generating orb instantly, and it's the
+ * persisted record that lets the boot reaper (images/reconcile.ts) fail this work loudly
+ * if a tsx-watch restart kills the in-flight promise. Every generating MUST reach exactly
+ * one terminal: image.created {gen_id} or image.generate_failed {gen_id}.
  */
 export async function runImageGeneration(opts: {
   prompt: string;
@@ -82,16 +88,20 @@ export async function runImageGeneration(opts: {
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
 }): Promise<void> {
   const { prompt, shape, quality, store, announce } = opts;
+  const genId = randomUUID().slice(0, 8);
+  store.addEvent(null, 'image.generating', { gen_id: genId, prompt: prompt.slice(0, 400) });
+  // Yield before the network call so the fire-and-forget caller's turn stays instant.
+  await new Promise((resolve) => setImmediate(resolve));
   const short = echoForInstructions(prompt); // quoted inside live instructions — defanged (review 🔵)
   try {
     const file = await generateImage(prompt, shape, quality);
-    store.addEvent(null, 'image.created', { file, prompt });
+    store.addEvent(null, 'image.created', { file, prompt, gen_id: genId });
     await announce(
-      'the user, your image is ready — it landed in the gallery.',
-      `The image the user asked for ("${short}") just finished generating and is in his dashboard gallery. Tell him briefly it's ready — one sentence, no file names.`,
+      "the user, your image is ready — it's up on your screen.",
+      `The image the user asked for ("${short}") just finished and is now on his screen — the generating orb became the thumbnail, top right; clicking it opens the editor. Tell him it's up in ONE short sentence. Do not tell him to check the gallery or open anything.`,
     );
   } catch (err) {
-    store.addEvent(null, 'session.error', { message: `image generation: ${String(err)}` });
+    store.addEvent(null, 'image.generate_failed', { gen_id: genId, prompt: prompt.slice(0, 400), error: String(err) });
     await announce(
       'the user, heads up — the image generation failed.',
       `The image the user asked for ("${short}") failed to generate. Tell him briefly and offer to try again.`,
