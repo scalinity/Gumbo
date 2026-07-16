@@ -11,9 +11,21 @@ import type { Store } from '../events/store.ts';
 
 export type ImageShape = 'square' | 'landscape' | 'portrait';
 
+/** One retry on 429/5xx (the repo's provider-retry convention, scaled to a single long
+ *  background call rather than a search fan-out — review 🔵): a transient 500 on a
+ *  multi-second render shouldn't announce failure to the user. The per-attempt timeout is
+ *  the same background budget both callers already used; FormData bodies are plain
+ *  objects (not streams), so re-sending is safe. */
+export async function imagesFetch(url: string, init: RequestInit): Promise<Response> {
+  const first = await fetch(url, { ...init, signal: AbortSignal.timeout(config.images.timeoutMs) });
+  if (first.status !== 429 && first.status < 500) return first;
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  return fetch(url, { ...init, signal: AbortSignal.timeout(config.images.timeoutMs) });
+}
+
 /** Generate one image and land it in ~/Gumbo/images/. Returns the bare filename. */
 export async function generateImage(prompt: string, shape: ImageShape): Promise<string> {
-  const res = await fetch('https://api.openai.com/v1/images/generations', {
+  const res = await imagesFetch('https://api.openai.com/v1/images/generations', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -24,9 +36,6 @@ export async function generateImage(prompt: string, shape: ImageShape): Promise<
       prompt,
       size: config.images.sizes[shape] ?? config.images.sizes.square,
     }),
-    // Background budget — the voice turn already got its ack; a hung request must still
-    // resolve so the failure announcement fires instead of silence.
-    signal: AbortSignal.timeout(config.images.timeoutMs),
   });
   return saveImageResponse(res);
 }
@@ -41,9 +50,19 @@ export async function saveImageResponse(res: Response): Promise<string> {
   const body = (await res.json()) as { data?: Array<{ b64_json?: string }> };
   const b64 = body.data?.[0]?.b64_json;
   if (!b64) throw new Error('images api: no b64_json in response');
-  const file = `${randomUUID().slice(0, 8)}.png`;
-  writeFileSync(join(config.home.images, file), Buffer.from(b64, 'base64'));
-  return file;
+  // 'wx' + retry (review 🟡): 8-hex names are a 32-bit namespace and a plain write
+  // silently replaces on collision — which would clobber a prior image and break the
+  // non-destructive-edits guarantee. Exclusive create makes a collision loud and cheap.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const file = `${randomUUID().slice(0, 8)}.png`;
+    try {
+      writeFileSync(join(config.home.images, file), Buffer.from(b64, 'base64'), { flag: 'wx' });
+      return file;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  }
+  throw new Error('images: could not allocate a unique filename');
 }
 
 /**

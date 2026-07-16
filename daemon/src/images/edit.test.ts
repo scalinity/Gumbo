@@ -132,7 +132,7 @@ test('acceptImageEditRequest: success path → edit_requested then image.created
 });
 
 test('acceptImageEditRequest: API failure → edit_requested then image.edit_failed', async () => {
-  capture(500, {});
+  capture(400, {}); // 4xx: fails without the 500 ms retry pause (retry behavior is covered in generate.test)
   const { store, events, announce } = harness();
   acceptImageEditRequest({ file: SOURCE_FILE, prompt: 'p' }, store, announce);
   await new Promise((resolve) => setTimeout(resolve, 20));

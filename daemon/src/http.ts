@@ -66,7 +66,13 @@ export function createHttpServer(store: Store) {
       try {
         entries = readdirSync(config.home.images)
           .filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
-          .map((f) => ({ file: f, ts: statSync(join(config.home.images, f)).mtimeMs }))
+          .flatMap((f) => {
+            try {
+              return [{ file: f, ts: statSync(join(config.home.images, f)).mtimeMs }];
+            } catch {
+              return []; // vanished between readdir and stat — costs one entry, not the gallery (review 🔵)
+            }
+          })
           .sort((a, b) => b.ts - a.ts);
       } catch {
         // images dir missing (fresh GUMBO_HOME) → empty gallery, not a 500

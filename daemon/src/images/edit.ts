@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.ts';
 import type { Store } from '../events/store.ts';
-import { saveImageResponse } from './generate.ts';
+import { imagesFetch, saveImageResponse } from './generate.ts';
 import { safeImageFile } from './files.ts';
 import { pngDimensions, sanitizeStrokes, strokeMaskPng, type Stroke } from './mask.ts';
 
@@ -24,12 +24,11 @@ export async function editImage(file: string, prompt: string, strokes?: Stroke[]
     const { width, height } = pngDimensions(source);
     form.append('mask', new Blob([new Uint8Array(strokeMaskPng(width, height, strokes))], { type: 'image/png' }), 'mask.png');
   }
-  const res = await fetch('https://api.openai.com/v1/images/edits', {
+  const res = await imagesFetch('https://api.openai.com/v1/images/edits', {
     method: 'POST',
     // No Content-Type header: fetch sets the multipart boundary itself.
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: form,
-    signal: AbortSignal.timeout(config.images.timeoutMs),
   });
   return saveImageResponse(res);
 }

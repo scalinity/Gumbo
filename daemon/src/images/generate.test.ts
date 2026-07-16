@@ -84,16 +84,36 @@ test('runImageGeneration emits image.created carrying the FILENAME — never the
   assert.match(announced[0].live, /swamp at dusk/);
 });
 
-test('an API failure is spoken, logged, and emits no image.created', async () => {
-  capture(500, { error: { message: 'boom' } });
+test('an API failure is spoken, logged, and emits no image.created (after one retry)', async () => {
+  const calls = capture(500, { error: { message: 'boom' } });
   const { store, events, announced, announce } = harness();
   await runImageGeneration({ prompt: 'p', shape: 'square', store, announce });
 
+  assert.equal(calls.length, 2, '5xx gets exactly one retry (provider convention)');
   assert.ok(!events.some((e) => e.type === 'image.created'));
   const err = events.find((e) => e.type === 'session.error');
   assert.match(String((err?.payload as { message: string })?.message), /images api 500/);
   assert.equal(announced.length, 1);
   assert.match(announced[0].cold, /failed/);
+});
+
+test('a transient 500 recovers on the retry; 4xx (non-429) never retries', async () => {
+  // Sequenced mock: 500 then 200 — the image should land.
+  let call = 0;
+  globalThis.fetch = (async () => {
+    call++;
+    return call === 1
+      ? new Response('{}', { status: 500 })
+      : new Response(JSON.stringify({ data: [{ b64_json: TINY_PNG_B64 }] }), { status: 200 });
+  }) as typeof fetch;
+  const file = await generateImage('p', 'square');
+  assert.match(file, /\.png$/);
+  assert.equal(call, 2);
+
+  // 400 fails immediately — retrying a rejected request just doubles the error.
+  const badCalls = capture(400, { error: { message: 'bad prompt' } });
+  await assert.rejects(generateImage('p', 'square'), /images api 400/);
+  assert.equal(badCalls.length, 1);
 });
 
 test('a response with no b64_json is a failure, not a zero-byte file', async () => {
