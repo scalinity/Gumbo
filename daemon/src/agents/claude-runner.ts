@@ -249,8 +249,13 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   }
 
   private park(report: string, reason: string): ClaudeRunResult {
+    // A follow-up the user sent while the task was parked (e.g. during plan review) sits in
+    // the queue; closing it here drops any unconsumed turn. Surface that instead of losing
+    // his words silently — he can resend after re-reading the park reason.
+    const dropped = this.turnsSent - this.turnsResolved;
     this.input.close();
-    return { parked: true, parkedReason: reason, report };
+    const parkedReason = dropped > 0 ? `${reason} (a follow-up you sent wasn't processed — please resend it)` : reason;
+    return { parked: true, parkedReason, report };
   }
 
   /**

@@ -234,6 +234,13 @@ export class TaskManager {
     if (!task || task.kind !== 'claude') return `No Claude session ${id}.`;
     const runner = this.claudeRunners.get(id);
     if (!runner) return 'That session already closed — its edits are recoverable via git if the project is version-controlled.';
+    // rewindFiles is a control request; the CLI won't service it while blocked awaiting a
+    // pending confirm (plan approval or an escalation) — undo() would hang and wedge the
+    // voice turn. When the task is parked/awaiting input, refuse with a spoken next-step
+    // instead. (Cancelling the task is the way to stop a session that's waiting on the user.)
+    if (task.status === 'needs_input') {
+      return 'That session is paused waiting on you — answer or cancel it first, then I can undo its changes.';
+    }
     return runner.undo();
   }
 
