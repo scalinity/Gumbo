@@ -159,6 +159,12 @@ enum ViewerChrome {
 /// One brush stroke in image-normalized coordinates (0–1, origin top-left); radius is
 /// normalized to image WIDTH — the exact vocabulary the daemon's mask rasterizer speaks.
 struct BrushStroke {
+    /// Mirror of the daemon's caps (mask.ts MAX_POINTS_PER_STROKE / MAX_STROKES). The
+    /// daemon CLAMPS past these, so exceeding them shell-side would silently mask less
+    /// than the user drew (review 🔴) — cap at the source instead so drawn == masked.
+    static let maxPoints = 2000
+    static let maxStrokes = 200
+
     var points: [CGPoint]
     var radius: Double
 
@@ -363,7 +369,9 @@ private struct BrushOverlay: View {
                             x: min(1, max(0, value.location.x / size.width)),
                             y: min(1, max(0, value.location.y / size.height)))
                         if var live = model.liveStroke {
-                            // Thin the polyline: only keep points that actually moved.
+                            // Thin the polyline: only keep points that actually moved,
+                            // and never outgrow what the daemon will accept verbatim.
+                            guard live.points.count < BrushStroke.maxPoints else { return }
                             if let last = live.points.last,
                                abs(last.x - point.x) * size.width < 2.5,
                                abs(last.y - point.y) * size.height < 2.5 { return }
@@ -375,7 +383,9 @@ private struct BrushOverlay: View {
                     }
                     .onEnded { _ in
                         if let live = model.liveStroke {
-                            model.strokes.append(live)
+                            if model.strokes.count < BrushStroke.maxStrokes {
+                                model.strokes.append(live)
+                            }
                             model.liveStroke = nil
                             onSelectionChange()
                         }

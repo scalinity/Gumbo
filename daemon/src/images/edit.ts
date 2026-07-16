@@ -10,14 +10,8 @@ import { join } from 'node:path';
 import { config } from '../config.ts';
 import type { Store } from '../events/store.ts';
 import { saveImageResponse } from './generate.ts';
-import { pngDimensions, strokeMaskPng, type Stroke } from './mask.ts';
-
-/** Image filenames cross the wire (shell messages, model tool args) — confine them to
- *  bare generated-image names so they can never traverse out of the images dir. */
-export function safeImageFile(name: string): string {
-  if (!/^[\w-]+\.png$/.test(name)) throw new Error(`invalid image filename: ${name.slice(0, 60)}`);
-  return name;
-}
+import { safeImageFile } from './files.ts';
+import { pngDimensions, sanitizeStrokes, strokeMaskPng, type Stroke } from './mask.ts';
 
 /** Run one masked (or whole-image) edit. Returns the NEW image's bare filename. */
 export async function editImage(file: string, prompt: string, strokes?: Stroke[]): Promise<string> {
@@ -38,6 +32,36 @@ export async function editImage(file: string, prompt: string, strokes?: Stroke[]
     signal: AbortSignal.timeout(config.images.timeoutMs),
   });
   return saveImageResponse(res);
+}
+
+/**
+ * Entry point for a typed edit off the wire (index.ts hands the raw shell message here).
+ *
+ * INVARIANT (review 🔴 + 🟡, both agents): every well-formed request terminates in
+ * EXACTLY ONE of `image.created` | `image.edit_failed` — the viewer's busy state has no
+ * other exit. Pre-flight failures (bad filename, malformed strokes) therefore emit
+ * `image.edit_failed` too, not just a session.error the viewer never sees.
+ */
+export function acceptImageEditRequest(
+  msg: { file?: unknown; prompt?: unknown; strokes?: unknown },
+  store: Store,
+  announce: (coldText: string, liveInstructions: string) => Promise<void>,
+): void {
+  const prompt = typeof msg.prompt === 'string' ? msg.prompt.trim() : '';
+  const rawFile = typeof msg.file === 'string' ? msg.file : '';
+  if (!prompt || !rawFile) return; // not a request the viewer could be busy-waiting on
+  try {
+    const file = safeImageFile(rawFile);
+    const strokes = msg.strokes !== undefined ? sanitizeStrokes(msg.strokes) : undefined;
+    store.addEvent(null, 'image.edit_requested', { file, prompt, ...(strokes?.length ? { selection: true } : {}) });
+    runImageEdit({ file, prompt, strokes, store, announce }).catch((err: unknown) => {
+      // runImageEdit handles (and speaks) its own failures — this only guards the
+      // announce path itself so nothing becomes an unhandled rejection.
+      store.addEvent(null, 'session.error', { message: `image edit announce: ${String(err)}` });
+    });
+  } catch (err) {
+    store.addEvent(null, 'image.edit_failed', { file: rawFile, prompt, error: String(err) });
+  }
 }
 
 /**

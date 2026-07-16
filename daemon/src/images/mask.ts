@@ -53,19 +53,23 @@ export function pngDimensions(png: Buffer): { width: number; height: number } {
   return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
 }
 
-/** Shape-check strokes off the wire; returns a cleaned copy or throws. */
+/** Shape-check strokes off the wire; returns a cleaned copy or throws.
+ *
+ *  Over-LIMIT sizes are CLAMPED (truncated), never rejected (review 🔴): the shell caps
+ *  its drawing at the same constants, so truncation only ever fires against a non-shell
+ *  client — and a selection that masks slightly less than requested beats throwing away
+ *  the user's armed context or hanging a busy viewer. Malformed SHAPES (non-arrays,
+ *  non-numeric values) still throw — there is no sensible clamp for garbage. */
 export function sanitizeStrokes(input: unknown): Stroke[] {
   if (!Array.isArray(input)) throw new Error('strokes must be an array');
-  if (input.length > MAX_STROKES) throw new Error(`too many strokes (max ${MAX_STROKES})`);
-  return input.map((s) => {
+  return input.slice(0, MAX_STROKES).map((s) => {
     const stroke = s as { points?: unknown; radius?: unknown };
     if (!Array.isArray(stroke.points) || stroke.points.length === 0) throw new Error('stroke needs points');
-    if (stroke.points.length > MAX_POINTS_PER_STROKE) throw new Error(`stroke too long (max ${MAX_POINTS_PER_STROKE} points)`);
     const radius = Number(stroke.radius);
     if (!Number.isFinite(radius)) throw new Error('stroke needs a numeric radius');
     return {
       radius: Math.min(MAX_RADIUS, Math.max(MIN_RADIUS, radius)),
-      points: stroke.points.map((p) => {
+      points: stroke.points.slice(0, MAX_POINTS_PER_STROKE).map((p) => {
         const [x, y] = p as [unknown, unknown];
         const px = Number(x);
         const py = Number(y);

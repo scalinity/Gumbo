@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { inflateSync } from 'node:zlib';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
-const { MAX_STROKES, pngDimensions, sanitizeStrokes, strokeMaskPng } = await import('./mask.ts');
+const { MAX_POINTS_PER_STROKE, MAX_STROKES, pngDimensions, sanitizeStrokes, strokeMaskPng } = await import('./mask.ts');
 
 /** Decode the (single-IDAT, filter-None) mask PNG and read one pixel's alpha. */
 function alphaAt(png: Buffer, width: number, x: number, y: number): number {
@@ -59,8 +59,13 @@ test('sanitizeStrokes: rejects malformed payloads off the wire', () => {
   assert.throws(() => sanitizeStrokes([{ points: [], radius: 0.05 }]), /needs points/);
   assert.throws(() => sanitizeStrokes([{ points: [['a', 'b']], radius: 0.05 }]), /numeric pairs/);
   assert.throws(() => sanitizeStrokes([{ points: [[0, 0]], radius: 'wide' }]), /numeric radius/);
-  const flood = Array.from({ length: MAX_STROKES + 1 }, () => ({ points: [[0, 0]] as Array<[number, number]>, radius: 0.05 }));
-  assert.throws(() => sanitizeStrokes(flood), /too many strokes/);
+});
+
+test('sanitizeStrokes: over-LIMIT sizes are clamped, never rejected (review 🔴 — a throw would disarm the context / hang the viewer)', () => {
+  const flood = Array.from({ length: MAX_STROKES + 50 }, () => ({ points: [[0, 0]] as Array<[number, number]>, radius: 0.05 }));
+  assert.equal(sanitizeStrokes(flood).length, MAX_STROKES);
+  const longStroke = [{ points: Array.from({ length: MAX_POINTS_PER_STROKE + 500 }, (_, i) => [i / 3000, 0.5] as [number, number]), radius: 0.05 }];
+  assert.equal(sanitizeStrokes(longStroke)[0].points.length, MAX_POINTS_PER_STROKE);
 });
 
 test('pngDimensions rejects non-PNG bytes', () => {

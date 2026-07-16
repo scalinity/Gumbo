@@ -6,7 +6,8 @@ import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
 process.env.OPENAI_API_KEY ??= 'sk-test-key';
-const { editImage, runImageEdit, safeImageFile } = await import('./edit.ts');
+const { acceptImageEditRequest, editImage, runImageEdit } = await import('./edit.ts');
+const { safeImageFile } = await import('./files.ts');
 const { strokeMaskPng, pngDimensions } = await import('./mask.ts');
 const { config } = await import('../config.ts');
 const { Store } = await import('../events/store.ts');
@@ -36,6 +37,14 @@ function capture(status = 200, body: unknown = { data: [{ b64_json: TINY_PNG_B64
 }
 
 const STROKES: Stroke[] = [{ points: [[0.1, 0.1], [0.9, 0.2]], radius: 0.05 }];
+
+function harness() {
+  const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-edit-')), 'gumbo.db'));
+  const events: EventRow[] = [];
+  store.onEvent((e) => events.push(e));
+  const announce = async () => {};
+  return { store, events, announce };
+}
 
 test('multipart contract: endpoint, model, prompt, source image, and a dimension-matched mask', async () => {
   const calls = capture();
@@ -108,6 +117,49 @@ test('an API failure emits image.edit_failed (viewer un-busies on it) and is spo
   assert.equal(payload.file, SOURCE_FILE);
   assert.match(payload.error, /images api 400/);
   assert.match(announced[0], /failed/);
+});
+
+// The invariant the viewer's busy state rides on (review 🔴 + 🟡): every well-formed
+// image_edit_request terminates in EXACTLY one of image.created | image.edit_failed.
+test('acceptImageEditRequest: success path → edit_requested then image.created', async () => {
+  capture();
+  const { store, events, announce } = harness();
+  acceptImageEditRequest({ file: SOURCE_FILE, prompt: 'p', strokes: STROKES }, store, announce);
+  await new Promise((resolve) => setTimeout(resolve, 20)); // let the background half settle
+  assert.ok(events.some((e) => e.type === 'image.edit_requested'));
+  assert.equal(events.filter((e) => ['image.created', 'image.edit_failed'].includes(e.type)).length, 1);
+  assert.ok(events.some((e) => e.type === 'image.created'));
+});
+
+test('acceptImageEditRequest: API failure → edit_requested then image.edit_failed', async () => {
+  capture(500, {});
+  const { store, events, announce } = harness();
+  acceptImageEditRequest({ file: SOURCE_FILE, prompt: 'p' }, store, announce);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(events.filter((e) => ['image.created', 'image.edit_failed'].includes(e.type)).length, 1);
+  assert.ok(events.some((e) => e.type === 'image.edit_failed'));
+});
+
+test('acceptImageEditRequest: PRE-FLIGHT failures still emit image.edit_failed (the viewer has no other busy exit)', async () => {
+  capture();
+  const { store, events, announce } = harness();
+  // Bad filename — traversal attempt.
+  acceptImageEditRequest({ file: '../evil.png', prompt: 'p' }, store, announce);
+  // Malformed strokes — garbage shape (over-limit sizes are clamped, not rejected).
+  acceptImageEditRequest({ file: SOURCE_FILE, prompt: 'p', strokes: 'garbage' }, store, announce);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const failed = events.filter((e) => e.type === 'image.edit_failed');
+  assert.equal(failed.length, 2);
+  assert.equal((failed[0].payload as { file: string }).file, '../evil.png', 'failure event carries the file the viewer is waiting on');
+  assert.ok(!events.some((e) => e.type === 'image.created'));
+});
+
+test('acceptImageEditRequest: ignores requests no viewer could be waiting on (empty prompt/file)', () => {
+  capture();
+  const { store, events, announce } = harness();
+  acceptImageEditRequest({ file: SOURCE_FILE, prompt: '   ' }, store, announce);
+  acceptImageEditRequest({ prompt: 'p' }, store, announce);
+  assert.equal(events.length, 0);
 });
 
 test('safeImageFile confines wire filenames to bare generated names', () => {
