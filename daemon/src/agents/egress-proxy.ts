@@ -1,5 +1,10 @@
 import { createServer, type Server } from 'node:http';
-import { connect, type Socket } from 'node:net';
+import { connect, isIP, type Socket } from 'node:net';
+
+// Cap on distinct non-allowlisted hosts a single session may escalate. Past this, further novel
+// hosts are refused without a confirm — bounds notch spam and the `decided` map from an attacker
+// generating endless subdomains (review 🔵). Exported for the unit test.
+export const MAX_ESCALATIONS = 20;
 
 // M4.1 egress filtering proxy (network posture: default-deny + allowlist + escalate). The
 // sandboxed Claude CLI runs under a Seatbelt profile that denies every DIRECT socket and
@@ -28,20 +33,44 @@ export function hostAllowed(host: string, allowed: readonly string[]): boolean {
   });
 }
 
-/** Split a CONNECT target ("host:port", or "[::1]:443") into host + port. */
-function parseTarget(target: string): { host: string; port: number } {
+/** Split a CONNECT target ("host:port" or bracketed IPv6 "[::1]:443") into host + port, or null
+ *  if malformed. host is lowercased (case-insensitive for DNS/IPv6). Rejects an empty host and an
+ *  out-of-range/non-integer port — an unvalidated port reaches `net.connect`, which throws
+ *  ERR_SOCKET_BAD_PORT *synchronously* on the allowlisted path and would crash the daemon (🔴). */
+function parseTarget(target: string): { host: string; port: number } | null {
   const idx = target.lastIndexOf(':');
-  if (idx === -1) return { host: target, port: 443 };
-  return { host: target.slice(0, idx), port: Number(target.slice(idx + 1)) || 443 };
+  const rawHost = idx === -1 ? target : target.slice(0, idx);
+  const port = idx === -1 ? 443 : Number(target.slice(idx + 1));
+  // Strip brackets from an IPv6 literal so `net.connect`/allowlist see a bare address.
+  const host = (rawHost.startsWith('[') && rawHost.endsWith(']') ? rawHost.slice(1, -1) : rawHost).toLowerCase();
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return { host, port };
+}
+
+/** Refuse loopback/private/link-local IP LITERALS outright (no confirm): they can only be the
+ *  daemon's own control plane or a LAN pivot — never a legitimate external service (which is
+ *  reached by hostname). Hostnames return false here and go through the allowlist/escalate path
+ *  (the proxy resolves them upstream). review 🔵. */
+function isForbiddenLiteral(host: string): boolean {
+  const v = isIP(host);
+  if (v === 4) {
+    const [a, b] = host.split('.').map(Number);
+    return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  if (v === 6) {
+    return host === '::1' || host === '::' || host.startsWith('fe80') || host.startsWith('fc') || host.startsWith('fd');
+  }
+  return false; // not an IP literal → a hostname
 }
 
 /**
  * Start the loopback CONNECT filtering proxy. `allowed` is the flow-freely allowlist;
- * `onUnknown(host)` is invoked once per non-allowlisted host (the runner routes it to the
- * supervisor's notch confirm) and its decision is memoized for the session — a host approved
- * (or denied) once isn't re-prompted, and concurrent connects to the same host share one
- * in-flight decision. Binds 127.0.0.1 on an ephemeral port. Never throws from a socket error
- * (the daemon must not crash because a session's connection broke).
+ * `onUnknown(host)` is invoked once per non-allowlisted host (lowercased — the runner routes it to
+ * the supervisor's notch confirm) and its decision is memoized for the session by that lowercased
+ * host — a host approved (or denied) once isn't re-prompted, case variants don't re-prompt, and
+ * concurrent connects to the same host share one in-flight decision. Binds 127.0.0.1 on an
+ * ephemeral port. Never throws from a socket error (the daemon must not crash because a session's
+ * connection broke).
  */
 export async function startEgressProxy(
   allowed: readonly string[],
@@ -62,33 +91,53 @@ export async function startEgressProxy(
     // Attach the error handler FIRST — a client RST before we finish setup would otherwise
     // throw and crash the daemon (learned in the spike).
     clientSock.on('error', () => clientSock.destroy());
-    const { host, port } = parseTarget(req.url ?? '');
-
-    const tunnel = () => {
-      const up = connect(port, host, () => {
-        clientSock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        up.write(head);
-        up.pipe(clientSock);
-        clientSock.pipe(up);
-      });
-      up.on('error', () => {
-        clientSock.destroy();
-        up.destroy();
-      });
-      clientSock.on('error', () => up.destroy());
-    };
     const refuse = () => {
       clientSock.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       clientSock.end();
+    };
+
+    const parsed = parseTarget(req.url ?? '');
+    if (!parsed || isForbiddenLiteral(parsed.host)) return refuse();
+    const { host, port } = parsed;
+
+    const tunnel = () => {
+      // net.connect can throw synchronously (a bad host/port that slipped validation) — a throw
+      // here escapes the 'connect' handler and, with no uncaughtException handler, crashes the
+      // whole daemon. Guard it so a bad tunnel only drops that one connection (review 🔴).
+      try {
+        const up = connect(port, host, () => {
+          clientSock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+          up.write(head);
+          up.pipe(clientSock);
+          clientSock.pipe(up);
+        });
+        up.on('error', () => {
+          clientSock.destroy();
+          up.destroy();
+        });
+        clientSock.on('error', () => up.destroy());
+      } catch {
+        clientSock.destroy();
+      }
     };
 
     if (hostAllowed(host, allowed)) {
       tunnel();
       return;
     }
+    // Unknown host → escalate (memoized per session by lowercased host, so at most one confirm).
     let decision = decided.get(host);
     if (!decision) {
-      decision = onUnknown(host).catch(() => false); // escalation failure → deny (fail-closed)
+      if (decided.size >= MAX_ESCALATIONS) return refuse(); // cap distinct escalations
+      decision = onUnknown(host).then(
+        (ok) => ok,
+        () => {
+          // Transient escalation error → deny THIS attempt but don't cache it, so a later connect
+          // can re-escalate once the supervisor recovers (a genuine the user-deny stays cached). 🔵
+          decided.delete(host);
+          return false;
+        },
+      );
       decided.set(host, decision);
     }
     decision.then((ok) => (ok ? tunnel() : refuse())).catch(refuse);

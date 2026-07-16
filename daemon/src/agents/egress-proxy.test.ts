@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createServer, type Socket } from 'node:net';
-import { hostAllowed, startEgressProxy, type EgressProxy } from './egress-proxy.ts';
+import { hostAllowed, startEgressProxy, MAX_ESCALATIONS, type EgressProxy } from './egress-proxy.ts';
 
 test('hostAllowed: exact + subdomain match, case-insensitive, no partial-suffix match', () => {
   const allow = ['github.com', 'anthropic.com'];
@@ -63,5 +63,112 @@ test('startEgressProxy: tunnels an allowlisted host, 403s + escalates unknowns (
   } finally {
     proxy.close();
     echo.close();
+  }
+});
+
+test('startEgressProxy: an APPROVED unknown host tunnels end-to-end (escalate→200 round-trip)', async () => {
+  const echo = createServer((sock) => sock.pipe(sock));
+  await new Promise<void>((r) => echo.listen(0, '127.0.0.1', () => r()));
+  const echoPort = (echo.address() as { port: number }).port;
+  // Empty allowlist; onUnknown approves 'localhost' (a hostname → resolves to the echo server).
+  const proxy = await startEgressProxy([], async (host) => host === 'localhost');
+  try {
+    const ok = await doConnect(proxy.port, `localhost:${echoPort}`);
+    assert.equal(ok.status, 200, 'approved unknown host establishes the tunnel');
+    const roundTrip = await new Promise<string>((resolve) => {
+      ok.socket!.on('data', (d) => resolve(d.toString()));
+      ok.socket!.write('pong');
+    });
+    assert.equal(roundTrip, 'pong', 'approved tunnel pipes bytes');
+    ok.socket!.destroy();
+  } finally {
+    proxy.close();
+    echo.close();
+  }
+});
+
+test('startEgressProxy: malformed/forbidden CONNECT targets are refused without escalating', async () => {
+  const asked: string[] = [];
+  const proxy = await startEgressProxy([], async (h) => { asked.push(h); return true; }); // approve-all: only a refuse-before-escalate yields 403
+  try {
+    for (const target of ['github.com:99999', 'github.com:0', ':443', '127.0.0.1:8080', '169.254.169.254:80', '10.0.0.5:443']) {
+      const r = await doConnect(proxy.port, target);
+      assert.equal(r.status, 403, `${target} refused at parse/literal guard`);
+    }
+    assert.equal(asked.length, 0, 'none of the malformed/forbidden targets reached escalation');
+  } finally {
+    proxy.close();
+  }
+});
+
+test('startEgressProxy: memo key is case-insensitive — case variants do not re-prompt', async () => {
+  const asked: string[] = [];
+  const proxy = await startEgressProxy([], async (h) => { asked.push(h); return false; });
+  try {
+    await doConnect(proxy.port, 'EVIL.com:443');
+    await doConnect(proxy.port, 'evil.com:443');
+    assert.deepEqual(asked, ['evil.com'], 'onUnknown called once, with the lowercased host');
+  } finally {
+    proxy.close();
+  }
+});
+
+test('startEgressProxy: concurrent connects to one unknown host share a single escalation', async () => {
+  let calls = 0;
+  let release!: (v: boolean) => void;
+  const gate = new Promise<boolean>((r) => (release = r));
+  const proxy = await startEgressProxy([], async () => { calls += 1; return gate; });
+  try {
+    const both = Promise.all([doConnect(proxy.port, 'slow.test:443'), doConnect(proxy.port, 'slow.test:443')]);
+    release(false); // resolve the single in-flight decision → both refused
+    const [a, b] = await both;
+    assert.equal(a.status, 403);
+    assert.equal(b.status, 403);
+    assert.equal(calls, 1, 'in-flight promise shared — only one escalation for two concurrent connects');
+  } finally {
+    proxy.close();
+  }
+});
+
+test('startEgressProxy: a THROWN escalation denies but is not cached — a later connect re-escalates', async () => {
+  let calls = 0;
+  const proxy = await startEgressProxy([], async () => { calls += 1; throw new Error('supervisor down'); });
+  try {
+    const first = await doConnect(proxy.port, 'flaky.test:443');
+    assert.equal(first.status, 403, 'transient escalation error fails closed');
+    const second = await doConnect(proxy.port, 'flaky.test:443');
+    assert.equal(second.status, 403, 'still denied on the retry');
+    assert.equal(calls, 2, 'error was NOT memoized — the host re-escalated');
+  } finally {
+    proxy.close();
+  }
+});
+
+test('startEgressProxy: distinct-host escalations are capped, then refused without prompting', async () => {
+  const asked: string[] = [];
+  const proxy = await startEgressProxy([], async (h) => { asked.push(h); return false; });
+  try {
+    for (let i = 0; i <= MAX_ESCALATIONS; i++) {
+      const r = await doConnect(proxy.port, `h${i}.test:443`);
+      assert.equal(r.status, 403, `h${i} denied`);
+    }
+    assert.equal(asked.length, MAX_ESCALATIONS, `escalations capped at ${MAX_ESCALATIONS}; the extra host was refused without a prompt`);
+  } finally {
+    proxy.close();
+  }
+});
+
+test('startEgressProxy: a plain-HTTP (non-CONNECT) request is refused 405', async () => {
+  const proxy = await startEgressProxy([], async () => true);
+  try {
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: proxy.port, method: 'GET', path: 'http://example.com/' });
+      req.on('response', (res) => { resolve(res.statusCode ?? 0); res.resume(); });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(status, 405, 'plain HTTP is not proxied');
+  } finally {
+    proxy.close();
   }
 });
