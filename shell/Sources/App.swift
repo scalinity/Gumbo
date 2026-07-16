@@ -93,6 +93,8 @@ final class GumboController {
     private let hotkeys = Hotkeys()
     private let notch = NotchController()
     private let bubbles = BubbleController()
+    private let imageBubbles = ImageBubbleController()
+    private let imageViewer = ImageViewerController()
     private let confirm = ConfirmController()
     private let reminders = RemindersBridge()
     private lazy var dashboard = DashboardWindow()
@@ -110,6 +112,11 @@ final class GumboController {
         notch.installClickCatcher() // bare hardware notch opens the dashboard too
         // Bubble clicks expand in place (mini panel); the dashboard is its corner link.
         bubbles.onOpenDashboard = { [weak self] taskId in self?.showDashboard(taskId: taskId) }
+        // M5.5: image thumbnails stack directly beneath the task orbs; clicking one opens
+        // the viewer/editor, whose context + edit requests ride the WS back to the daemon.
+        bubbles.onStackBottomChange = { [weak self] y in self?.imageBubbles.setStackBottom(y) }
+        imageBubbles.onOpen = { [weak self] file in self?.imageViewer.open(file: file) }
+        imageViewer.onSend = { [weak self] json in self?.ws.sendJSON(json) }
         // M4: notch confirms answer supervisor escalations (deny happens daemon-side on timeout).
         confirm.onRespond = { [weak self] id, approved in
             self?.ws.sendJSON(["type": "confirm_response", "id": id, "approved": approved])
@@ -226,6 +233,18 @@ final class GumboController {
                 // Task-scoped activity for the bubble mini-panel live tail.
                 if let event = msg["event"] as? [String: Any] {
                     self.bubbles.ingest(event: event)
+                    // M5.5: image lifecycle — new/edited images surface as thumbnails,
+                    // and the open viewer swaps to an edited version / leaves busy state.
+                    if let type = event["type"] as? String,
+                       let payload = event["payload"] as? [String: Any] {
+                        if type == "image.created", let file = payload["file"] as? String {
+                            let parent = payload["edited_from"] as? String
+                            self.imageBubbles.present(file: file, editedFrom: parent)
+                            self.imageViewer.handleCreated(file: file, editedFrom: parent)
+                        } else if type == "image.edit_failed", let file = payload["file"] as? String {
+                            self.imageViewer.handleEditFailed(file: file)
+                        }
+                    }
                 }
             default:
                 break

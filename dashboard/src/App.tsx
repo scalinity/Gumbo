@@ -253,6 +253,25 @@ const Row = memo(function Row({ event }: { event: EventRow }) {
           {time}
         </div>
       );
+    // M5.5: a typed/voiced edit request in flight (the result arrives as image.created).
+    case 'image.edit_requested':
+      return (
+        <div className="machine" data-kind="image">
+          <span className="tag">image</span>
+          <span className="body">
+            edit requested{p.selection ? ' (selected area)' : ''} — {String(p.prompt ?? '').slice(0, 200)}
+          </span>
+          {time}
+        </div>
+      );
+    case 'image.edit_failed':
+      return (
+        <div className="machine" data-kind="error">
+          <span className="tag">image</span>
+          <span className="body">edit failed — {String(p.error ?? '').slice(0, 200)}</span>
+          {time}
+        </div>
+      );
     // M5: scheduler lifecycle rows.
     case 'reminder.set':
     case 'reminder.fired':

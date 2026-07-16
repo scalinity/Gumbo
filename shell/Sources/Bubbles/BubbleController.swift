@@ -10,6 +10,9 @@ import SwiftUI
 /// (bubble_remove after the linger) and deferred while the user is reading the panel.
 final class BubbleController {
     var onOpenDashboard: ((String) -> Void)?
+    /// M5.5: reports the y just below the orb stack after every layout, so the image
+    /// thumbnails (ImageBubbleController) can stack directly beneath the task orbs.
+    var onStackBottomChange: ((CGFloat) -> Void)?
 
     static let collapsedSize = NSSize(width: 84, height: 84)
     static let expandedSize = NSSize(width: 332, height: 408)
@@ -215,13 +218,15 @@ final class BubbleController {
                 top -= size.height + gap
             }
         }
+        onStackBottomChange?(top)
     }
 }
 
 /// The bubble panel is borderless + non-activating, so it never becomes key — which makes
 /// EVERY click a "first mouse", and NSView discards those by default (the tap gesture never
 /// fired; live finding from the user). Accepting first mouse delivers the click to SwiftUI.
-private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+/// Shared (not private): the image thumbnails/viewer (M5.5) need the same treatment.
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -697,7 +702,7 @@ private struct PointingCursor: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func pointingCursor() -> some View {
         modifier(PointingCursor())
     }
