@@ -76,9 +76,10 @@ test('policy: edits gated by cwd', () => {
   assert.equal(policyDecision('Write', { file_path: `${CWD}/../../escape.txt` }, CWD).route, 'escalate');
 });
 
-// M4.1 (review follow-up): the OS sandbox governs only bash/subprocesses — the CLI's own
-// file tools (Read/Write/Edit/Grep/Glob) run unsandboxed, so secret-path protection needs
-// this hard-deny in the policy layer (verified: the Read tool reads a sandbox-denied file).
+// M4.1: since the rebuild the whole CLI runs under Seatbelt (file tools included), so the OS
+// layer read-denies .env for both bash and the file tools. This policy hard-deny stays as
+// belt-and-suspenders (clean message vs raw EPERM) AND covers ~/.claude, which the OS layer
+// leaves readable so the CLI can read its own state.
 test('policy: secret paths hard-deny for the CLI file tools', () => {
   assert.equal(policyDecision('Read', { file_path: ENV_PATH }, CWD).route, 'deny', 'Read of .env is denied, not just escalated');
   assert.equal(policyDecision('Read', { file_path: join(CLAUDE_DIR, 'projects/x.jsonl') }, CWD).route, 'deny', 'reads inside ~/.claude are denied');

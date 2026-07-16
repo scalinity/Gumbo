@@ -64,11 +64,17 @@ export function sandboxUnavailableReason(): string | null {
  * network-SENDS (curl -d / POST / wget --post / git push) to a notch confirm. See IMPLEMENTATION_NOTES.
  */
 export function buildSandboxProfile(cwd: string, taskId: string): string {
+  // An empty cwd/taskId would emit `(allow file-write* (subpath ""))` — an empty prefix that
+  // matches every path and silently defeats the deny-all. The manager always passes a non-empty
+  // `dir || workspace`, but pin the precondition here so the safety property is local (review 🔵).
+  if (!cwd || !taskId) throw new Error('buildSandboxProfile: cwd and taskId must be non-empty');
   const home = homedir();
+  const claudeDir = realOrLiteral(join(home, '.claude'));
+  const q = (p: string) => JSON.stringify(p); // SBPL uses double-quoted strings; JSON escaping is compatible
   const writable = [
     realOrLiteral(cwd),
     realOrLiteral(join(config.home.tasks, taskId)),
-    realOrLiteral(join(home, '.claude')), // session state + file-checkpoint backups (undo)
+    claudeDir, // session state + file-checkpoint backups (undo)
     realOrLiteral(tmpdir()),
     '/private/tmp',
     '/private/var/folders',
@@ -79,17 +85,39 @@ export function buildSandboxProfile(cwd: string, taskId: string): string {
     realOrLiteral(join(home, '.cache')),
     realOrLiteral(join(home, 'Library', 'Caches')),
   ];
-  // Deny reading the on-disk secrets a coding session never needs. .env is secretFilePaths[0]
-  // (the repo's provider keys); ~/.claude is NOT denied here (the CLI needs to read its own
-  // state) — the supervisor policy hard-denies the Read TOOL on ~/.claude instead.
-  const readDenied = [realOrLiteral(secretFilePaths[0]), realOrLiteral(join(home, '.ssh')), realOrLiteral(join(home, '.aws'))];
-  const q = (p: string) => JSON.stringify(p); // SBPL uses double-quoted strings; JSON escaping is compatible
+  // Re-deny the code-execution / persistence surfaces UNDER the (writable) ~/.claude, placed
+  // AFTER the allow so SBPL last-match-wins takes them (verified: deny-after-allow works). A
+  // bash-written hook/settings/plugin/skill here would run UNSANDBOXED in the user's next
+  // interactive session — arbitrary code + durable escape (review 🔴). protectedPathHit covers
+  // the file TOOLS on ~/.claude but deliberately skips Bash, so this is the bash half. The old
+  // `~/.claude.json` write-allow is dropped for the same reason (MCP/trust-injection surface).
+  const claudeExecSurfaces = ['settings.json', 'settings.local.json', 'CLAUDE.md', 'plugins', 'agents', 'skills', 'commands', 'hooks'].map((name) =>
+    join(claudeDir, name),
+  );
+  // Deny reading the on-disk secret stores a coding session never needs — the env-strip covers
+  // the environment, but these are FILES a bash `cat` + the open network could exfiltrate as
+  // live bearer tokens (review 🔴). .env is secretFilePaths[0]; the rest are what a real dev
+  // machine has. ~/.claude is NOT denied (the CLI needs its own state) — the residual
+  // Keychain/transcript reads under open network are documented (only the network-deny proxy
+  // fully closes them).
+  const readDenied = [
+    realOrLiteral(secretFilePaths[0]), // repo .env (provider keys)
+    realOrLiteral(join(home, '.ssh')),
+    realOrLiteral(join(home, '.aws')),
+    realOrLiteral(join(home, '.config', 'gh')), // GitHub OAuth token (hosts.yml)
+    realOrLiteral(join(home, '.config', 'gcloud')),
+    realOrLiteral(join(home, '.npmrc')), // npm auth token
+    realOrLiteral(join(home, '.netrc')),
+    realOrLiteral(join(home, '.docker', 'config.json')),
+    realOrLiteral(join(home, '.kube')),
+    realOrLiteral(join(home, '.gnupg')),
+  ];
   return [
     '(version 1)',
     '(allow default)',
     '(deny file-write*)',
     ...writable.map((p) => `(allow file-write* (subpath ${q(p)}))`),
-    `(allow file-write* (literal ${q(join(home, '.claude.json'))}))`,
+    ...claudeExecSurfaces.map((p) => `(deny file-write* (subpath ${q(p)}))`), // after the allows — last-match-wins
     ...readDenied.map((p) => `(deny file-read* (subpath ${q(p)}))`),
     '', // trailing newline
   ].join('\n');
@@ -104,7 +132,10 @@ function sandboxWrappedSpawn(profile: string): (opts: SpawnOptions) => SpawnedPr
       cwd: opts.cwd,
       env: opts.env,
       signal: opts.signal,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      // stderr → 'inherit' (the daemon's stderr): the SDK only drains stderr on its OWN spawn
+      // path, so a 'pipe' here would fill and backpressure-deadlock the session on a chatty CLI
+      // (review 🟡). stdin/stdout stay piped — that's the SDK's JSON-over-stdio IPC channel.
+      stdio: ['pipe', 'pipe', 'inherit'],
     }) as unknown as SpawnedProcess;
 }
 
@@ -265,6 +296,10 @@ export class ClaudeRunner implements ClaudeSessionRunner {
       const reason = sandboxUnavailableReason();
       if (reason) {
         if (config.claude.sandbox.failIfUnavailable) throw new Error(`${CLAUDE_SANDBOX_ERROR} (${reason})`);
+        // failIfUnavailable off → the SDK spawns the CLI UNCONFINED. Inert with shipped
+        // defaults (failIfUnavailable is true), but a config flip must never silently drop
+        // the deterministic boundary — record it so an unconfined run is auditable (review 🟡).
+        store.addEvent(taskId, 'claude.sandbox', { unconfined: true, reason });
       } else {
         spawnClaudeCodeProcess = sandboxWrappedSpawn(buildSandboxProfile(cwd, taskId));
       }

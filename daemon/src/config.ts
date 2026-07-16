@@ -44,13 +44,14 @@ export function todayLabel(): string {
 export const secretEnvKeys = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'ANTHROPIC_API_KEY'] as const;
 
 // Secrets ON DISK a sandboxed Claude session must never touch (review 🟡 2026-07-16): the
-// env strip above covers the subprocess environment, but the same provider keys live in
-// the repo .env — and a session working on Gumbo itself has this repo as its cwd — while
-// ~/.claude holds Claude Code state (session transcripts under projects/ can embed
-// secrets). Protected in TWO layers because the OS sandbox governs only bash/subprocesses:
-// the sandbox `credentials` deny (claude-runner) covers `cat .env` and child processes;
-// the supervisor policy hard-deny (protectedPathHit) covers the CLI's own Read/Grep/Edit
-// tools, which run unsandboxed. Keep the two in sync — both read this list.
+// env strip above covers the subprocess environment, but the same provider keys live in the
+// repo .env — and a session working on Gumbo itself has this repo as its cwd — while ~/.claude
+// holds Claude Code state (session transcripts under projects/ can embed secrets). Since the
+// M4.1 rebuild the WHOLE CLI runs under Seatbelt, so `.env` is OS read-denied for BOTH bash
+// and the file tools (claude-runner `readDenied`). `~/.claude` is deliberately left OS-readable
+// (the CLI needs its own state), so its protection is only the supervisor policy hard-deny of
+// the file TOOLS (protectedPathHit) — bash reads of ~/.claude are the accepted open-network
+// residual. Keep this list and `readDenied` in sync — both derive `.env` from here.
 export const secretFilePaths = [join(repoRoot, '.env'), join(homedir(), '.claude')] as const;
 
 export const config = {

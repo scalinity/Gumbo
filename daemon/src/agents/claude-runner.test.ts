@@ -59,6 +59,28 @@ test('buildSandboxProfile: confines writes to cwd + workspace, denies secret rea
   // ~/.claude is NOT read-denied at the OS level (the CLI needs its own state) — that path
   // is covered by the supervisor policy hard-deny of the Read tool instead.
   assert.ok(!p.includes(`(deny file-read* (subpath ${JSON.stringify(realpathSync(join(home, '.claude')))}))`), '~/.claude stays OS-readable');
+
+  // review 🔴: the code-exec/persistence surfaces under the (writable) ~/.claude are re-denied
+  // AFTER the allow, and the deny must come after so last-match-wins takes it.
+  const claudeDir = realpathSync(join(home, '.claude'));
+  const settingsDeny = `(deny file-write* (subpath ${JSON.stringify(join(claudeDir, 'settings.json'))}))`;
+  assert.ok(p.includes(settingsDeny), '~/.claude/settings.json write-denied (no unsandboxed hook injection)');
+  assert.ok(p.includes(JSON.stringify(join(claudeDir, 'hooks'))) && p.includes(JSON.stringify(join(claudeDir, 'plugins'))), '~/.claude hooks/plugins write-denied');
+  assert.ok(p.indexOf('(allow file-write* (subpath ' + JSON.stringify(claudeDir)) < p.indexOf(settingsDeny), 'the exec-surface deny comes AFTER the ~/.claude allow (last-match-wins)');
+  assert.ok(!p.includes(`(allow file-write* (literal ${JSON.stringify(join(home, '.claude.json'))}))`), '~/.claude.json write-allow dropped (persistence surface)');
+
+  // review 🔴: credential dotfiles beyond .env/.ssh/.aws are read-denied (exfil over open net).
+  for (const cred of [join(home, '.config', 'gh'), join(home, '.npmrc'), join(home, '.netrc'), join(home, '.docker', 'config.json'), join(home, '.gnupg')]) {
+    assert.ok(p.includes(`(deny file-read* (subpath ${JSON.stringify(cred)}))`), `${cred} read-denied`);
+  }
+
+  // review 🟡: the load-bearing ordering invariant — deny-all-writes precedes the allows.
+  assert.ok(p.indexOf('(deny file-write*)') < p.indexOf('(allow file-write* (subpath'), 'deny-all-writes precedes the allowlist');
+});
+
+test('buildSandboxProfile: rejects empty cwd/taskId (would open all writes)', () => {
+  assert.throws(() => buildSandboxProfile('', 't'), /non-empty/);
+  assert.throws(() => buildSandboxProfile('/x', ''), /non-empty/);
 });
 
 test('sandboxUnavailableReason: null on macOS with sandbox-exec, else a reason (fail-closed)', () => {

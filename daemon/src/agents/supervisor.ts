@@ -24,12 +24,14 @@ export interface PolicyResult {
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 
-// M4.1 (review follow-up, verified 2026-07-16): the OS sandbox governs only bash and its
-// child processes — the CLI's OWN file tools (Read/Write/Edit/Grep/Glob) run in the CLI's
-// unsandboxed Node process, so `sandbox.credentials`/`sandbox.filesystem` do NOT stop the
-// Read tool from reading .env. So secret-path protection needs a deterministic gate in
-// THIS layer (the hook fires for every tool in every mode) to complement the sandbox's
-// bash-side credential deny. Any tool naming a path at/under a secret path is hard-denied.
+// M4.1 secret-path guard for the CLI file tools. Since the rebuild, the WHOLE CLI runs under
+// Seatbelt (claude-runner.ts), so the OS layer read-denies .env for BOTH bash and the file
+// tools — but it intentionally leaves ~/.claude readable (the CLI needs its own state). This
+// guard is the file-TOOL half for both paths: it hard-denies Read/Edit/Grep/Glob of .env
+// (belt-and-suspenders with the OS deny — gives a clean message not a raw EPERM) AND of
+// ~/.claude (the one the OS layer can't cover). It skips Bash (below): bash `cat .env` is
+// OS-denied, but bash `cat ~/.claude/...` is the accepted open-network residual (only the
+// network-deny proxy closes it — see IMPLEMENTATION_NOTES).
 const PROTECTED_PATHS = secretFilePaths.map((p) => resolve(p));
 
 // Path-bearing inputs across the CLI file tools: file_path (Read/Write/Edit/MultiEdit),
@@ -140,10 +142,13 @@ function deleteOutsideCwd(command: string, cwd: string): string | null {
 
 /** Pure policy table — no model, no I/O. Exported for offline unit tests. */
 export function policyDecision(toolName: string, input: Record<string, unknown>, cwd: string): PolicyResult {
-  // Secret-path guard first, for every tool: a coding session never has a legitimate
-  // reason to read/edit the daemon's own .env or Claude's ~/.claude state. Hard deny
-  // (not a confirm) — this is the file-tool half of the sandbox's bash-side credential
-  // deny (see PROTECTED_PATHS). Bash is handled by the OS sandbox, so skip it here.
+  // Secret-path guard first, for every FILE TOOL: a coding session never has a legitimate
+  // reason to read/edit the daemon's .env or Claude's ~/.claude state. Hard deny (not a
+  // confirm). Skips Bash: bash's access to .env is OS-denied by the Seatbelt profile
+  // (read-deny), so a command hitting .env fails at the OS layer anyway; bash's access to
+  // ~/.claude is the accepted open-network residual the OS layer can't cover (see
+  // PROTECTED_PATHS). Trying to parse ~/.claude out of an arbitrary shell string here would
+  // be the same losing regex-vs-shell game the delete-detector already caps.
   if (toolName !== 'Bash') {
     const secret = protectedPathHit(input, cwd);
     if (secret) return { route: 'deny', reason: `blocked: protected secret path (${secret})` };
