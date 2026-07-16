@@ -6,6 +6,9 @@ import { Hub } from './ws/hub.ts';
 import { ConfirmBridge } from './ws/confirm.ts';
 import { TaskManager } from './tasks/manager.ts';
 import { Scheduler } from './schedule/scheduler.ts';
+import { ImageEditContext } from './images/context.ts';
+import { runImageEdit, safeImageFile } from './images/edit.ts';
+import { sanitizeStrokes } from './images/mask.ts';
 import { Orchestrator } from './realtime/session.ts';
 
 const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY'].filter((k) => !process.env[k]);
@@ -39,7 +42,10 @@ const manager = new TaskManager(
 // live session injection when one is open, cold one-shot TTS otherwise (never opens a
 // session just to remind). Reminder text is the user's own words from his own request.
 const scheduler = new Scheduler(store, hub);
-const orchestrator = new Orchestrator(store, hub, manager, scheduler);
+// M5.5: the shell image viewer's live state (open image + brush selection) — what voice
+// edits resolve "this image" and "the highlighted area" against.
+const imageContext = new ImageEditContext();
+const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext);
 scheduler.onFire = (row) =>
   orchestrator.speakProactively(
     `the user, reminder: ${row.text}.`,
@@ -130,12 +136,47 @@ hub.onMessage((msg, role) => {
   } else if (msg.type === 'reminder_created' && role === 'shell' && typeof msg.id === 'string') {
     // M5: EventKit's answer to create_reminder — store the Reminders.app id on the row.
     scheduler.handleReminderCreated(msg.id, typeof msg.eventkit_id === 'string' ? msg.eventkit_id : null);
+  } else if (msg.type === 'image_context' && role === 'shell') {
+    // M5.5: viewer state — a bad payload clears the context (fail toward "no target")
+    // rather than leaving a stale image armed for voice edits.
+    try {
+      imageContext.set(
+        typeof msg.file === 'string' && msg.file ? safeImageFile(msg.file) : null,
+        msg.strokes ? sanitizeStrokes(msg.strokes) : [],
+      );
+    } catch (err) {
+      imageContext.set(null);
+      store.addEvent(null, 'session.error', { message: `image_context: ${String(err)}` });
+    }
+  } else if (msg.type === 'image_edit_request' && role === 'shell' && typeof msg.file === 'string' && typeof msg.prompt === 'string' && msg.prompt.trim()) {
+    // M5.5: typed edit from the viewer panel — no realtime session involved; the
+    // completion (or failure) is spoken through the same proactive announce path.
+    try {
+      const file = safeImageFile(msg.file);
+      const strokes = msg.strokes ? sanitizeStrokes(msg.strokes) : undefined;
+      store.addEvent(null, 'image.edit_requested', { file, prompt: msg.prompt, ...(strokes?.length ? { selection: true } : {}) });
+      runImageEdit({
+        file,
+        prompt: msg.prompt,
+        strokes,
+        store,
+        announce: (cold, live) => orchestrator.speakProactively(cold, live),
+      }).catch((err: unknown) => {
+        store.addEvent(null, 'session.error', { message: `image edit announce: ${String(err)}` });
+      });
+    } catch (err) {
+      store.addEvent(null, 'session.error', { message: `image_edit_request: ${String(err)}` });
+    }
   }
 });
 
-// A shell that dies mid-drain must not leave 'speaking' (and the idle-close guard) stuck.
+// A shell that dies mid-drain must not leave 'speaking' (and the idle-close guard) stuck —
+// nor a stale image armed for voice edits (M5.5: the viewer died with the shell).
 hub.onClose((role) => {
-  if (role === 'shell' && !hub.hasRole('shell')) orchestrator.handlePlaybackState(false);
+  if (role === 'shell' && !hub.hasRole('shell')) {
+    orchestrator.handlePlaybackState(false);
+    imageContext.set(null);
+  }
 });
 
 // Binary frames from the shell are raw mic pcm16 (streamed only while ⌃⌥ is armed).

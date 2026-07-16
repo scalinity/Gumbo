@@ -25,7 +25,14 @@ export type InboundMessage =
   | { type: 'confirm_response'; id: string; approved: boolean }
   // shell: EventKit accepted (or failed) a create_reminder — eventkit_id is null on failure.
   // The daemon stores it on the schedule row so cancel can remove the Reminders.app entry.
-  | { type: 'reminder_created'; id: string; eventkit_id: string | null };
+  | { type: 'reminder_created'; id: string; eventkit_id: string | null }
+  // shell (M5.5): the image viewer's live state — which image is open and the current
+  // brush selection (normalized round-capped strokes; the daemon rasterizes the mask).
+  // file null = viewer closed. This is what voice edits resolve "this image" against.
+  | { type: 'image_context'; file: string | null; strokes?: Array<{ points: Array<[number, number]>; radius: number }> }
+  // shell (M5.5): a typed edit request from the viewer panel (voice edits ride the
+  // realtime session + edit_image tool instead).
+  | { type: 'image_edit_request'; file: string; prompt: string; strokes?: Array<{ points: Array<[number, number]>; radius: number }> };
 
 // Statuses a bubble can show; 'running' and 'needs_input' are the live ones (M4).
 export type BubbleStatus = 'running' | 'needs_input' | 'done' | 'failed' | 'cancelled';

@@ -12,9 +12,18 @@ const { createOrchestratorTools } = await import('./tools.ts');
 // pages on someone else's infrastructure straight from the hot path — this asserts on the
 // actual registry, not on source text.
 // Tool definitions are built eagerly; manager/store/deps are only touched inside execute
-// closures, so stubs are safe here.
-function buildTools() {
-  return createOrchestratorTools({} as never, {} as never, { scheduler: {} as never, announce: async () => {} });
+// closures, so stubs are safe here. Tests that exercise an execute path pass real-enough
+// stubs through the overrides.
+function buildTools(overrides: { store?: unknown; imageContext?: unknown } = {}) {
+  return createOrchestratorTools(
+    {} as never,
+    (overrides.store ?? {}) as never,
+    {
+      scheduler: {} as never,
+      announce: async () => {},
+      imageContext: (overrides.imageContext ?? { get: () => null }) as never,
+    },
+  );
 }
 
 test('no Firecrawl tool is registered in the realtime session config', () => {
@@ -32,18 +41,48 @@ test('no Firecrawl tool is registered in the realtime session config', () => {
 
 // M5: the reminder tools are registered and set_reminder guards its time contract —
 // the orchestrator resolves natural phrasing, but the daemon owns "must be future".
-test('M5 tools registered: generate_image + the three reminder tools', () => {
+test('M5 tools registered: generate_image, edit_image + the three reminder tools', () => {
   const names = buildTools().map((t) => (t as { name: string }).name);
-  for (const expected of ['generate_image', 'set_reminder', 'list_reminders', 'cancel_reminder']) {
+  for (const expected of ['generate_image', 'edit_image', 'set_reminder', 'list_reminders', 'cancel_reminder']) {
     assert.ok(names.includes(expected), `${expected} missing from the realtime registry`);
   }
 });
 
-function toolByName(name: string) {
-  const t = buildTools().find((t) => (t as { name: string }).name === name);
+function toolByName(name: string, overrides: { store?: unknown; imageContext?: unknown } = {}) {
+  const t = buildTools(overrides).find((t) => (t as { name: string }).name === name);
   assert.ok(t, `${name} not found`);
   return t as unknown as { invoke: (ctx: unknown, args: string) => Promise<string> };
 }
+
+// M5.5: voice edits resolve their target from the shell viewer's armed context.
+test('edit_image with no viewer open and no named file refuses with a next step', async () => {
+  const result = await toolByName('edit_image').invoke({}, JSON.stringify({ prompt: 'make it purple', file: null }));
+  assert.match(result, /No image is open/);
+});
+
+test('edit_image rejects an invalid named file without starting anything', async () => {
+  const result = await toolByName('edit_image').invoke({}, JSON.stringify({ prompt: 'p', file: '../evil.png' }));
+  assert.match(result, /not a valid image filename/);
+});
+
+test('edit_image uses the armed context (file + brush strokes) when file is null', async () => {
+  // The background edit will hit fetch — stub it to fail fast; the stubs below absorb
+  // the failure path (announce + session.error) without touching anything real.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('{}', { status: 500 })) as typeof fetch;
+  try {
+    const tool = toolByName('edit_image', {
+      store: { addEvent: () => ({}) },
+      imageContext: { get: () => ({ file: 'swamp-1.png', strokes: [{ points: [[0.1, 0.1]], radius: 0.05 }] }) },
+    });
+    const ack = await tool.invoke({}, JSON.stringify({ prompt: 'make the sky purple', file: null }));
+    assert.match(ack, /Edit started in the background/);
+    assert.match(ack, /highlighted area/, 'the ack reflects that the brush selection is being used');
+    await new Promise((resolve) => setImmediate(resolve)); // let the stubbed background path settle
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
 
 test('set_reminder rejects a past fire_at without touching the scheduler', async () => {
   // deps.scheduler is an empty stub — a call into it would throw, so a clean refusal

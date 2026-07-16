@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { config } from '../config.ts';
 import { webQuickLookup } from '../search/tavily.ts';
 import { runImageGeneration } from '../images/generate.ts';
+import { runImageEdit, safeImageFile } from '../images/edit.ts';
+import type { ImageEditContext } from '../images/context.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
@@ -26,11 +28,13 @@ function fireAtLabel(ms: number): string {
   });
 }
 
-/** M5 seams the tools need beyond manager/store: the scheduler, and the orchestrator's
- *  proactive-speech path (image completions announce through it). */
+/** M5 seams the tools need beyond manager/store: the scheduler, the orchestrator's
+ *  proactive-speech path (image completions announce through it), and the shell image
+ *  viewer's live context (which image + brush selection a voice edit targets). */
 export interface OrchestratorToolDeps {
   scheduler: Scheduler;
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
+  imageContext: ImageEditContext;
 }
 
 export function createOrchestratorTools(manager: TaskManager, store: Store, deps: OrchestratorToolDeps) {
@@ -203,6 +207,45 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     },
   });
 
+  // M5.5: edits ride the shell viewer's armed context — the user highlights an area with
+  // the brush and just SAYS the change; the strokes never pass through the voice model.
+  const editImageTool = tool({
+    name: 'edit_image',
+    description:
+      'Edit a previously generated image with a plain-language instruction. Use when the user asks to ' +
+      'change, tweak, fix, or redo an image. If he is viewing one in the image panel, that image — ' +
+      'and any area he highlighted with the brush — is targeted automatically: pass file null. Only ' +
+      'pass a filename if the user explicitly named a different image. Returns immediately; the edit ' +
+      "lands as a NEW version and you will be told when it's ready.",
+    parameters: z.object({
+      prompt: z.string().describe("The edit instruction, faithful to the user's words"),
+      file: z
+        .string()
+        .nullable()
+        .describe('null = the image the user is currently viewing (the usual case); a filename only if he named one'),
+    }),
+    execute: async ({ prompt, file }) => {
+      const ctx = deps.imageContext.get();
+      const named = file?.trim() || null;
+      const target = named ?? ctx?.file;
+      if (!target) {
+        return 'No image is open in the viewer and none was named — ask the user to open the image (click its thumbnail) or say which one to edit.';
+      }
+      // The brush selection belongs to the viewer's image; a differently-named target
+      // must not inherit it.
+      const strokes = named && named !== ctx?.file ? undefined : ctx?.strokes;
+      try {
+        safeImageFile(target);
+      } catch {
+        return `"${target}" is not a valid image filename — check the gallery name and try again.`;
+      }
+      runImageEdit({ file: target, prompt, strokes, store, announce: deps.announce }).catch((err: unknown) => {
+        store.addEvent(null, 'session.error', { message: `image edit announce: ${String(err)}` });
+      });
+      return `Edit started in the background${strokes && strokes.length > 0 ? ' on the highlighted area' : ''} — tell the user it's on the way. You will be told when the new version lands; no need to wait.`;
+    },
+  });
+
   // M5 reminders: one call, both halves — a schedule row (Gumbo speaks it when it fires)
   // AND an EventKit mirror in Reminders.app (OS-durable, fires even if Gumbo is off).
   const setReminder = tool({
@@ -285,7 +328,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
 
   return [
     spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup,
-    generateImage, setReminder, listReminders, cancelReminder,
+    generateImage, editImageTool, setReminder, listReminders, cancelReminder,
     listTasks, getTaskStatus, cancelTask, readReport, saveNote,
   ];
 }

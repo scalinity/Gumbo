@@ -28,6 +28,12 @@ export async function generateImage(prompt: string, shape: ImageShape): Promise<
     // resolve so the failure announcement fires instead of silence.
     signal: AbortSignal.timeout(config.images.timeoutMs),
   });
+  return saveImageResponse(res);
+}
+
+/** Shared tail for generations AND edits: parse the b64_json envelope, decode, land the
+ *  PNG in the images home, return the bare filename (the only thing that travels on). */
+export async function saveImageResponse(res: Response): Promise<string> {
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`images api ${res.status}: ${detail.slice(0, 200)}`);

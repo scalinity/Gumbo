@@ -4,6 +4,7 @@ import type { Store, TaskRow } from '../events/store.ts';
 import type { Hub } from '../ws/hub.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
+import type { ImageEditContext } from '../images/context.ts';
 import { AUDIO_REALTIME } from '../ws/protocol.ts';
 import { announcementText, speakAnnouncement } from '../audio/announce.ts';
 import { createOrchestratorTools } from './tools.ts';
@@ -28,6 +29,10 @@ Task ids are internal plumbing: NEVER say a task id out loud — always refer to
 When the user asks for an image, call generate_image with a vivid self-contained prompt and the right
 shape (landscape for wallpapers and scenes); it returns instantly — tell him it's on the way, and
 you will be told when it lands in his gallery.
+When the user asks to change or tweak an image ("make the sky purple", "remove that", "redo this
+part"), call edit_image with his instruction and file null — the image he has open on screen, and
+any area he highlighted with the brush, are targeted automatically. Each edit arrives as a new
+version; never claim it's done until you're told it landed.
 When the user asks to be reminded of something, resolve his phrasing ("at 5", "in 10 minutes") to an
 absolute local date-time using the date and time above, then call set_reminder — it goes into both
 your own scheduler (you will speak it when it fires) and Reminders.app. Use list_reminders and
@@ -105,6 +110,7 @@ export class Orchestrator {
     private hub: Hub,
     private manager: TaskManager,
     private scheduler: Scheduler,
+    private imageContext: ImageEditContext,
   ) {}
 
   private setState(state: SessionState) {
@@ -155,6 +161,7 @@ export class Orchestrator {
           tools: createOrchestratorTools(this.manager, this.store, {
             scheduler: this.scheduler,
             announce: (coldText, liveInstructions) => this.speakProactively(coldText, liveInstructions),
+            imageContext: this.imageContext,
           }),
         });
         const session = new RealtimeSession(agent, {
