@@ -94,6 +94,7 @@ final class GumboController {
     private let notch = NotchController()
     private let bubbles = BubbleController()
     private let confirm = ConfirmController()
+    private let reminders = RemindersBridge()
     private lazy var dashboard = DashboardWindow()
 
     private var daemonState = "idle"
@@ -205,6 +206,21 @@ final class GumboController {
             case "confirm_cancel":
                 if let id = msg["id"] as? String {
                     self.confirm.cancel(id: id)
+                }
+            case "create_reminder":
+                // M5: mirror the daemon's schedule row into Reminders.app; the reply
+                // carries the EventKit id (or omits it on failure — daemon reads null).
+                if let id = msg["id"] as? String, let text = msg["text"] as? String,
+                   let fireAt = msg["fire_at"] as? Double {
+                    self.reminders.create(text: text, fireAtMs: fireAt) { [weak self] ekId in
+                        var reply: [String: Any] = ["type": "reminder_created", "id": id]
+                        reply["eventkit_id"] = ekId // nil → key omitted → daemon stores null
+                        self?.ws.sendJSON(reply)
+                    }
+                }
+            case "remove_reminder":
+                if let ekId = msg["eventkit_id"] as? String {
+                    self.reminders.remove(eventkitId: ekId)
                 }
             case "event":
                 // Task-scoped activity for the bubble mini-panel live tail.

@@ -41,3 +41,5 @@ targets:
         LSUIElement: true # agent app — no Dock icon; presence is the notch + status item
         NSHighResolutionCapable: true
         NSMicrophoneUsageDescription: "Gumbo listens while you hold Control-Option to talk to it."
+        # M5: EventKit mirror of Gumbo's reminders (shell owns ALL TCC; first create prompts).
+        NSRemindersFullAccessUsageDescription: "Gumbo puts the reminders you set into Reminders.app so they fire even when Gumbo isn't running."

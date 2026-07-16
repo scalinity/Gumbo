@@ -28,5 +28,7 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Gumbo listens while you hold Control-Option to talk to it.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Gumbo puts the reminders you set into Reminders.app so they fire even when Gumbo isn't running.</string>
 </dict>
 </plist>

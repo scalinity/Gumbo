@@ -221,6 +221,7 @@ private let ember = Tokens.ember
 private let bay = Tokens.bay
 private let alarm = Tokens.alarm
 private let faint = Tokens.faint
+private let gold = Tokens.gold
 
 struct NotchContentView: View {
     @ObservedObject var model: NotchModel
@@ -260,6 +261,7 @@ struct NotchContentView: View {
         case "done": return "Task finished"
         case "failed": return "Task failed"
         case "cancelled": return "Task cancelled"
+        case "reminder": return "Reminder" // M5: a scheduled reminder just fired
         default: break
         }
         switch model.state {
@@ -295,6 +297,7 @@ struct SimmerBars: View {
         case "done": return bay
         case "failed": return alarm
         case "cancelled": return faint
+        case "reminder": return gold // M5: gold beacon — matches the dashboard's reminder accent
         default: break
         }
         switch state {
