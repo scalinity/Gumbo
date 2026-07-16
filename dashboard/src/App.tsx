@@ -6,6 +6,13 @@ function stamp(ts: number) {
   return new Date(ts).toLocaleTimeString('en-US', { hour12: false });
 }
 
+// M5: reminder fire times read like a person would say them.
+function fireLabel(ts: number) {
+  return new Date(ts).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
 function Simmer() {
   const state = useStore((s) => s.sessionState);
   return (
@@ -28,12 +35,12 @@ function Header() {
   );
 }
 
-function TaskRail() {
+function TasksSection() {
   const tasks = useStore((s) => s.tasks);
   const selected = useStore((s) => s.selectedTaskId);
   const selectTask = useStore((s) => s.selectTask);
   return (
-    <nav className="rail">
+    <>
       <div className="rail-heading">Background tasks</div>
       {tasks.length === 0 && <div className="rail-empty">Nothing simmering yet. Ask Gumbo to start something.</div>}
       {tasks.map((t) => (
@@ -53,6 +60,60 @@ function TaskRail() {
           )}
         </div>
       ))}
+    </>
+  );
+}
+
+// M5: upcoming reminders first (gold, pulsing), then fired/cancelled history — the
+// dashboard view of the daemon's schedule table.
+function RemindersSection() {
+  const schedules = useStore((s) => s.schedules);
+  if (schedules.length === 0) return null;
+  return (
+    <div className="rail-section">
+      <div className="rail-heading">Reminders</div>
+      {schedules.map((r) => (
+        <div key={r.id} className="reminder-row" data-status={r.status}>
+          <span className="task-dot" data-status={r.status} />
+          <span className="reminder-text">{r.text}</span>
+          <span className="reminder-when">{fireLabel(r.fire_at)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// M5: generated-image gallery. Thumbnails stream from /files/images/<name> (the daemon
+// serves that subtree); click for a full-size lightbox. Local useState only — no lifecycle.
+function GallerySection() {
+  const images = useStore((s) => s.images);
+  const [open, setOpen] = useState<string | null>(null);
+  if (images.length === 0) return null;
+  return (
+    <div className="rail-section">
+      <div className="rail-heading">Images</div>
+      <div className="gallery">
+        {images.map((img) => (
+          <button key={img.file} className="thumb" title={img.file} onClick={() => setOpen(img.file)}>
+            <img src={`/files/images/${encodeURIComponent(img.file)}`} alt={img.file} loading="lazy" />
+          </button>
+        ))}
+      </div>
+      {open && (
+        <div className="lightbox" onClick={() => setOpen(null)}>
+          <img src={`/files/images/${encodeURIComponent(open)}`} alt={open} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Rail() {
+  return (
+    <nav className="rail">
+      <TasksSection />
+      <RemindersSection />
+      <GallerySection />
     </nav>
   );
 }
@@ -178,6 +239,36 @@ const Row = memo(function Row({ event }: { event: EventRow }) {
           {time}
         </div>
       );
+    // M5: an image landed — show it inline (the gallery keeps the durable copy).
+    case 'image.created':
+      return (
+        <div className="machine" data-kind="image">
+          <span className="tag">image</span>
+          <span className="body">
+            created — {String(p.prompt ?? '').slice(0, 200)}
+            {typeof p.file === 'string' && p.file && (
+              <img className="feed-thumb" src={`/files/images/${encodeURIComponent(p.file)}`} alt={p.file} loading="lazy" />
+            )}
+          </span>
+          {time}
+        </div>
+      );
+    // M5: scheduler lifecycle rows.
+    case 'reminder.set':
+    case 'reminder.fired':
+    case 'reminder.cancelled': {
+      const verb = event.type.split('.')[1];
+      return (
+        <div className="machine" data-kind="reminder" data-verb={verb}>
+          <span className="tag">reminder</span>
+          <span className="body">
+            {verb} — {String(p.text ?? '')}
+            {p.fire_at ? ` (${fireLabel(Number(p.fire_at))})` : ''}
+          </span>
+          {time}
+        </div>
+      );
+    }
     case 'note.saved':
       return (
         <div className="machine" data-kind="note">
@@ -313,7 +404,7 @@ export default function App() {
   return (
     <div className="app">
       <Header />
-      <TaskRail />
+      <Rail />
       <main className="main">
         <Feed />
         <Composer />

@@ -1,5 +1,5 @@
 // Module-scope WebSocket singleton + initial data bootstrap. No React lifecycle involved.
-import { useStore, type EventRow, type Task } from './store';
+import { useStore, type EventRow, type GalleryImage, type ScheduleItem, type Task } from './store';
 
 const DAEMON_PORT = 8737;
 const WS_URL = `ws://${location.hostname}:${DAEMON_PORT}/ws`;
@@ -27,12 +27,14 @@ function connect() {
 }
 
 async function bootstrap() {
-  const [tasks, events] = await Promise.all([
+  const [tasks, events, images, schedules] = await Promise.all([
     fetch('/api/tasks').then((r) => r.json() as Promise<Task[]>),
     fetch('/api/events?limit=200').then((r) => r.json() as Promise<EventRow[]>),
+    fetch('/api/images').then((r) => r.json() as Promise<GalleryImage[]>),
+    fetch('/api/schedule').then((r) => r.json() as Promise<ScheduleItem[]>),
   ]);
   // Merge (not replace): events that arrived live during these fetches must survive.
-  useStore.getState().bootstrap(tasks, events);
+  useStore.getState().bootstrap(tasks, events, images, schedules);
 }
 
 // Shell deep-link (M3): a bubble click lands on that task's view. Module-scope hook,

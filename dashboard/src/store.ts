@@ -18,16 +18,34 @@ export interface Task {
 
 export type SessionState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
+// M5: one gallery entry per generated image — filenames only, bytes stream from
+// /files/images/<file> on render.
+export interface GalleryImage {
+  file: string;
+  ts: number;
+}
+
+// M5: a scheduler row (kind is 'reminder' for now — the daemon keeps the seam general).
+export interface ScheduleItem {
+  id: string;
+  fire_at: number;
+  kind: string;
+  text: string;
+  status: 'pending' | 'fired' | 'cancelled';
+}
+
 interface GumboStore {
   connected: boolean;
   sessionState: SessionState;
   events: EventRow[];
   tasks: Task[];
+  images: GalleryImage[];
+  schedules: ScheduleItem[];
   streamingText: string;
   selectedTaskId: string | null;
   setConnected: (connected: boolean) => void;
   setSessionState: (state: SessionState) => void;
-  bootstrap: (tasks: Task[], events: EventRow[]) => void;
+  bootstrap: (tasks: Task[], events: EventRow[], images: GalleryImage[], schedules: ScheduleItem[]) => void;
   addEvent: (event: EventRow) => void;
   appendStreaming: (delta: string) => void;
   selectTask: (id: string | null) => void;
@@ -35,6 +53,18 @@ interface GumboStore {
 
 const TASK_CAP = 200;
 const EVENT_CAP = 500;
+const IMAGE_CAP = 100;
+const SCHEDULE_CAP = 100;
+
+// Same shape the daemon's /api/schedule uses: upcoming soonest-first, then past newest-first.
+function sortSchedules(rows: ScheduleItem[]): ScheduleItem[] {
+  return [...rows].sort((a, b) => {
+    const ap = a.status === 'pending' ? 0 : 1;
+    const bp = b.status === 'pending' ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return ap === 0 ? a.fire_at - b.fire_at : b.fire_at - a.fire_at;
+  });
+}
 
 // Merge a server snapshot with whatever already arrived live, deduped by key, so events
 // delivered during the bootstrap fetch window aren't dropped by a blind replace.
@@ -50,23 +80,49 @@ export const useStore = create<GumboStore>((set) => ({
   sessionState: 'idle',
   events: [],
   tasks: [],
+  images: [],
+  schedules: [],
   streamingText: '',
   selectedTaskId: null,
   setConnected: (connected) => set({ connected }),
   setSessionState: (sessionState) => set({ sessionState }),
-  bootstrap: (tasks, events) =>
+  bootstrap: (tasks, events, images, schedules) =>
     set((s) => ({
       tasks: mergeBy([...tasks, ...s.tasks], [], (t) => t.id).slice(0, TASK_CAP),
       events: mergeBy(events, s.events, (e) => e.seq)
         .sort((a, b) => a.seq - b.seq)
         .slice(-EVENT_CAP),
+      images: mergeBy(images, s.images, (i) => i.file)
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, IMAGE_CAP),
+      schedules: sortSchedules(mergeBy(schedules, s.schedules, (r) => r.id)).slice(0, SCHEDULE_CAP),
     })),
   addEvent: (event) =>
     set((s) => {
       const events = [...s.events.slice(-(EVENT_CAP - 1)), event];
       let tasks = s.tasks;
+      let images = s.images;
+      let schedules = s.schedules;
       let streamingText = s.streamingText;
-      if (event.type === 'task.created' && event.task_id) {
+      if (event.type === 'image.created') {
+        // Filename only — the daemon keeps base64 off the event stream by contract.
+        const file = String(event.payload?.file ?? '');
+        if (file && !images.some((i) => i.file === file)) {
+          images = [{ file, ts: event.ts }, ...images].slice(0, IMAGE_CAP);
+        }
+      } else if (event.type === 'reminder.set') {
+        const item: ScheduleItem = {
+          id: String(event.payload?.id ?? ''),
+          fire_at: Number(event.payload?.fire_at ?? event.ts),
+          kind: String(event.payload?.kind ?? 'reminder'),
+          text: String(event.payload?.text ?? ''),
+          status: 'pending',
+        };
+        if (item.id) schedules = sortSchedules([item, ...schedules.filter((r) => r.id !== item.id)]).slice(0, SCHEDULE_CAP);
+      } else if (event.type === 'reminder.fired' || event.type === 'reminder.cancelled') {
+        const status = event.type === 'reminder.fired' ? 'fired' : 'cancelled';
+        schedules = sortSchedules(schedules.map((r) => (r.id === event.payload?.id ? { ...r, status } : r)));
+      } else if (event.type === 'task.created' && event.task_id) {
         const created: Task = {
           id: event.task_id,
           kind: String(event.payload?.kind ?? 'subagent'),
@@ -87,7 +143,7 @@ export const useStore = create<GumboStore>((set) => ({
       } else if (event.type === 'transcript.assistant') {
         streamingText = '';
       }
-      return { events, tasks, streamingText };
+      return { events, tasks, images, schedules, streamingText };
     }),
   appendStreaming: (delta) => set((s) => ({ streamingText: s.streamingText + delta })),
   selectTask: (id) => set({ selectedTaskId: id }),

@@ -197,6 +197,83 @@ body {
   color: var(--faint);
 }
 
+/* ── M5: reminders + image gallery (rail sections) ── */
+.rail-section { margin-top: 22px; }
+
+.reminder-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 16px 7px 20px;
+}
+
+.reminder-row .task-dot { align-self: center; }
+/* pending = gold beacon (it's waiting to fire); fired = settled bay; cancelled = ash */
+.task-dot[data-status='pending'] { background: var(--gold); animation: pulse 1.6s ease-in-out infinite; }
+.task-dot[data-status='fired'] { background: var(--bay); }
+
+.reminder-row[data-status='fired'] .reminder-text,
+.reminder-row[data-status='cancelled'] .reminder-text { color: var(--faint); }
+.reminder-row[data-status='cancelled'] .reminder-text { text-decoration: line-through; }
+
+.reminder-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.reminder-when {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  padding: 0 16px 16px 20px;
+}
+
+.thumb {
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  cursor: zoom-in;
+  line-height: 0;
+}
+
+.thumb:hover { border-color: var(--ember); }
+
+.thumb img {
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  display: block;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 10, 8, 0.88);
+  cursor: zoom-out;
+}
+
+.lightbox img {
+  max-width: 92%;
+  max-height: 92%;
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
 /* ── main: feed + composer ──────────────────── */
 .main {
   grid-area: main;
@@ -301,6 +378,17 @@ body {
 .machine[data-kind='supervisor'][data-decision='deny'] .body,
 .machine[data-kind='supervisor'][data-decision='cap'] .body { color: var(--alarm); }
 .machine[data-kind='status'][data-status='needs_input'] .body { color: var(--gold); }
+/* M5: image + reminder feed rows */
+.machine[data-kind='image'] .tag { color: var(--ember); }
+.machine[data-kind='reminder'] .tag { color: var(--gold); }
+.machine[data-kind='reminder'][data-verb='fired'] .body { color: var(--gold); }
+
+.feed-thumb {
+  display: block;
+  margin-top: 6px;
+  max-width: 240px;
+  border: 1px solid var(--line);
+}
 
 .task-chip {
   color: var(--faint);
