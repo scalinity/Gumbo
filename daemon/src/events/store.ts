@@ -41,6 +41,10 @@ export class Store {
         type TEXT, payload TEXT
       );
       CREATE INDEX IF NOT EXISTS events_task ON events(task_id, seq);
+      -- memory is INSERT-ONLY by design: memory_fts syncs via the AFTER INSERT trigger
+      -- alone, so any future UPDATE/DELETE path must add companion triggers or the FTS
+      -- index silently desyncs. No reader or retention policy yet (write-only until the
+      -- recall feature lands) — add a pruning/VACUUM story before it grows unbounded.
       CREATE TABLE IF NOT EXISTS memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT, ts INT, task_id TEXT,
         kind TEXT CHECK(kind IN ('search_result','task_output')),
