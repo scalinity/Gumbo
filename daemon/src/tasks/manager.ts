@@ -181,9 +181,18 @@ export class TaskManager {
 
   cancel(id: string): boolean {
     const abort = this.aborts.get(id);
-    if (!abort) return false;
-    abort.abort();
-    return true;
+    if (abort) {
+      abort.abort();
+      return true;
+    }
+    // A cap-parked Claude task has no live runner to abort — cancelling closes it out
+    // (the persisted session id stays resumable if the user changes his mind).
+    const task = this.store.getTask(id);
+    if (task?.status === 'needs_input') {
+      this.finish(id, 'cancelled', { reason: 'cancelled while paused' });
+      return true;
+    }
+    return false;
   }
 
   readReport(id: string): string | null {

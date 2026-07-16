@@ -46,7 +46,7 @@ function TaskRail() {
             <span className="task-title">{t.title}</span>
             <span className="task-id">{t.id}</span>
           </button>
-          {t.status === 'running' && (
+          {(t.status === 'running' || t.status === 'needs_input') && (
             <button className="task-cancel" title="Cancel task" onClick={() => cancelTask(t.id)}>
               stop
             </button>
@@ -95,6 +95,54 @@ const Row = memo(function Row({ event }: { event: EventRow }) {
         <div className="machine" data-kind="subagent">
           <span className="tag">agent</span>
           <span className="body">{chip}{String(p.text ?? '').slice(0, 400)}</span>
+          {time}
+        </div>
+      );
+    // M4: Claude Code session stream.
+    case 'claude.message':
+      return (
+        <div className="machine" data-kind="claude">
+          <span className="tag">claude</span>
+          <span className="body">{chip}{String(p.text ?? '').slice(0, 400)}</span>
+          {time}
+        </div>
+      );
+    case 'claude.tool_use':
+      return (
+        <div className="machine" data-kind="call">
+          <span className="tag">claude</span>
+          <span className="body">{chip}▸ {String(p.name ?? '?')} {String(p.input ?? '')}</span>
+          {time}
+        </div>
+      );
+    case 'claude.tool_result':
+      return (
+        <div className="machine" data-kind="result">
+          <span className="tag">claude</span>
+          <span className="body">{chip}◂ {String(p.output ?? '').slice(0, 300)}</span>
+          {time}
+        </div>
+      );
+    case 'supervisor.decision': {
+      const body =
+        p.kind === 'reply'
+          ? `answered: ${String(p.answer ?? '').slice(0, 300)}`
+          : p.kind === 'cap'
+            ? 'intervention cap hit — paused for the user'
+            : `${p.source === 'the user' ? 'the user' : 'policy'} ${String(p.decision ?? '?')}: ${String(p.action ?? '')}`;
+      return (
+        <div className="machine" data-kind="supervisor" data-decision={String(p.decision ?? p.kind ?? '')}>
+          <span className="tag">supervisor</span>
+          <span className="body">{chip}{body}</span>
+          {time}
+        </div>
+      );
+    }
+    case 'task.status':
+      return (
+        <div className="machine" data-kind="status" data-status={String(p.status ?? '')}>
+          <span className="tag">task</span>
+          <span className="body">{chip}{p.status === 'needs_input' ? `paused — needs input (${String(p.reason ?? '')})` : `running again (${String(p.reason ?? '')})`}</span>
           {time}
         </div>
       );

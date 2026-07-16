@@ -22,6 +22,7 @@ enum Tokens {
     static let bay = rgb(0x9B, 0xB4, 0x79) // --bay
     static let alarm = rgb(0xE2, 0x5D, 0x5D) // --alarm
     static let faint = rgb(0x6B, 0x60, 0x55) // --faint
+    static let gold = rgb(0xE0, 0xB4, 0x5A) // --gold (M4 needs_input beacon)
 
     private static func rgb(_ r: Int, _ g: Int, _ b: Int) -> Color {
         Color(red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255)

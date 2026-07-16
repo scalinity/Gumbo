@@ -376,7 +376,7 @@ private struct OrbPalette {
         case .running, .unknown: // unknown = alive-but-unrecognized, never spent
             return OrbPalette(hot: hexColor(0xFFCF9E), base: ember, deep: hexColor(0x8A2E12))
         case .needsInput: // ember/bay hybrid: warm gold — waiting on the user, not working
-            return OrbPalette(hot: hexColor(0xFFEBB0), base: hexColor(0xE0B45A), deep: hexColor(0x6E5A2A))
+            return OrbPalette(hot: hexColor(0xFFEBB0), base: Tokens.gold, deep: hexColor(0x6E5A2A))
         case .done:
             return OrbPalette(hot: hexColor(0xD9E9BB), base: bay, deep: hexColor(0x55703F))
         case .failed:
@@ -610,7 +610,7 @@ private struct BubblePanelView: View {
     private var statusColor: Color {
         switch model.state {
         case .running, .unknown: return ember
-        case .needsInput: return Color(red: 0.88, green: 0.71, blue: 0.35) // the beacon gold
+        case .needsInput: return Tokens.gold
         case .done: return bay
         case .failed: return alarm
         case .cancelled: return faint

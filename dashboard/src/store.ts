@@ -79,6 +79,11 @@ export const useStore = create<GumboStore>((set) => ({
         tasks = tasks.map((t) =>
           t.id === event.task_id ? { ...t, status: (event.payload?.status ?? 'done') as Task['status'] } : t,
         );
+      } else if (event.type === 'task.status' && event.task_id) {
+        // M4: mid-run needs_input ⇄ running flips (notch confirm pending, cap hit, resume).
+        tasks = tasks.map((t) =>
+          t.id === event.task_id ? { ...t, status: (event.payload?.status ?? t.status) as Task['status'] } : t,
+        );
       } else if (event.type === 'transcript.assistant') {
         streamingText = '';
       }

@@ -8,6 +8,7 @@
   --ember: #ff7a48;
   --bay: #9bb479;
   --alarm: #e25d5d;
+  --gold: #e0b45a; /* M4 needs_input — ember/bay hybrid, mirrored in the shell orb palette */
   --mono: ui-monospace, 'SF Mono', Menlo, monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
 }
@@ -174,7 +175,8 @@ body {
 .task-dot[data-status='done'] { background: var(--bay); }
 .task-dot[data-status='failed'] { background: var(--alarm); }
 .task-dot[data-status='cancelled'] { background: var(--faint); }
-.task-dot[data-status='needs_input'] { background: var(--ember); }
+/* M4: paused on the user — gold beacon, faster pulse than running (it wants attention) */
+.task-dot[data-status='needs_input'] { background: var(--gold); animation: pulse 0.9s ease-in-out infinite; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -291,6 +293,12 @@ body {
 .machine[data-kind='finished'][data-status='done'] .body { color: var(--bay); }
 .machine[data-kind='finished'][data-status='failed'] .body,
 .machine[data-kind='error'] .body { color: var(--alarm); }
+/* M4: Claude session stream + supervisor decisions */
+.machine[data-kind='claude'] .body { color: var(--text); }
+.machine[data-kind='supervisor'] .tag { color: var(--gold); }
+.machine[data-kind='supervisor'][data-decision='deny'] .body,
+.machine[data-kind='supervisor'][data-decision='cap'] .body { color: var(--alarm); }
+.machine[data-kind='status'][data-status='needs_input'] .body { color: var(--gold); }
 
 .task-chip {
   color: var(--faint);
