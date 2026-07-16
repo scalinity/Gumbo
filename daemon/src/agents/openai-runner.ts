@@ -61,8 +61,9 @@ export function describeToolFailure(name: string, err: unknown): string {
   throw err;
 }
 
-// Tools close over the task so every raw result lands in searchable memory under its id.
-function createSubagentTools(taskId: string, store: Store) {
+// Tools close over the task so every raw result lands in searchable memory under its id,
+// and over the abort signal so cancelling the task tears down in-flight provider requests.
+function createSubagentTools(taskId: string, store: Store, signal: AbortSignal) {
 
   const webSearch = tool({
     name: 'web_search',
@@ -76,7 +77,7 @@ function createSubagentTools(taskId: string, store: Store) {
     }),
     async execute({ query, tier }) {
       try {
-        const results = await exaSearch(query, { tier });
+        const results = await exaSearch(query, { tier, signal });
         persistResults(store, taskId, query, results);
         return formatResults(results);
       } catch (err) {
@@ -93,7 +94,7 @@ function createSubagentTools(taskId: string, store: Store) {
     parameters: z.object({ urls: z.array(z.string()).min(1).max(10) }),
     async execute({ urls }) {
       try {
-        const results = await exaContents(urls);
+        const results = await exaContents(urls, { signal });
         persistResults(store, taskId, `contents: ${urls.join(' ')}`, results);
         return formatResults(results);
       } catch (err) {
@@ -126,7 +127,7 @@ export async function runSubagent(opts: {
     name: `subagent-${taskId}`,
     instructions: INSTRUCTIONS,
     model: config.models.subagent,
-    tools: createSubagentTools(taskId, store),
+    tools: createSubagentTools(taskId, store, signal),
   });
 
   // Pass the signal so the SDK aborts the underlying model/tool request promptly on cancel;

@@ -33,7 +33,7 @@ const FULL_CONTENTS = { text: true, highlights: true };
 /** Background Exa /search with full contents. `deep` is for explicitly research-class tasks. */
 export async function exaSearch(
   query: string,
-  opts: { tier?: ExaTier; numResults?: number } = {},
+  opts: { tier?: ExaTier; numResults?: number; signal?: AbortSignal } = {},
 ): Promise<ExaResult[]> {
   const tier = opts.tier ?? 'auto';
   let raw: ExaResponse;
@@ -51,6 +51,7 @@ export async function exaSearch(
       // deep runs multi-step searches server-side; give it real room.
       timeoutMs: tier === 'deep' ? 180_000 : 60_000,
       retries: 2,
+      signal: opts.signal,
     })) as ExaResponse;
   } catch (err) {
     auditFailure('/search', query, err);
@@ -67,7 +68,7 @@ export async function exaSearch(
 }
 
 /** Follow-up Exa /contents fetch for the most promising URLs — full text, unclamped. */
-export async function exaContents(urls: string[]): Promise<ExaResult[]> {
+export async function exaContents(urls: string[], opts: { signal?: AbortSignal } = {}): Promise<ExaResult[]> {
   const query = `contents: ${urls.join(' ')}`;
   let raw: ExaResponse;
   try {
@@ -78,6 +79,7 @@ export async function exaContents(urls: string[]): Promise<ExaResult[]> {
       body: { urls, ...FULL_CONTENTS },
       timeoutMs: 60_000,
       retries: 2,
+      signal: opts.signal,
     })) as ExaResponse;
   } catch (err) {
     auditFailure('/contents', query, err);

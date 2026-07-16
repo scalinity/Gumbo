@@ -35,20 +35,27 @@ export async function postJson(opts: {
   timeoutMs: number;
   retries: number;
   retryDelaysMs?: number[];
+  /** Caller cancellation (e.g. task abort) — tears the request down immediately. */
+  signal?: AbortSignal;
 }): Promise<unknown> {
   const delays = opts.retryDelaysMs ?? [500, 1500];
   let lastError: SearchError;
   for (let attempt = 0; ; attempt++) {
     if (attempt > 0) await sleep(delays[Math.min(attempt - 1, delays.length - 1)]);
+    opts.signal?.throwIfAborted();
     let res: Response;
     try {
+      const timeout = AbortSignal.timeout(opts.timeoutMs);
       res = await fetch(opts.url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...opts.headers },
         body: JSON.stringify(opts.body),
-        signal: AbortSignal.timeout(opts.timeoutMs),
+        signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
       });
     } catch (err) {
+      // Caller cancellation is not a provider failure — rethrow the raw abort reason so
+      // run/task 'cancelled' semantics stay intact upstream.
+      if (opts.signal?.aborted) throw err;
       const name = (err as Error)?.name ?? '';
       if (name === 'TimeoutError' || name === 'AbortError') {
         throw new SearchError(opts.provider, 'timeout', `no response within ${opts.timeoutMs} ms`);
