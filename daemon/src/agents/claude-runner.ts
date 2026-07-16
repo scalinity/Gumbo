@@ -182,7 +182,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         // File checkpointing: back up files before edits so undo() can rewind a session
         // that made a mess — the safety net for non-git project dirs.
         enableFileCheckpointing: true,
-        canUseTool: (toolName, input, { signal }) => this.gate(toolName, input, signal),
+        canUseTool: (toolName, input) => this.gate(toolName, input),
         hooks: {
           // Explicit timeout (seconds) that outlasts an escalation confirm, so the CLI
           // can't kill the hook mid-confirm and let an escalate-class action slip.
@@ -273,8 +273,8 @@ export class ClaudeRunner implements ClaudeSessionRunner {
    * canUseTool doesn't. Anything else that reaches here (reads during planning) is allowed;
    * the hook has already vetted the escalate-class and questions.
    */
-  private async gate(toolName: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<GateResult> {
-    if (toolName === 'ExitPlanMode') return this.handlePlan(input, signal);
+  private async gate(toolName: string, input: Record<string, unknown>): Promise<GateResult> {
+    if (toolName === 'ExitPlanMode') return this.handlePlan(input);
     return { behavior: 'allow' };
   }
 
@@ -309,7 +309,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
     }
   }
 
-  private async handlePlan(input: Record<string, unknown>, signal?: AbortSignal): Promise<GateResult> {
+  private async handlePlan(input: Record<string, unknown>): Promise<GateResult> {
     const plan = String(input.plan ?? JSON.stringify(input));
     this.opts.store.addEvent(this.opts.taskId, 'claude.plan', { plan });
     // No approver wired (tests) → don't execute. Otherwise surface the plan to the user.
@@ -335,9 +335,11 @@ export class ClaudeRunner implements ClaudeSessionRunner {
       return 'That session has no rewindable checkpoint from this run (it may have already closed).';
     }
     try {
+      // firstUserMessageId is the first turn of THIS run() — for a resumed session that's
+      // the resume point, not the original start (so "this run", not "before it started").
       await this.query.rewindFiles(this.firstUserMessageId);
-      this.opts.store.addEvent(this.opts.taskId, 'claude.tool_result', { output: 'files rewound to pre-run state (undo)' });
-      return 'Rewound the session’s file changes to before it started.';
+      this.opts.store.addEvent(this.opts.taskId, 'claude.tool_result', { output: 'files rewound to the start of this run (undo)' });
+      return 'Rewound the file changes from this run.';
     } catch (err) {
       return `Could not rewind: ${String(err)}`;
     }

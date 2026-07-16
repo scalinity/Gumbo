@@ -108,6 +108,8 @@ hub.onMessage((msg, role) => {
   } else if (msg.type === 'playback_state' && role === 'shell') {
     orchestrator.handlePlaybackState(msg.draining === true);
   } else if (msg.type === 'confirm_response' && role === 'shell' && typeof msg.id === 'string') {
+    // Role is self-asserted at hello, so this inherits the existing loopback trust model
+    // (any local client can claim 'shell') rather than widening it — track for M4.1 auth.
     confirms.handleResponse(msg.id, msg.approved === true);
   }
 });

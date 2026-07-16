@@ -220,11 +220,13 @@ export class TaskManager {
   private async reviewPlan(task: TaskRow, plan: string, signal?: AbortSignal): Promise<boolean> {
     if (this.finished.has(task.id)) return false;
     this.setTaskStatus(task.id, 'needs_input', 'awaiting plan approval');
-    try {
-      return await this.approvePlan(task.id, task.title, plan, signal);
-    } finally {
-      if (!this.finished.has(task.id)) this.setTaskStatus(task.id, 'running', 'plan answered');
-    }
+    const approved = await this.approvePlan(task.id, task.title, plan, signal);
+    // Only flip back to 'running' when the plan was approved and execution proceeds. On a
+    // decline the runner immediately parks needs_input — resetting to 'running' first would
+    // flash a spurious running state on the bubble/dashboard. On abort this rejects and the
+    // cancel path owns the status, so no reset either.
+    if (approved && !this.finished.has(task.id)) this.setTaskStatus(task.id, 'running', 'plan answered');
+    return approved;
   }
 
   /** Rewind a live Claude session's file edits (file checkpointing). No live runner →

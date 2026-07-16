@@ -1,4 +1,5 @@
 import { Agent, run } from '@openai/agents';
+import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import { resolve, sep } from 'node:path';
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -161,7 +162,7 @@ export interface EscalationRequest {
 // updatedPermissions rides on an allow to atomically change session state (e.g. plan
 // approval switching permissionMode to 'auto') without a reentrant control request.
 export type GateResult =
-  | { behavior: 'allow'; updatedPermissions?: Array<Record<string, unknown>> }
+  | { behavior: 'allow'; updatedPermissions?: PermissionUpdate[] }
   | { behavior: 'deny'; message: string; interrupt?: boolean };
 
 // A PreToolUse-hook decision. 'defer' means "no supervisor opinion — let the CLI's auto
