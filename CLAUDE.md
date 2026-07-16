@@ -11,7 +11,7 @@ non-obvious (record *why*, not just *what*).
   `process.loadEnvFile`, global `WebSocket`, native TS type-stripping). Subfolders per concern:
   `realtime/` (voice orchestrator + its tools), `agents/` (background sub-agent runner),
   `tasks/` (task lifecycle), `events/` (sqlite store), `ws/` (hub + wire protocol), `search/`
-  (web-search provider clients).
+  (web-search provider clients), `scrape/` (Firecrawl content-acquisition client).
 - `dashboard/` — React 19 + Vite + zustand activity dashboard. **No `useEffect`** — module-scope
   WS singleton → zustand.
 - `shell/` — Swift/SwiftUI menu-bar app (notch UI, PTT hotkey, VPIO audio). Owns all TCC grants.
@@ -49,6 +49,8 @@ non-obvious (record *why*, not just *what*).
   crawl, map, and extract content from **known URLs/sites**. Firecrawl's `/search` endpoint is
   deliberately not integrated (search belongs to Tavily + Exa), and no Firecrawl tool may ever
   appear in the realtime session config (`realtime/tools.test.ts` asserts this on the registry).
+  Persistence exception: map returns URL lists, not page content, so map results are NOT
+  persisted to the memory table — scrape/crawl/extract results are.
 - **Crawl breadth bounds:** crawls are scope-bounded, not content-clamped — max-pages
   (default 100) + max-depth (default 3) + include/exclude path patterns. The page cap is sent
   as the API `limit` (whose own default is 10 000 pages = 10 000 credits) **and** enforced in

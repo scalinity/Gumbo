@@ -756,3 +756,24 @@ runs the user deliberately spawns. M4 registration defaults recorded in CLAUDE.m
 - **GOTCHA:** `/map` leans on sitemaps — `tsx.is` (no sitemap) mapped to just its homepage
   while `docs.firecrawl.dev` returned a full URL list. If a map comes back near-empty, the
   site probably has no sitemap; scrape/crawl still work there.
+
+### Review + address pass (2026-07-15, two-axis standards/spec review)
+- **Audit granularity reverted to per-call.** The build had narrowed "audit every outbound
+  call" to one line per logical operation (polls unlogged) — a self-authorized standards
+  change the review flagged on both axes. Now every submit/poll/pagination/cancel gets its
+  own line via `auditedCall`; failures audit exactly once at the op-level catch (never in
+  the helper) so a failed call can't produce two lines. Volume cost is real (~200 lines for
+  a 10-min crawl) but the audit log is private provenance, not a UX surface — spec wins.
+- `firecrawlHeaders()` moved inside `try` in crawl/extract (was inconsistent with
+  scrape/map, and a missing-key auth throw escaped unaudited).
+- Extract persists one row **per source URL** (was `urls[0]` only — other sources survived
+  only in the query string); mirrors the exaContents row-per-url shape.
+- `map_site`'s relevance-ordering `search` param removed as scope creep (spec: map = URL
+  list). Trade-off accepted: on large sites agents pick from the raw list. Map results are
+  deliberately NOT persisted to memory (URL lists, not content) — now documented in
+  CLAUDE.md rather than implicit.
+- Inline 30 s/10 s job timeouts → `config.firecrawl.requestTimeoutMs`/`cancelTimeoutMs`;
+  poll interval renamed `jobPollIntervalMs` since extract shares it with crawl.
+- Review's informational note, for posterity: crawl/extract gating is tool-description
+  steering + the spawn-task approval flow, not a code-level gate — that IS the pre-M4
+  design, not an oversight.
