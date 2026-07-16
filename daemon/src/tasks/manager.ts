@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.ts';
@@ -93,21 +93,14 @@ export class TaskManager {
    * announce/bubble pipeline works unchanged.
    */
   spawnClaudeSession(title: string, brief: string, projectDir?: string | null): TaskRow {
-    const dir = projectDir?.trim();
-    if (dir && !(existsSync(dir) && statSync(dir).isDirectory())) {
-      throw new Error(`project_dir does not exist or is not a directory: ${dir}`);
+    const raw = projectDir?.trim();
+    if (raw && !(existsSync(raw) && statSync(raw).isDirectory())) {
+      throw new Error(`project_dir does not exist or is not a directory: ${raw}`);
     }
-    // Refuse a second session in a project another live session is already editing —
-    // concurrent edits to one repo conflict. Unnamed sessions get unique workspaces, so
-    // this only ever triggers on a shared, named project_dir.
-    if (dir) {
-      for (const [otherId, otherCwd] of this.activeCwds) {
-        if (otherCwd === dir) {
-          const other = this.store.getTask(otherId);
-          throw new Error(`a Claude session ("${other?.title ?? otherId}") is already working in ${dir}; let it finish or redirect it first`);
-        }
-      }
-    }
+    // Canonicalize before comparing: realpath collapses `.`/`..`/trailing-slash/symlinks so
+    // `/repo` and `/repo/` and a symlinked alias don't slip the concurrent-edit guard.
+    const dir = raw ? realpathSync(raw) : undefined;
+    if (dir) this.assertCwdFree(dir);
     const id = randomUUID().slice(0, 8);
     const workspace = join(config.home.tasks, id);
     mkdirSync(workspace, { recursive: true });
@@ -136,6 +129,9 @@ export class TaskManager {
     }
     const saved = this.store.getClaudeSession(id);
     if (!saved) throw new Error(`no resumable session for task ${id}`);
+    // Resume re-enters startClaude directly (bypassing spawn's guard), so re-check here:
+    // another session may have started in this project while this one was finished/parked.
+    this.assertCwdFree(saved.cwd, id);
     // The task finished (or died with a previous daemon) — bring it back to life.
     this.finished.delete(id);
     this.setTaskStatus(id, 'running', 'resumed by the user');
@@ -206,6 +202,18 @@ export class TaskManager {
         });
       },
     );
+  }
+
+  /** Refuse a cwd another live Claude session already holds (concurrent edits to one repo
+   *  conflict). `exceptId` skips the caller's own entry on the resume path. */
+  private assertCwdFree(cwd: string, exceptId?: string) {
+    for (const [otherId, otherCwd] of this.activeCwds) {
+      if (otherId === exceptId) continue;
+      if (otherCwd === cwd) {
+        const other = this.store.getTask(otherId);
+        throw new Error(`a Claude session ("${other?.title ?? otherId}") is already working in ${cwd}; let it finish or redirect it first`);
+      }
+    }
   }
 
   /** Flip the task needs_input while the user reviews the plan, then route to the notch. */
