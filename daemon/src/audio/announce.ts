@@ -9,6 +9,9 @@ import { AUDIO_TTS } from '../ws/protocol.ts';
 
 const TTS_HEADER = Buffer.from([AUDIO_TTS]);
 
+// Deliberately announce-only (unlike the live path, which delivers the report's key
+// finding): with no session open, the user may be away or mid-something — reading a full
+// report aloud unprompted is worse than a one-line notice he can follow up on.
 export function announcementText(task: TaskRow): string {
   switch (task.status) {
     case 'done':
@@ -45,6 +48,9 @@ async function synthesize(hub: Hub, text: string): Promise<void> {
       input: text,
       response_format: 'pcm',
     }),
+    // A hung request must not wedge the serialized queue for undici's multi-minute
+    // defaults — later announcements wait behind this one.
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok || !res.body) {
     const detail = await res.text().catch(() => '');
