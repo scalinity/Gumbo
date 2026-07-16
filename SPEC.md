@@ -143,8 +143,9 @@ during the fetch (deduped by `seq`) so nothing is dropped.
 **Event envelope** (persisted, fanned out to dashboards): `{ seq, ts, task_id, type, payload }`.
 Current event `type`s: `transcript.user`, `transcript.assistant`, `tool.call`, `tool.result`,
 `subagent.message`, `task.created`, `task.finished`, `note.saved`, `announce.pending`,
-`session.opened`, `session.closed`, `session.error`. M4+ adds `claude.message`, `claude.tool_use`,
-`claude.tool_result`, `supervisor.decision`, and `image.created` (M5).
+`session.opened`, `session.closed`, `session.error`. M4 added `claude.message`, `claude.tool_use`,
+`claude.tool_result`, `supervisor.decision`, and `task.status` (mid-run `needs_input` ⇄ `running`
+flips — confirm pending, intervention cap, resume). M5 adds `image.created`.
 
 **Message types** (see `daemon/src/ws/protocol.ts`, extended per phase):
 - shell → daemon: `hello`, (M2) `ptt_start`/`ptt_stop`, mic binary, `confirm_response`,
@@ -265,23 +266,38 @@ daemon smokes (cold path: zero `session.opened`, sample-aligned 0x02 frames; lif
 pulse, linger) + a 2-agent review/address pass (2 criticals found and fixed — see
 IMPLEMENTATION_NOTES §M3). TCC risk #3 closed.
 
-### M4 — Claude Code + supervisor
+### M4 — Claude Code + supervisor  ✅ built (daemon smoke green; live voice demo pending)
 
 **Goal:** delegate real code/file/shell work and supervise it autonomously.
 
-- `claude-runner`: `@anthropic-ai/claude-agent-sdk` `query()` streaming input, one `cwd` per session,
-  **subscription auth** (no `ANTHROPIC_API_KEY` in env), resume/fork by session id.
-- New tools: `spawn_claude_session`, `send_to_session`.
-- **Supervisor** (`gpt-5.6-terra`), event-driven per session: holds the task brief, watches streamed
-  events, answers Claude's questions, gates permissions via a policy table → supervisor →
-  notch-confirm escalation, caps interventions, logs `supervisor.decision`.
-- `canUseTool` bridge: auto-allow reads + edits under `cwd`; hard-escalate `git push`, deletes
-  outside `cwd`, network-sending actions.
+- `claude-runner`: `@anthropic-ai/claude-agent-sdk` `query()` streaming input, one `cwd` per session
+  (the named `project_dir` when the user gave one, else the task workspace — report.md +
+  supervisor.md always land in the workspace), **subscription auth** (no `ANTHROPIC_API_KEY` in
+  env; `USER` required for the keychain lookup), resume by persisted session id across daemon
+  restarts via `send_to_session`.
+- New tools: `spawn_claude_session` (title, brief, nullable `project_dir`), `send_to_session`.
+- **Sessions run in "auto mode"** (the user, 2026-07-15 — supersedes the per-call judgment tier):
+  `acceptEdits` + a **pure policy table** in the `canUseTool` bridge. Auto-allow reads, edits
+  under `cwd`, ordinary commands; **hard-escalate** `git push`, `sudo`, deletes outside `cwd`,
+  network-sending actions (curl/wget uploads, `gh` writes, mail) → notch confirm, deny on
+  timeout. Every gate logs `supervisor.decision`.
+- **Supervisor** (`gpt-5.6-terra`) holds the task brief and is invoked **only** when Claude asks
+  (AskUserQuestion → answered via deny-message on the user's behalf), capped per session
+  (`maxInterventions`, default 5) — past the cap the run interrupts and the task parks as
+  `needs_input` until `send_to_session`.
+- `needs_input` is first-class: task.status events, gold beacon orb, dashboard rail state.
 - Dashboard: Claude stream + supervisor-decision feeds.
 
-**Demo:** "have Claude add a `--json` flag to <project>" → Claude hits a permission gate → supervisor
-auto-approves an edit, escalates a `git push` to the notch → completion announced. Resume survives a
-daemon restart.
+**Demo:** "have Claude add a `--json` flag to <project>" → Claude edits under `cwd` unattended →
+a `git push` escalates to the notch → completion announced (delivery-first). Kill the daemon
+mid-session and resume via voice.
+
+**Verification so far:** spikes (a) subscription auth + (b) supervisor canned-event harness both
+passed; 50 daemon unit tests green; live daemon smoke (real Claude session on a scratch repo):
+`--json` flag implemented + verified, `git push` escalated → denied → honored, report/supervisor
+logs landed, bubbles flipped running → needs_input → done, finished session resumed by
+`send_to_session` and completed a follow-up. Remaining to observe live with the user: the
+voice-driven flow end-to-end (spawn by voice, notch confirm answer, completion announcement).
 
 ### M5 — Images + reminders
 

@@ -734,3 +734,52 @@ called every turn." Consequences, agreed as the M4 shape:
   becomes the session **cwd** when the user names a project (the demo edits a real repo, which
   would otherwise make every edit "outside cwd" and spam the notch). `report.md` +
   `supervisor.md` always land in the task workspace regardless.
+
+### Build (2026-07-15) — daemon + shell + dashboard
+
+**Daemon:**
+- `agents/claude-runner.ts`: `query()` with an async-generator **push queue** (streaming input
+  keeps the session open for supervisor answers and mid-run `send_to_session`); subprocess env
+  = `{...process.env, ANTHROPIC_API_KEY: undefined}` (spike findings). Turn accounting: one
+  `result` arrives per queued user turn — the run is over only when `turnsResolved >= turnsSent`,
+  otherwise a mid-run send would be silently dropped at the first result. The **last assistant
+  text doubles as the report** (the success `result.result` normally supersedes it).
+- Session persistence: `claude_sessions` table (task_id PK → session_id, cwd, brief). **Every
+  resume mints a NEW session id** (init message reports it; we upsert, latest wins). The brief
+  column accumulates `…\n\nFollow-up from the user: …` so a resumed supervisor stays grounded in
+  the original task, not just the follow-up text.
+- `send_to_session` semantics: live runner → queue into the open session; dead/finished/parked →
+  resume `saved.session_id` in `saved.cwd`, un-finish the task (delete from the `finished`
+  idempotency set — without this the resumed completion would be silently swallowed), flip to
+  running via `task.status`. This one path covers the user's redirects, cap-parked answers, AND
+  post-restart pickup (the reaper flips running→failed on boot; failed tasks stay resumable).
+- `ws/confirm.ts` ConfirmBridge: pending map keyed by short id, deny on timeout
+  (`config.claude.confirmTimeoutMs` = 60 s), deny instantly when no shell is connected, late
+  answers are no-ops. Escalations flip the task `needs_input` around the await (Supervisor
+  `setBlocked` → `task.status` events → bubbles/dashboard).
+- `cancel` on a cap-parked task (no live runner) closes it out as `cancelled` directly; the
+  persisted session id stays resumable if the user changes his mind.
+- **GOTCHA (bit us again despite the CLAUDE.md warning):** constructor parameter properties
+  (`constructor(private opts: …)`) parse fine under tsx but fail `node --test` strip-only mode
+  the moment a test imports the file. All M4 classes assign fields explicitly.
+- **GOTCHA (test):** `node:sqlite` rows have a **null prototype** — `assert.deepEqual(row,
+  literal)` fails on identical-looking values; spread the row first.
+
+**Shell:** `Confirm/ConfirmController.swift` — non-activating panel centered under the notch,
+Approve/Deny + auto-deny countdown bar, one visible at a time (queue). Needs the same
+`acceptsFirstMouse` override as the bubbles or the buttons silently don't click. The shell's
+countdown only dismisses UI — the daemon's timeout is the authority. `needs_input` orb: warm
+gold palette (`Tokens.gold`, mirrored as CSS `--gold`), aliveness 0.8 with a deeper 1.35×
+breath, and a slow-blinking full ring ("beacon") instead of the comet arc; alive → no failsafe
+removal. Bubble mini-panel renders `claude.*`, `supervisor.decision`, `task.status`.
+
+**Dashboard:** `task.status` updates the rail; claude rows tagged `claude`, supervisor rows
+tagged `supervisor` (deny/cap in alarm red); needs_input dot pulses gold at 0.9 s.
+
+**Verified (live daemon smoke, 2026-07-15):** real Claude session (subscription auth) on a
+scratch git repo — implemented + verified a `--json` flag; `git push origin main` →
+`confirm_request` at a fake shell → denied → deny honored (no retry); event stream persisted
+all four M4 types; bubbles flipped running → needs_input → done + notch_pulse; report.md +
+supervisor.md landed; then `sendToSession` on the *finished* task resumed the same session,
+which added a `--version` flag and completed again. 50/50 unit tests green. **Remaining for
+the live demo with the user:** voice-driven spawn → real notch confirm click → spoken completion.
