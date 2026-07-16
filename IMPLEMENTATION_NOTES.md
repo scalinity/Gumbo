@@ -1301,6 +1301,58 @@ with a **cold** spoken completion (79 × 0x02 frames — the session idle-closed
 actual panel UX — thumbnail click, brush feel, composer typing in the non-activating
 panel (first key-status click), viewer auto-swap — needs a screen.
 
+### Review + address pass (2-agent /review-2 on Fable → /address, 2026-07-16)
+
+DB1 (debugger) + CA1 (auditor), both Fable, reviewed the full M5+M5.5 diff vs `508e8f2`:
+**1 🔴, 7 🟡 (3 corroborated by both agents), 10 🔵 — ALL addressed** in 9 conventional
+commits (`c9e2e2b`…), each tested/built and pushed. The branch is now on origin. Highlights:
+
+- **🔴 stroke-cap contract mismatch (DB1).** The shell built unbounded strokes while
+  `sanitizeStrokes` THREW at the caps — one long shading drag disarmed the armed context
+  (voice edit: "no image is open" at a visibly open viewer) and a typed edit hung
+  "Editing…" into the 240 s failsafe because pre-flight failures emitted only
+  session.error. Fix: over-limit sizes are now **clamped, never rejected** (malformed
+  shapes still throw); the shell caps drawing at the same constants (`BrushStroke.maxPoints/
+  maxStrokes` mirror mask.ts) so drawn == masked; and the typed path is extracted to
+  `acceptImageEditRequest` with a tested invariant — **every well-formed request
+  terminates in exactly one of `image.created` | `image.edit_failed`**, pre-flight
+  failures included. `image_context` handling likewise extracted (`applyImageContext`,
+  fail-toward-no-target now unit-tested); `safeImageFile` moved to `images/files.ts`.
+- **🟡 rasterizer work unbounded on the voice loop (corroborated).** Count/radius caps
+  allowed ~10¹¹ pixel tests (Σ segment-bbox areas is the real cost). `strokeMaskPng` now
+  enforces a 200-full-image-repaints area budget (pathological → clean "too complex" on
+  the edit_failed path; heaviest realistic shading is tens of repaints), and
+  `runImageEdit` yields via `setImmediate` before its sync prefix so fire-and-forget
+  callers never pay readFileSync + rasterization on their own turn.
+- **🟡 EventKit mirror had no re-sync (corroborated).** One-shot broadcasts to an absent
+  shell silently lost the OS-durable twin — or left a CANCELLED reminder's twin alive in
+  Reminders.app. `scheduler.resyncEventKit()` on shell hello re-creates twins for pending
+  rows without one and re-removes surviving cancelled twins (clearing the stored id so
+  that re-send is one-shot). Documented trade-off: a lost `reminder_created` reply can
+  duplicate a Reminders.app entry on resync — rarer and more benign than a lost/undead one.
+- **🟡 viewer context not re-armed after reconnect (corroborated).** `WSClient.onConnect`
+  now fires after every hello and the viewer re-sends `image_context` — tsx-watch daemon
+  restarts no longer silently disarm voice edits under an open viewer.
+- **🟡 stale session clock (CA1).** Instructions bake the clock at connect but active
+  sessions outlive the 60 s idle close indefinitely — "in 10 minutes" resolved against a
+  stale now. The past-time rejection now carries the CURRENT time (the model's only fresh
+  reference), and a strict shape guard rejects date-only/`Z`/offset ISO forms that
+  `Date.parse` silently reads as UTC.
+- **🟡 collision-clobber (CA1).** 8-hex names are a 32-bit namespace and `writeFileSync`
+  silently replaces — `{flag:'wx'}` + fresh-name retry makes the non-destructive
+  guarantee actually absolute.
+- Also: one 429/5xx retry for the images API (repo convention, scaled); per-entry stat
+  guard on /api/images; echo-defanging into live instructions (`echoForInstructions`,
+  the M3 precedent applied to short echoes); schedule NOT NULLs + a Store.transaction
+  wrapping mark-fired+event; generation-scoped viewer failsafe; load-failure states;
+  aspect-true viewer minimum sizing; `session.test.ts` covering the cold
+  `speakProactively` seam (which forced de-sugaring Orchestrator's constructor — the
+  strip-only parameter-property gotcha bit again the moment a test imported session.ts).
+
+**Post-fix suite: 151/151** (146 daemon behaviors + the new seam tests); shell builds +
+signs. Discovered during the pass, worth knowing: main moved again in parallel (Quick
+Text Input shipped, egress-proxy review fixes) — the merge-skew note above still applies.
+
 ---
 
 ## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15
