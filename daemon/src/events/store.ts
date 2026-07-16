@@ -20,6 +20,19 @@ export interface EventRow {
   payload: unknown;
 }
 
+// M5: one row per scheduled action. `kind` is the extensibility seam (only 'reminder'
+// exists today; future kinds — recurring digests, timed task spawns — reuse the table and
+// the poll loop, not a new mechanism). `text` is the kind's payload.
+export interface ScheduleRow {
+  id: string;
+  fire_at: number; // epoch-ms
+  kind: string;
+  text: string;
+  status: 'pending' | 'fired' | 'cancelled';
+  eventkit_id: string | null; // Reminders.app twin, set when the shell replies reminder_created
+  created_at: number;
+}
+
 type EventListener = (event: EventRow) => void;
 
 export class Store {
@@ -60,7 +73,51 @@ export class Store {
       CREATE TABLE IF NOT EXISTS claude_sessions (
         task_id TEXT PRIMARY KEY, session_id TEXT, cwd TEXT, brief TEXT, updated_at INT
       );
+      -- M5: Gumbo-owned scheduler. Rows persist across restarts by design — the boot
+      -- reaper only reconciles the tasks table and must never touch this one (a pending
+      -- reminder outliving the daemon is the whole point).
+      CREATE TABLE IF NOT EXISTS schedule (
+        id TEXT PRIMARY KEY, fire_at INT, kind TEXT, text TEXT,
+        status TEXT CHECK(status IN ('pending','fired','cancelled')),
+        eventkit_id TEXT, created_at INT
+      );
+      CREATE INDEX IF NOT EXISTS schedule_due ON schedule(status, fire_at);
     `);
+  }
+
+  createSchedule(row: ScheduleRow) {
+    this.db
+      .prepare('INSERT INTO schedule (id, fire_at, kind, text, status, eventkit_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(row.id, row.fire_at, row.kind, row.text, row.status, row.eventkit_id, row.created_at);
+  }
+
+  getSchedule(id: string): ScheduleRow | undefined {
+    return this.db.prepare('SELECT * FROM schedule WHERE id = ?').get(id) as unknown as ScheduleRow | undefined;
+  }
+
+  /** Due work for the poll loop: pending rows whose fire time has passed (oldest first). */
+  duePendingSchedules(now: number): ScheduleRow[] {
+    return this.db
+      .prepare("SELECT * FROM schedule WHERE status = 'pending' AND fire_at <= ? ORDER BY fire_at")
+      .all(now) as unknown as ScheduleRow[];
+  }
+
+  /** Upcoming first (soonest fire_at), then past rows newest-first — the shape both the
+   *  list_reminders tool and the dashboard list want. */
+  listSchedules(limit = 100): ScheduleRow[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM schedule ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, CASE WHEN status = 'pending' THEN fire_at ELSE -fire_at END LIMIT ?",
+      )
+      .all(limit) as unknown as ScheduleRow[];
+  }
+
+  updateScheduleStatus(id: string, status: ScheduleRow['status']) {
+    this.db.prepare('UPDATE schedule SET status = ? WHERE id = ?').run(status, id);
+  }
+
+  setScheduleEventkitId(id: string, eventkitId: string) {
+    this.db.prepare('UPDATE schedule SET eventkit_id = ? WHERE id = ?').run(eventkitId, id);
   }
 
   saveClaudeSession(taskId: string, row: { sessionId: string; cwd: string; brief: string }) {

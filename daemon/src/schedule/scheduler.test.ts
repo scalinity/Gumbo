@@ -1,0 +1,173 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
+const { Store } = await import('../events/store.ts');
+const { Scheduler } = await import('./scheduler.ts');
+type ScheduleRow = import('../events/store.ts').ScheduleRow;
+type EventRow = import('../events/store.ts').EventRow;
+
+function fakeHub() {
+  const sent: Array<{ msg: Record<string, unknown>; to?: string }> = [];
+  return { sent, broadcast: (msg: unknown, to?: unknown) => sent.push({ msg: msg as Record<string, unknown>, to: to as string }) };
+}
+
+function setup(dbPath?: string) {
+  const path = dbPath ?? join(mkdtempSync(join(tmpdir(), 'gumbo-sched-')), 'gumbo.db');
+  const store = new Store(path);
+  const events: EventRow[] = [];
+  store.onEvent((e) => events.push(e));
+  const hub = fakeHub();
+  const fired: ScheduleRow[] = [];
+  const scheduler = new Scheduler(store, hub);
+  scheduler.onFire = (row) => fired.push(row);
+  return { path, store, events, hub, fired, scheduler };
+}
+
+const drainMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
+
+test('set_reminder message contract: pending row + create_reminder {id, text, fire_at} to the shell', () => {
+  const { hub, scheduler, events, store } = setup();
+  const fireAt = Date.now() + 60_000;
+  const row = scheduler.setReminder('review the wallpaper', fireAt);
+
+  assert.equal(row.kind, 'reminder');
+  assert.equal(row.status, 'pending');
+  assert.equal({ ...store.getSchedule(row.id) }.status, 'pending');
+
+  assert.equal(hub.sent.length, 1);
+  assert.equal(hub.sent[0].to, 'shell');
+  assert.deepEqual(hub.sent[0].msg, { type: 'create_reminder', id: row.id, text: 'review the wallpaper', fire_at: fireAt });
+
+  const set = events.find((e) => e.type === 'reminder.set');
+  assert.ok(set, 'reminder.set event emitted');
+  assert.deepEqual(set.payload, { id: row.id, kind: 'reminder', text: 'review the wallpaper', fire_at: fireAt });
+});
+
+test('a due row fires exactly once: marked fired, reminder.fired emitted, delivery invoked', async () => {
+  const { scheduler, store, events, fired } = setup();
+  const row = scheduler.setReminder('due now', Date.now() - 5);
+
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(store.getSchedule(row.id)?.status, 'fired');
+  const firedEvent = events.find((e) => e.type === 'reminder.fired');
+  assert.ok(firedEvent, 'reminder.fired event emitted');
+  assert.equal((firedEvent.payload as { text: string }).text, 'due now');
+  assert.equal(fired.length, 1);
+  assert.equal(fired[0].id, row.id);
+  assert.equal(fired[0].status, 'fired');
+
+  // A fired row never re-fires.
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(fired.length, 1);
+});
+
+test('a future row does not fire', async () => {
+  const { scheduler, store, fired } = setup();
+  const row = scheduler.setReminder('later', Date.now() + 3_600_000);
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(fired.length, 0);
+  assert.equal(store.getSchedule(row.id)?.status, 'pending');
+});
+
+test('restart reload: rows persist, the reaper leaves them alone, a new scheduler fires them', async () => {
+  const first = setup();
+  const row = first.scheduler.setReminder('survive the restart', Date.now() - 5);
+
+  // "Restart": a fresh Store + Scheduler on the same db file, reaper included (it must
+  // only reconcile the tasks table — a pending reminder outliving the daemon is the point).
+  const second = setup(first.path);
+  second.store.reapInterruptedTasks();
+  assert.equal(second.store.getSchedule(row.id)?.status, 'pending', 'reaper must not touch schedule rows');
+
+  second.scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(second.fired.length, 1);
+  assert.equal(second.fired[0].text, 'survive the restart');
+  assert.equal(second.store.getSchedule(row.id)?.status, 'fired');
+});
+
+test('cancel: row cancelled, reminder.cancelled emitted, EventKit twin removed, no fire', async () => {
+  const { scheduler, store, events, hub, fired } = setup();
+  const row = scheduler.setReminder('cancel me', Date.now() - 5); // already due — cancel still wins
+  scheduler.handleReminderCreated(row.id, 'EK-123');
+  assert.equal(store.getSchedule(row.id)?.eventkit_id, 'EK-123');
+
+  const cancelled = scheduler.cancelReminder(row.id);
+  assert.equal(cancelled?.text, 'cancel me');
+  assert.equal(store.getSchedule(row.id)?.status, 'cancelled');
+  assert.ok(events.some((e) => e.type === 'reminder.cancelled'));
+  const remove = hub.sent.find((s) => s.msg.type === 'remove_reminder');
+  assert.deepEqual(remove?.msg, { type: 'remove_reminder', id: row.id, eventkit_id: 'EK-123' });
+
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(fired.length, 0, 'a cancelled row must not fire');
+
+  // Cancelling again (or anything non-pending) is a clean no-op.
+  assert.equal(scheduler.cancelReminder(row.id), null);
+  assert.equal(scheduler.cancelReminder('nope'), null);
+});
+
+test('reminder_created contract: null id ignored; late reply after cancel removes the fresh twin', () => {
+  const { scheduler, store, hub } = setup();
+  const row = scheduler.setReminder('race me', Date.now() + 60_000);
+
+  scheduler.handleReminderCreated(row.id, null); // EventKit refused (no grant) — row unchanged
+  assert.equal(store.getSchedule(row.id)?.eventkit_id, null);
+
+  scheduler.cancelReminder(row.id); // no twin yet → no remove_reminder here
+  assert.ok(!hub.sent.some((s) => s.msg.type === 'remove_reminder'));
+
+  // The shell's reply lands AFTER the cancel: remove the just-created Reminders.app entry
+  // instead of orphaning it.
+  scheduler.handleReminderCreated(row.id, 'EK-LATE');
+  const remove = hub.sent.find((s) => s.msg.type === 'remove_reminder');
+  assert.deepEqual(remove?.msg, { type: 'remove_reminder', id: row.id, eventkit_id: 'EK-LATE' });
+  assert.equal(store.getSchedule(row.id)?.eventkit_id, null, 'a cancelled row never adopts the twin');
+});
+
+test('a throwing delivery is contained: session.error logged, row stays fired', async () => {
+  const { scheduler, store, events } = setup();
+  scheduler.onFire = () => {
+    throw new Error('speaker on fire');
+  };
+  const row = scheduler.setReminder('boom', Date.now() - 5);
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(store.getSchedule(row.id)?.status, 'fired');
+  const err = events.find((e) => e.type === 'session.error');
+  assert.match(String((err?.payload as { message: string })?.message), /speaker on fire/);
+});
+
+test('the poll loop fires due rows on its own (start/stop)', async () => {
+  const { store, hub, fired } = setup();
+  const scheduler = new Scheduler(store, hub, 20);
+  scheduler.onFire = (row) => fired.push(row);
+  scheduler.setReminder('polled', Date.now() + 1);
+  scheduler.start();
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(fired.length, 1);
+    assert.equal(fired[0].text, 'polled');
+  } finally {
+    scheduler.stop();
+  }
+});
+
+test('listSchedules orders upcoming (soonest first) before past (newest first)', () => {
+  const { scheduler, store } = setup();
+  const now = Date.now();
+  const soon = scheduler.setReminder('soon', now + 10_000);
+  const later = scheduler.setReminder('later', now + 90_000);
+  const firedRow = scheduler.setReminder('already fired', now - 5);
+  scheduler.sweepNow();
+  const order = store.listSchedules().map((r) => r.id);
+  assert.deepEqual(order, [soon.id, later.id, firedRow.id]);
+});

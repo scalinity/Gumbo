@@ -37,6 +37,13 @@ export function todayLabel(): string {
   });
 }
 
+/** Local time of day for the orchestrator's instructions (M5): resolving "in 10 minutes"
+ *  or "at 5" to an absolute fire time needs the clock, not just the date. Sessions are
+ *  short-lived (60 s idle close), so session-creation time is fresh enough. */
+export function timeLabel(): string {
+  return new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
 // Daemon-held secrets that must NEVER reach a spawned subprocess (the Claude Code session
 // needs none of them). Stripped from the subprocess env in claude-runner. Add any new
 // provider key here the moment it lands in .env. ANTHROPIC_API_KEY is included because it
@@ -69,6 +76,11 @@ export const config = {
     // 'marin' voice on this model with response_format 'pcm' → 24 kHz mono pcm16, the
     // exact shell wire format — same voice as the realtime session, zero transcoding.
     tts: 'gpt-4o-mini-tts',
+    // M5 image generation. Verified live (2026-07-16): /v1/images/generations accepts
+    // this id (a dated snapshot gpt-image-2-2026-04-21 also exists) and returns
+    // data[0].b64_json — base64 PNG (output_format defaults to png). Sizes are free-form
+    // as long as width and height are divisible by 16 (probed via the API's own error).
+    image: 'gpt-image-2',
   },
   // M2: the orchestrator speaks. Typed dashboard input still works — replies are spoken
   // and the transcript still streams to the dashboard via output_audio_transcript deltas.
@@ -163,6 +175,20 @@ export const config = {
     crawlDefaultMaxPages: 100,
     crawlDefaultMaxDepth: 3,
     extractJobBudgetMs: 300_000,
+  },
+  // M5 images: generation runs in the background off the voice turn (the tool acks
+  // instantly), so the budget is generous like other background calls. Quality is left
+  // to the API default deliberately — fewer knobs on a voice tool.
+  images: {
+    timeoutMs: 180_000,
+    // The voice model picks a shape; sizes verified against the live API (÷16 rule).
+    sizes: { square: '1024x1024', landscape: '1536x1024', portrait: '1024x1536' } as Record<string, string>,
+  },
+  // M5 scheduler: Gumbo's own timed-action primitive (kind 'reminder' for now). The poll
+  // loop is the spoken-presence half; EventKit is the OS-durable half (fires even if the
+  // daemon is off or the Mac is asleep — the poll loop just fires late, on wake).
+  schedule: {
+    pollIntervalMs: 20_000,
   },
   // How long a finished task's bubble lingers before the daemon sends bubble_remove.
   bubbleLingerMs: 12_000,

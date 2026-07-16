@@ -22,7 +22,10 @@ export type InboundMessage =
   // the user actually stops hearing Gumbo.
   | { type: 'playback_state'; draining: boolean }
   // shell: the user answered a notch confirm (M4 supervisor escalation).
-  | { type: 'confirm_response'; id: string; approved: boolean };
+  | { type: 'confirm_response'; id: string; approved: boolean }
+  // shell: EventKit accepted (or failed) a create_reminder — eventkit_id is null on failure.
+  // The daemon stores it on the schedule row so cancel can remove the Reminders.app entry.
+  | { type: 'reminder_created'; id: string; eventkit_id: string | null };
 
 // Statuses a bubble can show; 'running' and 'needs_input' are the live ones (M4).
 export type BubbleStatus = 'running' | 'needs_input' | 'done' | 'failed' | 'cancelled';
@@ -35,8 +38,15 @@ export type OutboundMessage =
   | { type: 'playback_flush' } // barge-in: drop queued speaker audio immediately
   | { type: 'bubble_upsert'; task_id: string; title: string; status: BubbleStatus } // shell: one panel per task
   | { type: 'bubble_remove'; task_id: string } // shell: fade the panel out (sent after the done-linger)
-  | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running' | 'needs_input'> } // shell: brief completion pulse
+  // shell: brief notch pulse — task completion statuses, plus 'reminder' (M5) when a
+  // scheduled reminder fires (the visual cue alongside the spoken delivery).
+  | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running' | 'needs_input'> | 'reminder' }
   // shell: a supervisor escalation needs the user's yes/no; deny happens daemon-side on timeout.
   | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number }
   // shell: dismiss a pending confirm — its task was cancelled (daemon already resolved it deny).
-  | { type: 'confirm_cancel'; id: string };
+  | { type: 'confirm_cancel'; id: string }
+  // shell (M5): mirror a scheduled reminder into Reminders.app via EventKit (OS-durable —
+  // fires even if the daemon is off). fire_at is epoch-ms like every other timestamp.
+  | { type: 'create_reminder'; id: string; text: string; fire_at: number }
+  // shell (M5): best-effort removal of a cancelled reminder's Reminders.app entry.
+  | { type: 'remove_reminder'; id: string; eventkit_id: string };
