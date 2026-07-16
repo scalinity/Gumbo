@@ -78,6 +78,13 @@ export interface ClaudeRunResult {
   report: string;
 }
 
+/** The surface TaskManager drives — lets tests inject a fake in place of a live query(). */
+export interface ClaudeSessionRunner {
+  readonly abort: AbortController;
+  run(): Promise<ClaudeRunResult>;
+  send(text: string): boolean;
+}
+
 export interface ClaudeRunnerOpts {
   taskId: string;
   brief: string;
@@ -91,7 +98,7 @@ export interface ClaudeRunnerOpts {
   resumeSessionId?: string;
 }
 
-export class ClaudeRunner {
+export class ClaudeRunner implements ClaudeSessionRunner {
   readonly abort = new AbortController();
   private input = new InputQueue();
   private opts: ClaudeRunnerOpts;

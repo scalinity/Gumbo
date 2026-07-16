@@ -100,14 +100,20 @@ export class Store {
    * Reconcile tasks left in-flight when the daemon stopped. Their runners live only in
    * memory, so on restart (frequent under `tsx watch`) they'd otherwise stay 'running'
    * forever and Gumbo would report dead work as ongoing. Returns the reaped task ids.
+   *
+   * `needs_input` is deliberately NOT reaped: a Claude task parked at the supervisor
+   * intervention cap is genuinely still waiting on the user, and resumes off `claude_sessions`
+   * regardless of the daemon's lifetime — reaping it to 'failed' would make get_task_status
+   * / the dashboard misreport a resumable task as failed (and the voice model answers from
+   * those verbatim).
    */
   reapInterruptedTasks(): string[] {
     const rows = this.db
-      .prepare("SELECT id FROM tasks WHERE status IN ('running','needs_input')")
+      .prepare("SELECT id FROM tasks WHERE status = 'running'")
       .all() as Array<{ id: string }>;
     if (rows.length === 0) return [];
     this.db
-      .prepare("UPDATE tasks SET status = 'failed', updated_at = ? WHERE status IN ('running','needs_input')")
+      .prepare("UPDATE tasks SET status = 'failed', updated_at = ? WHERE status = 'running'")
       .run(Date.now());
     for (const { id } of rows) this.addEvent(id, 'task.finished', { status: 'failed', error: 'interrupted by daemon restart' });
     return rows.map((r) => r.id);

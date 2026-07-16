@@ -4,22 +4,34 @@ import { randomUUID } from 'node:crypto';
 import { config } from '../config.ts';
 import type { Store, TaskRow } from '../events/store.ts';
 import { runSubagent } from '../agents/openai-runner.ts';
-import { ClaudeRunner } from '../agents/claude-runner.ts';
+import { ClaudeRunner, type ClaudeRunnerOpts, type ClaudeSessionRunner } from '../agents/claude-runner.ts';
 import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
 
 /** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod). */
 export type EscalateFn = (taskId: string, taskTitle: string, req: EscalationRequest) => Promise<boolean>;
 
+/** Builds the runner for a Claude session — swapped for a fake in tests (no live query()). */
+export type RunnerFactory = (opts: ClaudeRunnerOpts) => ClaudeSessionRunner;
+
 export class TaskManager {
   private aborts = new Map<string, AbortController>();
   private finished = new Set<string>();
-  private claudeRunners = new Map<string, ClaudeRunner>();
+  private claudeRunners = new Map<string, ClaudeSessionRunner>();
+  private store: Store;
+  private escalate: EscalateFn;
+  private makeRunner: RunnerFactory;
   onFinished: (task: TaskRow) => void = () => {};
 
+  // No parameter properties: daemon tests run node --test in strip-only mode.
   constructor(
-    private store: Store,
-    private escalate: EscalateFn = async () => false, // no bridge (tests) → deny, fail safe
-  ) {}
+    store: Store,
+    escalate: EscalateFn = async () => false, // no bridge (tests) → deny, fail safe
+    makeRunner: RunnerFactory = (opts) => new ClaudeRunner(opts),
+  ) {
+    this.store = store;
+    this.escalate = escalate;
+    this.makeRunner = makeRunner;
+  }
 
   spawnSubagent(title: string, brief: string): TaskRow {
     const id = randomUUID().slice(0, 8);
@@ -121,7 +133,7 @@ export class TaskManager {
         this.setTaskStatus(task.id, blocked ? 'needs_input' : 'running', blocked ? 'awaiting notch confirm' : 'confirm answered');
       },
     });
-    const runner = new ClaudeRunner({ taskId: task.id, brief, persistBrief: fullBrief, cwd, store: this.store, supervisor, resumeSessionId });
+    const runner = this.makeRunner({ taskId: task.id, brief, persistBrief: fullBrief, cwd, store: this.store, supervisor, resumeSessionId });
     this.claudeRunners.set(task.id, runner);
     this.aborts.set(task.id, runner.abort);
 
@@ -131,6 +143,9 @@ export class TaskManager {
         this.writeSupervisorLog(supervisor, task);
         if (parked) {
           // Intervention cap: not finished, waiting on the user — send_to_session resumes.
+          // Drop the resolved run's AbortController so cancel() reaches the needs_input
+          // close-out instead of "aborting" a finished run and falsely reporting success.
+          this.aborts.delete(task.id);
           this.setTaskStatus(task.id, 'needs_input', 'supervisor intervention cap');
           return;
         }
