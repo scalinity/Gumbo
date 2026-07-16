@@ -61,6 +61,9 @@ export const config = {
   sessionIdleMs: 60_000,
   // How long a finished task's bubble lingers before the daemon sends bubble_remove.
   bubbleLingerMs: 12_000,
+  // Report excerpt embedded in a live completion announcement — enough for the model to
+  // deliver the key finding without reciting the whole file (full cap: reportMaxChars).
+  announceReportMaxChars: 2_500,
   reportMaxChars: 12_000,
   activityLogMaxChars: 500, // truncation for tool args / outputs in the activity log
 };
