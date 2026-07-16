@@ -57,8 +57,12 @@ export async function exaSearch(
     throw err;
   }
   const results = raw.results ?? [];
+  if (results.length === 0) {
+    const err = new SearchError('exa', 'empty_results', 'no results for query');
+    auditFailure('/search', query, err);
+    throw err;
+  }
   auditSearchCall({ provider: 'exa', endpoint: '/search', query, resultCount: results.length, ok: true });
-  if (results.length === 0) throw new SearchError('exa', 'empty_results', 'no results for query');
   return results;
 }
 
@@ -80,8 +84,12 @@ export async function exaContents(urls: string[]): Promise<ExaResult[]> {
     throw err;
   }
   const results = raw.results ?? [];
+  if (results.length === 0) {
+    const err = new SearchError('exa', 'empty_results', 'no contents returned for urls');
+    auditFailure('/contents', query, err);
+    throw err;
+  }
   auditSearchCall({ provider: 'exa', endpoint: '/contents', query, resultCount: results.length, ok: true });
-  if (results.length === 0) throw new SearchError('exa', 'empty_results', 'no contents returned for urls');
   return results;
 }
 

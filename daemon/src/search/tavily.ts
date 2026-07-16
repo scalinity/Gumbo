@@ -26,37 +26,53 @@ interface TavilySearchResponse {
 /**
  * Voice-hot-path Tavily /search: hard timeout, zero retries (fail fast — a voice turn
  * is waiting), and a missing/empty synthesized answer is an error, not a partial result.
+ * The client is the audit choke point: every call lands one JSONL line, success or
+ * failure — empty_results is a failure (ok: false), matching the Exa client.
  */
 export async function tavilySearch(
   query: string,
   opts: { depth?: TavilyDepth; topic?: 'general' | 'news'; maxResults?: number; timeoutMs?: number } = {},
 ): Promise<TavilyLookup> {
-  const apiKey = process.env.TAVILY_API_KEY;
-  if (!apiKey) throw new SearchError('tavily', 'auth', 'TAVILY_API_KEY is not set');
-  const raw = (await postJson({
-    provider: 'tavily',
-    url: 'https://api.tavily.com/search',
-    headers: { authorization: `Bearer ${apiKey}` },
-    body: {
+  try {
+    const apiKey = process.env.TAVILY_API_KEY;
+    if (!apiKey) throw new SearchError('tavily', 'auth', 'TAVILY_API_KEY is not set');
+    const raw = (await postJson({
+      provider: 'tavily',
+      url: 'https://api.tavily.com/search',
+      headers: { authorization: `Bearer ${apiKey}` },
+      body: {
+        query,
+        search_depth: opts.depth ?? config.search.tavilyDepth,
+        include_answer: true,
+        max_results: opts.maxResults ?? config.search.quickLookupMaxResults,
+        // 'news' hits Tavily's fresher news lane — better and faster for scores/headlines.
+        ...(opts.topic && opts.topic !== 'general' ? { topic: opts.topic } : {}),
+      },
+      timeoutMs: opts.timeoutMs ?? config.search.quickLookupTimeoutMs,
+      retries: 0,
+    })) as TavilySearchResponse;
+    const answer = (raw.answer ?? '').trim();
+    if (!answer) throw new SearchError('tavily', 'empty_results', 'no synthesized answer for query');
+    const lookup: TavilyLookup = {
+      answer,
+      sources: (raw.results ?? [])
+        .filter((r): r is { title?: string; url: string } => typeof r.url === 'string')
+        .map((r) => ({ title: r.title ?? 'untitled', url: r.url })),
+      responseTime: raw.response_time,
+    };
+    auditSearchCall({ provider: 'tavily', endpoint: '/search', query, resultCount: lookup.sources.length, ok: true });
+    return lookup;
+  } catch (err) {
+    auditSearchCall({
+      provider: 'tavily',
+      endpoint: '/search',
       query,
-      search_depth: opts.depth ?? config.search.tavilyDepth,
-      include_answer: true,
-      max_results: opts.maxResults ?? config.search.quickLookupMaxResults,
-      // 'news' hits Tavily's fresher news lane — better and faster for scores/headlines.
-      ...(opts.topic && opts.topic !== 'general' ? { topic: opts.topic } : {}),
-    },
-    timeoutMs: opts.timeoutMs ?? config.search.quickLookupTimeoutMs,
-    retries: 0,
-  })) as TavilySearchResponse;
-  const answer = (raw.answer ?? '').trim();
-  if (!answer) throw new SearchError('tavily', 'empty_results', 'no synthesized answer for query');
-  return {
-    answer,
-    sources: (raw.results ?? [])
-      .filter((r): r is { title?: string; url: string } => typeof r.url === 'string')
-      .map((r) => ({ title: r.title ?? 'untitled', url: r.url })),
-    responseTime: raw.response_time,
-  };
+      resultCount: 0,
+      ok: false,
+      error: err instanceof SearchError ? err.kind : String(err),
+    });
+    throw err;
+  }
 }
 
 /**
@@ -68,11 +84,9 @@ export async function tavilySearch(
 export async function webQuickLookup(query: string, topic?: 'general' | 'news'): Promise<string> {
   try {
     const { answer, sources } = await tavilySearch(query, { topic });
-    auditSearchCall({ provider: 'tavily', endpoint: '/search', query, resultCount: sources.length, ok: true });
     return JSON.stringify({ answer, sources });
   } catch (err) {
     const reason = err instanceof SearchError ? err.kind : 'http';
-    auditSearchCall({ provider: 'tavily', endpoint: '/search', query, resultCount: 0, ok: false, error: reason });
     return JSON.stringify({
       error: 'lookup_failed',
       reason,
