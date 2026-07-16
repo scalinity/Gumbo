@@ -129,6 +129,56 @@ Two Opus reviewers (debugger + auditor) reviewed the M1 codebase. **All findings
 
 ## M2 — Swift shell + voice (complete)
 
+### Quick text input — ⌃Space floating box (2026-07-16)
+
+A single-line, Spotlight-style black pill to message Gumbo by typing (paste a long prompt without
+reading it aloud or opening the dashboard). **Shell-only — zero daemon/protocol/dashboard changes:**
+the box sends the existing `{type:'debug_text', text}`, which drives the orchestrator exactly like a
+voice turn (spoken reply). Pasting the M5 prompt → `spawn_claude_session`. Files:
+`Hotkey/Hotkeys.swift` (PTT monitor + the ⌃Space hotkey), new `QuickText/QuickTextController.swift`
+(panel + view + model), `App.swift` (wiring). Live-verified end-to-end by the user.
+
+- **Trigger = ⌃Space, via Carbon `RegisterEventHotKey`.** This was reached after two dead ends that
+  are the real lesson here. (1) ⌃Space via a global `.keyDown` NSEvent monitor — **silently dead: a
+  global `.keyDown` monitor receives nothing without the separate "Input Monitoring" grant**
+  (`kTCCServiceListenEvent`), distinct from Accessibility. PTT's `.flagsChanged` monitor works on
+  Accessibility alone because reading *modifiers* isn't keylogging; reading character keys is.
+  (2) Double-tap Control via `.flagsChanged` — detected fine, but the box **couldn't take keyboard
+  focus** (see next bullet), so we moved to `RegisterEventHotKey`, which needs a real key. It
+  captures ⌃Space with **no Input Monitoring**, and consumes the press so no stray Space leaks.
+  (You've disabled the macOS "previous input source" ⌃Space shortcut, so there's no system clash.)
+- **Focus was the hard part — and the fix was NOT activation.** On macOS 26 an LSUIElement/accessory
+  app **cannot become frontmost** from the background: cooperative activation refuses it. Verified
+  exhaustively via a temp file-diagnostic — `NSApp.activate(ignoringOtherApps:)`, modern
+  `NSApp.activate()`, `NSRunningApplication.activate`, and a `.regular` activation-policy toggle
+  ALL left `isActive=false, isKey=false, frontmost=com.apple.Terminal` (while `fr` was correctly the
+  text view). A window can only be *key* when its app is active, so none of it let you type. **The
+  answer is `.nonactivatingPanel` + a `canBecomeKey` override**: that style is purpose-built to let a
+  panel be the KEY window and receive keystrokes **without** activating its app (`isKey=true` with
+  `frontmost=Terminal` — they coexist). So we never call `activate` at all: `orderFrontRegardless()`
+  + `makeKey()`. Bonus: no activation ⇒ **no Dock-icon flash** (an earlier policy-toggle attempt
+  flashed one and *still* didn't focus). First responder is set in `SendingTextView.viewDidMoveToWindow`.
+- **Click-away closes via a global mouse-down monitor, NOT `resignKey`.** `resignKey` fired on
+  incidental focus perturbations (moving the cursor into the menubar, Spaces changes) and dismissed
+  the box out from under you. A global `[.leftMouseDown,.rightMouseDown]` monitor fires only on an
+  actual click in another app (clicks inside the panel are local events it never sees) — precise,
+  and hover no longer closes it. Removed on close.
+- **Send keys via a raw NSTextView, not SwiftUI `TextEditor`** — buys exact control: `keyDown`
+  intercepts Return (keyCode 36/76) with no Shift → send, Esc (53) → cancel, everything else
+  (incl. ⇧⏎ newline and ⌘V paste) → super. Paste never fires a Return keystroke, so multi-line
+  prompts paste in whole and only a real ⏎ submits.
+- **Look:** black `Capsule` (360×48) + `Tokens.line` border, `ember` caret, fade-in honoring Reduce
+  Motion. Placeholder "Message Gumbo…" is **drawn inside the NSTextView** (not a SwiftUI overlay) at
+  the caret's exact origin, with `lineFragmentPadding = 0` and a vertical `textContainerInset` that
+  centers the single line — so caret, text, and placeholder all share one centered origin (an
+  overlay drifted from the caret; centering by a fixed sub-frame left the line ~2px high).
+- **DEBUGGING META-LESSON:** when every variant of an approach fails *identically*, the approach is
+  wrong, not the parameters — we burned many cycles tuning activation before questioning whether to
+  activate at all. Also: launching the app from an automation shell (`open` from Claude Code's bash)
+  is a valid way to test the UI, but it does NOT change activation eligibility here (Finder launch
+  behaved the same) — and running the binary *directly* from a shell breaks its TCC attribution
+  (prints "waiting on Accessibility grant"), so always launch the `.app` via `open`/Finder.
+
 ### Build — daemon audio path + real shell (2026-07-14/15)
 
 **Daemon (additive — M1 text path still works, now with spoken replies):**

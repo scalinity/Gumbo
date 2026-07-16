@@ -94,6 +94,7 @@ final class GumboController {
     private let notch = NotchController()
     private let bubbles = BubbleController()
     private let confirm = ConfirmController()
+    private let quickText = QuickTextController()
     private lazy var dashboard = DashboardWindow()
 
     private var daemonState = "idle"
@@ -112,6 +113,11 @@ final class GumboController {
         // M4: notch confirms answer supervisor escalations (deny happens daemon-side on timeout).
         confirm.onRespond = { [weak self] id, approved in
             self?.ws.sendJSON(["type": "confirm_response", "id": id, "approved": approved])
+        }
+        // Quick text: ⌃Space opens the box; a submission rides the existing debug_text path,
+        // so it drives the orchestrator identically to a spoken turn (no daemon changes).
+        quickText.onSubmit = { [weak self] text in
+            self?.ws.sendJSON(["type": "debug_text", "text": text])
         }
         ws.connect()
     }
@@ -139,6 +145,9 @@ final class GumboController {
             self.ws.sendJSON(["type": "ptt_release"])
             self.refreshState()
         }
+        // ⌃Space opens the text box (a Carbon registered hotkey, so it can grab keyboard focus).
+        // Independent of the ⌃⌥ PTT chord — no mic armed, nothing to cancel.
+        hotkeys.onQuickText = { [weak self] in self?.quickText.toggle() }
         hotkeys.startMonitoring()
     }
 
