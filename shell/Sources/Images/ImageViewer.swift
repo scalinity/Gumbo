@@ -17,12 +17,19 @@ final class ImageViewerController {
     func open(file: String) {
         model.reset(file: file)
         sendContext()
+        loadImage(file)
+        showPanel()
+    }
+
+    /// Load the full-res image; a failed fetch surfaces a notice instead of an eternal
+    /// spinner (review 🔵).
+    private func loadImage(_ file: String) {
         ImageFetch.load(file: file) { [weak self] image in
             guard let self, self.model.file == file else { return }
             self.model.image = image
+            if image == nil { self.model.notice = "Couldn't load the image" }
             self.sizePanel(for: image)
         }
-        showPanel()
     }
 
     func close() {
@@ -38,11 +45,7 @@ final class ImageViewerController {
         guard let current = model.file, current == editedFrom else { return }
         model.reset(file: file)
         sendContext()
-        ImageFetch.load(file: file) { [weak self] image in
-            guard let self, self.model.file == file else { return }
-            self.model.image = image
-            self.sizePanel(for: image)
-        }
+        loadImage(file)
     }
 
     /// image.edit_failed: leave the busy state with an honest notice (the daemon also
@@ -51,6 +54,13 @@ final class ImageViewerController {
         guard model.file == file else { return }
         model.busy = false
         model.notice = "Edit failed — try again"
+    }
+
+    /// WS (re)connected: the daemon's in-memory context died with it — re-arm so a voice
+    /// edit keeps targeting the image that is visibly open (review 🟡, corroborated).
+    func resendContext() {
+        guard model.file != nil else { return }
+        sendContext()
     }
 
     // MARK: internals
@@ -92,8 +102,12 @@ final class ImageViewerController {
         let visible = screen.visibleFrame
         let maxImage = NSSize(width: visible.width * 0.65, height: visible.height * 0.8 - ViewerChrome.height)
         let pixels = image?.size ?? NSSize(width: 1536, height: 1024)
-        let scale = min(maxImage.width / pixels.width, maxImage.height / pixels.height, 1)
-        let imageSize = NSSize(width: max(320, pixels.width * scale), height: max(220, pixels.height * scale))
+        var scale = min(maxImage.width / pixels.width, maxImage.height / pixels.height, 1)
+        // Enforce the minimum by scaling BOTH dimensions: independent per-axis clamps
+        // would break the area's aspect, letterbox the image inside the overlay, and
+        // shift brush coordinates off the daemon's mask (review 🔵, corroborated).
+        scale = max(scale, 320 / pixels.width, 220 / pixels.height)
+        let imageSize = NSSize(width: pixels.width * scale, height: pixels.height * scale)
         model.imageAreaSize = imageSize
         let size = NSSize(width: imageSize.width, height: imageSize.height + ViewerChrome.height)
         position(size: size)
@@ -133,10 +147,13 @@ final class ImageViewerController {
             "strokes": model.strokes.map { $0.wireForm },
         ])
         // Local failsafe: if neither image.created nor image.edit_failed ever arrives
-        // (daemon died mid-edit), don't spin forever.
-        let expected = file
+        // (daemon died mid-edit), don't spin forever. Generation-scoped (review 🔵):
+        // a (file, busy) check alone would let a stale timer from a failed first edit
+        // fire into a retry on the same file with a false "No result".
+        model.editGeneration += 1
+        let generation = model.editGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 240) { [weak self] in
-            guard let self, self.model.file == expected, self.model.busy else { return }
+            guard let self, self.model.editGeneration == generation, self.model.busy else { return }
             self.model.busy = false
             self.model.notice = "No result — check the dashboard"
         }
@@ -183,6 +200,8 @@ final class ViewerModel: ObservableObject {
     @Published var prompt = ""
     @Published var busy = false
     @Published var notice: String?
+    /// Monotonic edit counter — scopes the submit failsafe to its own edit (review 🔵).
+    var editGeneration = 0
 
     func reset(file: String) {
         self.file = file
@@ -263,8 +282,8 @@ private struct ImageViewerView: View {
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fit)
                 BrushOverlay(model: model, onSelectionChange: onSelectionChange)
-            } else {
-                ProgressView()
+            } else if model.notice == nil {
+                ProgressView() // still loading; a failed load shows the header notice instead
             }
         }
         .frame(width: model.imageAreaSize.width, height: model.imageAreaSize.height)

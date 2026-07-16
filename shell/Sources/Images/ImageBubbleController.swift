@@ -59,7 +59,10 @@ final class ImageBubbleController {
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         panel.animator().alphaValue = 1
-        ImageFetch.load(file: file) { image in model.image = image }
+        ImageFetch.load(file: file) { image in
+            model.image = image
+            model.failed = image == nil
+        }
         scheduleExpiry(file)
         layout()
     }
@@ -146,6 +149,7 @@ enum ImageFetch {
 final class ThumbModel: ObservableObject {
     let file: String
     @Published var image: NSImage?
+    @Published var failed = false // fetch failed — show a broken-image mark, not an eternal spinner
 
     init(file: String) {
         self.file = file
@@ -168,7 +172,13 @@ private struct ImageThumbView: View {
                 } else {
                     ZStack {
                         Tokens.surface
-                        ProgressView().controlSize(.small)
+                        if model.failed {
+                            Image(systemName: "photo.badge.exclamationmark")
+                                .font(.system(size: 16))
+                                .foregroundStyle(Tokens.faint)
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
                     }
                 }
             }

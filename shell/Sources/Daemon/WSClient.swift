@@ -7,6 +7,10 @@ import Foundation
 final class WSClient: NSObject, URLSessionWebSocketDelegate {
     var onMessage: (([String: Any]) -> Void)?
     var onBinary: ((Data) -> Void)?
+    /// Fires (on main) after every successful open + hello — reconnects included. Used
+    /// to re-arm daemon-side state that died with a restart (M5.5: the image viewer's
+    /// context), mirroring how the daemon re-syncs bubbles on hello (review 🟡).
+    var onConnect: (() -> Void)?
 
     private let url = URL(string: "ws://127.0.0.1:8737/ws")!
     private var session: URLSession?
@@ -71,6 +75,7 @@ final class WSClient: NSObject, URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didOpenWithProtocol protocol: String?) {
         sendJSON(["type": "hello", "role": "shell"])
+        DispatchQueue.main.async { self.onConnect?() }
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,

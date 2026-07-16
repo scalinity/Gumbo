@@ -117,6 +117,9 @@ final class GumboController {
         bubbles.onStackBottomChange = { [weak self] y in self?.imageBubbles.setStackBottom(y) }
         imageBubbles.onOpen = { [weak self] file in self?.imageViewer.open(file: file) }
         imageViewer.onSend = { [weak self] json in self?.ws.sendJSON(json) }
+        // Daemon restarts lose the in-memory image_context while the viewer sits open —
+        // re-arm it on every (re)connect so voice edits keep working (review 🟡).
+        ws.onConnect = { [weak self] in self?.imageViewer.resendContext() }
         // M4: notch confirms answer supervisor escalations (deny happens daemon-side on timeout).
         confirm.onRespond = { [weak self] id, approved in
             self?.ws.sendJSON(["type": "confirm_response", "id": id, "approved": approved])
