@@ -290,7 +290,9 @@ export class Supervisor {
     };
   }
 
-  private async runModel(questions: AskedQuestion[], signal?: AbortSignal): Promise<string> {
+  // protected: tests subclass Supervisor to inject a model failure/outage (there is no
+  // other seam to exercise the degrade-vs-abort fork without a live gpt-5.6-terra call).
+  protected async runModel(questions: AskedQuestion[], signal?: AbortSignal): Promise<string> {
     const rendered = questions
       .map((q, i) => {
         const options = (q.options ?? []).map((o) => `${o.label}: ${o.description ?? ''}`).join('; ');

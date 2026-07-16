@@ -167,6 +167,35 @@ test('gateForHook answers AskUserQuestion; cap requests interrupt', async () => 
   assert.ok(capped.capHit);
 });
 
+test('supervisor-model outage degrades to a safe default (counts to cap); abort propagates', async () => {
+  const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  // Subclass to inject a model failure — the only seam without a live gpt-5.6-terra call.
+  class ThrowingSupervisor extends Supervisor {
+    protected async runModel(): Promise<string> {
+      throw new Error('supervisor model down');
+    }
+  }
+  const sup = new ThrowingSupervisor({
+    taskId: 't1', title: 'T', brief: 'b', cwd: CWD,
+    store: { addEvent: (_t, type, payload) => void events.push({ type, payload: payload as Record<string, unknown> }) },
+    escalate: async () => false,
+    setBlocked: () => {},
+    maxInterventions: 5,
+  });
+
+  // Model outage (not aborted) → degrade, not throw; still counts as an intervention.
+  const r = await sup.gateTool('AskUserQuestion', { questions: [{ question: 'X?' }] });
+  assert.equal(r.behavior, 'deny');
+  assert.match((r as { message: string }).message, /best judgment/);
+  const reply = events.find((e) => e.payload.kind === 'reply');
+  assert.equal(reply?.payload.degraded, true);
+
+  // Aborted mid-call → propagate (task is being cancelled), roll back the reserved slot.
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(() => sup.gateTool('AskUserQuestion', { questions: [{ question: 'Y?' }] }, ac.signal));
+});
+
 test('writeLog lands supervisor.md in the workspace', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'gumbo-sup-'));
   const sup = makeSupervisor({});

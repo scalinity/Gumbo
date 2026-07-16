@@ -146,6 +146,40 @@ test('undoSession rewinds a live session, degrades when none', async () => {
   assert.match(await manager.undoSession('ghost'), /No Claude session/);
 });
 
+test('an auth-marked runner error records a clean, actionable failure (review 🔴/🟡)', async () => {
+  const { store, manager } = freshManager(async () => {
+    throw new Error('auth: Claude Code needs you to log in again — run `claude`, then `/login`.');
+  });
+  const task = manager.spawnClaudeSession('Codes', 'do work', null);
+  await settle();
+  assert.equal(store.getTask(task.id)?.status, 'failed');
+  const finished = store.listEvents({ taskId: task.id }).find((e) => e.type === 'task.finished');
+  const payload = finished?.payload as { reason?: string; error?: string };
+  assert.equal(payload?.reason, 'auth', "the 'auth:' prefix must be detected on err.message");
+  assert.ok(!payload?.error?.startsWith('auth:'), 'the prefix is stripped from the recorded error');
+  assert.match(String(payload?.error), /log in again/);
+});
+
+test('undoSession refuses while the task is paused with a live runner (needs_input)', async () => {
+  const undone: string[] = [];
+  // Runner asks for plan approval; approvePlan never resolves → the task sits needs_input
+  // with a LIVE runner (run() still pending), exactly the pending-confirm state where a
+  // reentrant rewindFiles would hang the voice turn.
+  const { store, manager } = freshManager(
+    async (opts) => {
+      await opts.onPlanReady!('1. do X');
+      return { parked: false, report: '' };
+    },
+    { approvePlan: () => new Promise<boolean>(() => {}), undone },
+  );
+  const task = manager.spawnClaudeSession('Paused', 'edit', null);
+  await settle();
+  assert.equal(store.getTask(task.id)?.status, 'needs_input');
+  const msg = await manager.undoSession(task.id);
+  assert.match(msg, /paused waiting on you/);
+  assert.deepEqual(undone, [], 'undo() must NOT be called while a confirm is pending');
+});
+
 test('cancel() returns false for an unknown task', () => {
   const { manager } = freshManager(async () => ({ parked: false, report: '' }));
   assert.equal(manager.cancel('nope'), false);

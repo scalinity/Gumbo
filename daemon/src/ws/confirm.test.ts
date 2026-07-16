@@ -70,3 +70,15 @@ test('a pre-aborted signal denies without prompting', async () => {
   assert.equal(await bridge.request('t', 'Task', 'Run: x', 'reason', ac.signal), false);
   assert.ok(!sent.some((m) => m.type === 'confirm_request'), 'no prompt for an already-cancelled task');
 });
+
+test('per-request timeoutMs overrides the default (plan approval gets a longer window)', async () => {
+  const { hub, sent } = fakeHub(true);
+  const bridge = new ConfirmBridge(hub, 20); // short default
+  // A 40 ms override must NOT auto-deny at the 20 ms default — the request is still pending.
+  const p = bridge.request('t', 'Task', 'Approve plan?', 'summary', undefined, 40);
+  const req = sent.find((m) => m.type === 'confirm_request') as { id?: string; timeout_ms?: number } | undefined;
+  assert.equal(req?.timeout_ms, 40, 'the shell is told the overridden window');
+  await new Promise((r) => setTimeout(r, 25)); // past the default, before the override
+  bridge.handleResponse(req!.id!, true);
+  assert.equal(await p, true, 'answered within the overridden window, not auto-denied at the default');
+});
