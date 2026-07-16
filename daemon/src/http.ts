@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { config } from './config.ts';
 import type { Store } from './events/store.ts';
@@ -47,6 +47,31 @@ export function createHttpServer(store: Store) {
         return;
       }
       res.end(JSON.stringify(task));
+      return;
+    }
+
+    // M5: the reminders list (upcoming first, then past) — the dashboard bootstraps from
+    // here and live-updates off reminder.* events.
+    if (url.pathname === '/api/schedule') {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify(store.listSchedules()));
+      return;
+    }
+
+    // M5: gallery listing, newest first. The filesystem is the source of truth (images
+    // outlive any event cap); only names travel — bytes stream via /files/images/<name>.
+    if (url.pathname === '/api/images') {
+      res.setHeader('Content-Type', 'application/json');
+      let entries: Array<{ file: string; ts: number }> = [];
+      try {
+        entries = readdirSync(config.home.images)
+          .filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
+          .map((f) => ({ file: f, ts: statSync(join(config.home.images, f)).mtimeMs }))
+          .sort((a, b) => b.ts - a.ts);
+      } catch {
+        // images dir missing (fresh GUMBO_HOME) → empty gallery, not a 500
+      }
+      res.end(JSON.stringify(entries));
       return;
     }
 

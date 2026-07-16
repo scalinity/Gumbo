@@ -4,8 +4,10 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.ts';
 import { webQuickLookup } from '../search/tavily.ts';
+import { runImageGeneration } from '../images/generate.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
+import type { Scheduler } from '../schedule/scheduler.ts';
 
 // Keep note filenames confined to the notes/ dir — one flat, predictable slug per topic.
 function noteSlug(topic: string): string {
@@ -17,7 +19,21 @@ function noteSlug(topic: string): string {
   return slug || 'untitled';
 }
 
-export function createOrchestratorTools(manager: TaskManager, store: Store) {
+// Spoken-friendly fire time for tool results (the model relays these nearly verbatim).
+function fireAtLabel(ms: number): string {
+  return new Date(ms).toLocaleString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+/** M5 seams the tools need beyond manager/store: the scheduler, and the orchestrator's
+ *  proactive-speech path (image completions announce through it). */
+export interface OrchestratorToolDeps {
+  scheduler: Scheduler;
+  announce: (coldText: string, liveInstructions: string) => Promise<void>;
+}
+
+export function createOrchestratorTools(manager: TaskManager, store: Store, deps: OrchestratorToolDeps) {
   const spawnSubagent = tool({
     name: 'spawn_subagent',
     description:
@@ -161,6 +177,91 @@ export function createOrchestratorTools(manager: TaskManager, store: Store) {
     },
   });
 
+  // M5: image generation takes tens of seconds — never block the voice turn on it. The
+  // tool acks instantly; the background half emits image.created (filename only) and
+  // speaks a brief completion through the M3 announce path when the PNG lands.
+  const generateImage = tool({
+    name: 'generate_image',
+    description:
+      'Generate an image from a text prompt. Returns immediately — the image lands in the ' +
+      "dashboard gallery seconds later and you will be told when it's ready, so tell the user " +
+      "it's on the way and move on. Write a vivid, self-contained prompt.",
+    parameters: z.object({
+      prompt: z.string().describe('Complete visual description of the image to generate'),
+      shape: z
+        .enum(['square', 'landscape', 'portrait'])
+        .default('square')
+        .describe("'landscape' for wallpapers and scenes, 'portrait' for people or posters, 'square' otherwise"),
+    }),
+    execute: async ({ prompt, shape }) => {
+      // Fire-and-forget: runImageGeneration handles (and speaks) its own failures; this
+      // catch only guards the announce path itself so nothing becomes an unhandled rejection.
+      runImageGeneration({ prompt, shape, store, announce: deps.announce }).catch((err: unknown) => {
+        store.addEvent(null, 'session.error', { message: `image announce: ${String(err)}` });
+      });
+      return "Image generation started in the background — tell the user it's on the way. You will be told when it lands in his gallery; no need to wait.";
+    },
+  });
+
+  // M5 reminders: one call, both halves — a schedule row (Gumbo speaks it when it fires)
+  // AND an EventKit mirror in Reminders.app (OS-durable, fires even if Gumbo is off).
+  const setReminder = tool({
+    name: 'set_reminder',
+    description:
+      "Set a reminder for the user. It goes into Gumbo's own scheduler (you will speak it at the " +
+      'right time) AND into Reminders.app (so it fires even if Gumbo is off). You must resolve ' +
+      'natural phrasing ("at 5", "in 10 minutes") to an absolute future local date-time yourself ' +
+      'using the current date and time from your instructions.',
+    parameters: z.object({
+      text: z.string().describe('What to remind the user about, in his words'),
+      fire_at: z
+        .string()
+        .describe('Absolute LOCAL date-time, ISO 8601 with no timezone suffix, e.g. 2026-07-16T17:00:00'),
+    }),
+    execute: async ({ text, fire_at }) => {
+      // Date.parse of a no-offset ISO date-time is local time (ES2015+) — exactly the
+      // contract the parameter asks for.
+      const fireAtMs = Date.parse(fire_at);
+      if (Number.isNaN(fireAtMs)) {
+        return `Could not parse "${fire_at}" — pass an ISO local date-time like 2026-07-16T17:00:00.`;
+      }
+      if (fireAtMs <= Date.now()) {
+        return `${fireAtLabel(fireAtMs)} is in the past — reminders must be in the future. Re-resolve the time and try again.`;
+      }
+      const row = deps.scheduler.setReminder(text, fireAtMs);
+      return `Reminder set for ${fireAtLabel(row.fire_at)} (internal id ${row.id} — never say it aloud).`;
+    },
+  });
+
+  const listReminders = tool({
+    name: 'list_reminders',
+    description:
+      "List the user's reminders — upcoming first, then recently fired/cancelled. Use it to answer " +
+      '"what are my reminders" and to find the id for cancel_reminder.',
+    parameters: z.object({}),
+    execute: async () => {
+      const rows = deps.scheduler.listReminders();
+      if (rows.length === 0) return 'No reminders.';
+      return rows
+        .map((r) => `${r.id} · ${r.status} · ${fireAtLabel(r.fire_at)} · ${r.text}`)
+        .join('\n');
+    },
+  });
+
+  const cancelReminder = tool({
+    name: 'cancel_reminder',
+    description:
+      'Cancel a pending reminder (removes it from both the scheduler and Reminders.app). Get the ' +
+      'id from list_reminders; ids are internal — never say one aloud.',
+    parameters: z.object({ reminder_id: z.string() }),
+    execute: async ({ reminder_id }) => {
+      const row = deps.scheduler.cancelReminder(reminder_id);
+      return row
+        ? `Cancelled the reminder "${row.text}".`
+        : `No pending reminder with that id — it may have fired or been cancelled already. Check list_reminders.`;
+    },
+  });
+
   // Hot path: Tavily, hard-capped at config.search.quickLookupTimeoutMs, no retries. The
   // description below IS the router between this and spawn_subagent — its wording is part
   // of the spec; don't loosen it.
@@ -182,5 +283,9 @@ export function createOrchestratorTools(manager: TaskManager, store: Store) {
     execute: async ({ query, topic }) => webQuickLookup(query, topic),
   });
 
-  return [spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, listTasks, getTaskStatus, cancelTask, readReport, saveNote];
+  return [
+    spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup,
+    generateImage, setReminder, listReminders, cancelReminder,
+    listTasks, getTaskStatus, cancelTask, readReport, saveNote,
+  ];
 }

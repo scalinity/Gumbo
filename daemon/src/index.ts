@@ -5,6 +5,7 @@ import { createHttpServer } from './http.ts';
 import { Hub } from './ws/hub.ts';
 import { ConfirmBridge } from './ws/confirm.ts';
 import { TaskManager } from './tasks/manager.ts';
+import { Scheduler } from './schedule/scheduler.ts';
 import { Orchestrator } from './realtime/session.ts';
 
 const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY'].filter((k) => !process.env[k]);
@@ -34,7 +35,16 @@ const manager = new TaskManager(
   (taskId, taskTitle, plan, signal) =>
     confirms.request(taskId, taskTitle, 'Approve Claude’s plan?', plan.replace(/\s+/g, ' ').slice(0, 140), signal, config.claude.planConfirmTimeoutMs),
 );
-const orchestrator = new Orchestrator(store, hub, manager);
+// M5: the Gumbo-owned scheduler. Its fire loop delivers through the M3 announce path —
+// live session injection when one is open, cold one-shot TTS otherwise (never opens a
+// session just to remind). Reminder text is the user's own words from his own request.
+const scheduler = new Scheduler(store, hub);
+const orchestrator = new Orchestrator(store, hub, manager, scheduler);
+scheduler.onFire = (row) =>
+  orchestrator.speakProactively(
+    `the user, reminder: ${row.text}.`,
+    `A reminder the user set has just come due: "${row.text}". Deliver it to him now — brief and direct, one sentence. Do not mention ids or the scheduler.`,
+  );
 manager.onFinished = (task) => {
   // Floating promise: an unexpected sync throw (dead transport, store failure) would
   // otherwise become an unhandled rejection and take the whole daemon down.
@@ -46,6 +56,12 @@ manager.onFinished = (task) => {
 // Events go to dashboards AND the shell (M3.1): the bubble mini-panel live-tails its
 // task's activity. The shell ignores types it doesn't render.
 store.onEvent((event) => hub.broadcast({ type: 'event', event }));
+
+// M5: a fired reminder pulses the notch — the visual cue beside the spoken delivery.
+// The shell's pulse already defers to a live session display, so always sending is safe.
+store.onEvent((event) => {
+  if (event.type === 'reminder.fired') hub.broadcast({ type: 'notch_pulse', status: 'reminder' }, 'shell');
+});
 
 // M3 completion presence: mirror the task lifecycle to the shell as bubbles, pulse the
 // notch on completion, and remove finished bubbles after a linger (registered after the
@@ -111,6 +127,9 @@ hub.onMessage((msg, role) => {
     // Role is self-asserted at hello, so this inherits the existing loopback trust model
     // (any local client can claim 'shell') rather than widening it — track for M4.1 auth.
     confirms.handleResponse(msg.id, msg.approved === true);
+  } else if (msg.type === 'reminder_created' && role === 'shell' && typeof msg.id === 'string') {
+    // M5: EventKit's answer to create_reminder — store the Reminders.app id on the row.
+    scheduler.handleReminderCreated(msg.id, typeof msg.eventkit_id === 'string' ? msg.eventkit_id : null);
   }
 });
 
@@ -123,6 +142,10 @@ hub.onClose((role) => {
 hub.onBinary((frame, role) => {
   if (role === 'shell') orchestrator.handleMicFrame(frame);
 });
+
+// Pending schedule rows persisted by a previous run resume here — the first sweep is one
+// poll interval in (grace for the shell to reconnect before an overdue reminder speaks).
+scheduler.start();
 
 server.listen(config.port, config.host, () => {
   console.log(`gumbo daemon listening on http://${config.host}:${config.port} (ws: /ws)`);
