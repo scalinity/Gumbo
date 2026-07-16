@@ -116,7 +116,9 @@ export class Store {
     this.db.prepare('UPDATE schedule SET status = ? WHERE id = ?').run(status, id);
   }
 
-  setScheduleEventkitId(id: string, eventkitId: string) {
+  /** null clears the stored Reminders.app twin id (used once a removal was re-sent, so
+   *  the re-send is itself one-shot). */
+  setScheduleEventkitId(id: string, eventkitId: string | null) {
     this.db.prepare('UPDATE schedule SET eventkit_id = ? WHERE id = ?').run(eventkitId, id);
   }
 

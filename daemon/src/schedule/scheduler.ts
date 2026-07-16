@@ -106,6 +106,28 @@ export class Scheduler {
     return this.store.listSchedules(limit);
   }
 
+  /**
+   * Shell (re)connected: repair the EventKit mirror (review 🟡, corroborated). The
+   * create/remove broadcasts are one-shot, so anything sent while no shell was connected
+   * (relaunch window, dashboard-driven sessions) was silently dropped — leaving a pending
+   * reminder without its OS-durable twin, or worse, a CANCELLED reminder whose twin
+   * still notifies in Reminders.app. Re-send creation for pending rows without a twin
+   * and removal for cancelled rows with one (clearing the stored id so the removal
+   * re-send is itself one-shot). Known trade-off: if a twin was created but the
+   * reminder_created reply was lost mid-flight, the re-create duplicates the
+   * Reminders.app entry — rarer and more benign than a lost or undead reminder.
+   */
+  resyncEventKit() {
+    for (const row of this.store.listSchedules(200)) {
+      if (row.status === 'pending' && !row.eventkit_id) {
+        this.hub.broadcast({ type: 'create_reminder', id: row.id, text: row.text, fire_at: row.fire_at }, 'shell');
+      } else if (row.status === 'cancelled' && row.eventkit_id) {
+        this.hub.broadcast({ type: 'remove_reminder', id: row.id, eventkit_id: row.eventkit_id }, 'shell');
+        this.store.setScheduleEventkitId(row.id, null);
+      }
+    }
+  }
+
   /** Shell reply to create_reminder. A null eventkit_id means EventKit refused (no TCC
    *  grant, no calendar) — the row still fires daemon-side, so nothing else to do. If the
    *  row was cancelled while the shell was still creating the entry, remove the fresh

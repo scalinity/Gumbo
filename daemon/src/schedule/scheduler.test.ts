@@ -161,6 +161,31 @@ test('the poll loop fires due rows on its own (start/stop)', async () => {
   }
 });
 
+test('resyncEventKit repairs the mirror on shell hello: re-create missing twins, remove surviving cancelled twins once', () => {
+  const { scheduler, store, hub } = setup();
+  const now = Date.now();
+  const orphanPending = scheduler.setReminder('never mirrored', now + 60_000); // no reply came back
+  const mirrored = scheduler.setReminder('mirrored fine', now + 60_000);
+  scheduler.handleReminderCreated(mirrored.id, 'EK-OK');
+  const undead = scheduler.setReminder('cancelled but twin survives', now + 60_000);
+  scheduler.handleReminderCreated(undead.id, 'EK-UNDEAD');
+  scheduler.cancelReminder(undead.id); // remove_reminder broadcast below simulates being lost:
+  hub.sent.length = 0; // shell was down for everything above — now it reconnects
+
+  scheduler.resyncEventKit();
+  const creates = hub.sent.filter((s) => s.msg.type === 'create_reminder');
+  const removes = hub.sent.filter((s) => s.msg.type === 'remove_reminder');
+  assert.deepEqual(creates.map((s) => s.msg.id), [orphanPending.id], 're-create ONLY the un-mirrored pending row');
+  assert.deepEqual(removes.map((s) => s.msg.eventkit_id), ['EK-UNDEAD'], 're-remove ONLY the surviving cancelled twin');
+  assert.equal(store.getSchedule(undead.id)?.eventkit_id, null, 'cleared so the removal re-send is one-shot');
+
+  // A second hello re-sends only what is still unrepaired (the pending orphan).
+  hub.sent.length = 0;
+  scheduler.resyncEventKit();
+  assert.equal(hub.sent.filter((s) => s.msg.type === 'remove_reminder').length, 0);
+  assert.deepEqual(hub.sent.filter((s) => s.msg.type === 'create_reminder').map((s) => s.msg.id), [orphanPending.id]);
+});
+
 test('listSchedules orders upcoming (soonest first) before past (newest first)', () => {
   const { scheduler, store } = setup();
   const now = Date.now();

@@ -113,6 +113,9 @@ hub.onHello((role) => {
     if (task.status !== 'running' && task.status !== 'needs_input') continue;
     hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status: task.status }, 'shell');
   }
+  // M5: repair the EventKit mirror — create/remove broadcasts dropped while no shell
+  // was connected get re-sent now (pending w/o twin, cancelled w/ surviving twin).
+  scheduler.resyncEventKit();
 });
 
 hub.onMessage((msg, role) => {
