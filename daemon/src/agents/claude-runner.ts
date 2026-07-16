@@ -169,7 +169,10 @@ export function buildSandboxProfile(cwd: string, taskId: string, proxyPort: numb
     // hostname CONNECTs the proxy resolves upstream, so it needs no local name resolution.
     '(deny network*)',
     `(allow network-outbound (remote ip "localhost:${proxyPort}"))`,
-    '(allow network-bind (local ip "localhost:*"))',
+    // No network-bind allow: `(deny network*)` denies inbound anyway (a bound server couldn't
+    // accept), and outbound is locked to the proxy port (a sandboxed client couldn't reach a
+    // sandboxed server), so a bind rule would grant the headless session nothing usable — the
+    // profile states only what it actually allows (review 🔵).
     // review 🔴: `(deny network*)` only blocks the process's OWN sockets. getaddrinfo/dns.lookup
     // resolve via mDNSResponder — a separate daemon reached over mach IPC that `(allow default)`
     // still permits — so DNS queries bypass the proxy entirely (verified: a DNS-label exfil of the

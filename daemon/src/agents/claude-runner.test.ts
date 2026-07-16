@@ -86,6 +86,7 @@ test('buildSandboxProfile: confines writes to cwd + workspace, denies secret rea
   assert.ok(p.includes('(deny mach-lookup (global-name "com.apple.mDNSResponder"))'), 'mDNSResponder mach-lookup denied (no DNS bypass)');
   assert.ok(p.includes('(deny mach-lookup (global-name "com.apple.mDNSResponder.dnsproxy"))'), 'mDNSResponder dnsproxy denied');
   assert.ok(!p.includes('(allow network-outbound (remote unix-socket))'), 'blanket unix-socket egress allow dropped');
+  assert.ok(!p.includes('network-bind'), 'no network-bind allow (grants nothing usable under deny-inbound + proxy-only outbound)');
   // last-match-wins: deny-network must come AFTER (allow default), and the loopback re-allow
   // AFTER the deny — otherwise the proxy would be unreachable and every request would fail.
   assert.ok(p.indexOf('(allow default)') < p.indexOf('(deny network*)'), 'deny-network overrides allow-default');
