@@ -146,14 +146,15 @@ Current event `type`s: `transcript.user`, `transcript.assistant`, `tool.call`, `
 `session.opened`, `session.closed`, `session.error`. M4 added `claude.message`, `claude.tool_use`,
 `claude.tool_result`, `claude.plan` (a plan awaiting the user's approval), `supervisor.decision`, and
 `task.status` (mid-run `needs_input` ⇄ `running` flips — plan review, confirm pending, intervention
-cap, resume). M5 adds `image.created`.
+cap, resume). M5 adds `image.created` (payload carries the **filename only** — base64 never rides
+the event stream) and the scheduler lifecycle: `reminder.set`, `reminder.fired`, `reminder.cancelled`.
 
 **Message types** (see `daemon/src/ws/protocol.ts`, extended per phase):
 - shell → daemon: `hello`, (M2) `ptt_start`/`ptt_stop`, mic binary, `confirm_response`,
   `kill_switch`, (M5) `reminder_created`, (M6) `ax_tree`/`ax_result`/`screenshot`.
 - daemon → shell: `session_state`, speaker binary, `audio_interrupted`, `notch_transcript`,
-  `bubble_upsert`/`bubble_remove`, `notch_pulse`, `confirm_request`, (M5) `create_reminder`,
-  (M6) `computer_cmd`.
+  `bubble_upsert`/`bubble_remove`, `notch_pulse` (M5 adds status `reminder`), `confirm_request`,
+  (M5) `create_reminder`/`remove_reminder`, (M6) `computer_cmd`.
 - dashboard ⇄ daemon: `hello`, `debug_text`, `task_action{cancel}`; daemon → `event`,
   `session_state`, `assistant_delta`.
 
@@ -326,11 +327,35 @@ Set `failIfUnavailable: true` (fail closed) and surface a clear message if the p
 sandbox, rather than silently running unconfined. Kick this off as its own supervised Claude
 session (prompt in IMPLEMENTATION_NOTES §M4.1).
 
-### M5 — Images + reminders
+### M5 — Images + a Gumbo-owned scheduler (reminders)  ✅ built (daemon tests + smoke green; live voice demo pending)
 
-- `generate_image` (`gpt-image-2`) → `~/Gumbo/images/` + dashboard gallery + bubble/notch thumbnail.
-- `set_reminder` → shell **EventKit** (`requestFullAccessToReminders`, `NSRemindersFullAccessUsageDescription`),
-  not AppleScript (100× slower).
+- `generate_image` (`gpt-image-2`, id + response shape verified live 2026-07-16): base64 PNG
+  decoded daemon-side into `~/Gumbo/images/`, `image.created` event carrying the **filename
+  only**, dashboard gallery thumbnail (from `/files/images/`) with a lightbox. Generation takes
+  tens of seconds, so the tool acks instantly and a brief spoken completion rides the M3
+  announce path when the file lands (no task/workspace — deliberately lightweight).
+- **Reminders = a persistent Gumbo-owned scheduler**, not a one-shot. sqlite `schedule` table
+  (`id, fire_at, kind, text, status pending|fired|cancelled, eventkit_id, created_at`) + a
+  ~20 s poll loop (`daemon/src/schedule/`): due pending rows are marked fired (at-most-once),
+  emit `reminder.fired`, and are spoken via the M3 announce pipeline — injected into a live
+  session, else cold one-shot TTS (`0x02`) + a gold notch pulse; **never opens a session just
+  to remind**. Restart-safe: rows persist, polling resumes on boot, and the restart reaper
+  never touches schedule rows. `kind` + the text payload are the extensibility seam (recurring
+  digests, timed task spawns later) — M5 ships only `kind:'reminder'`, one-shot.
+- `set_reminder(text, fire_at)` does BOTH halves, complementary: (a) a schedule row — Gumbo's
+  own awareness, spoken when awake; (b) `create_reminder` → shell **EventKit**
+  (`requestFullAccessToReminders` + `NSRemindersFullAccessUsageDescription`, not AppleScript —
+  100× slower) → a Reminders.app entry that fires at the OS level even if the daemon is off or
+  the Mac is asleep; the shell replies `reminder_created` with the EventKit id, stored on the
+  row. The orchestrator resolves natural time ("at 5", "in 10 minutes") to an absolute local
+  ISO date-time (its instructions carry today's date **and time**); the daemon validates it's
+  in the future. `list_reminders` / `cancel_reminder` complete the scheduler (cancel removes
+  the row and best-effort removes the EventKit twin via `remove_reminder`).
+- **Honest limitation, designed around (not fought):** the poll loop only fires while the
+  daemon runs — a sleeping Mac fires late, on wake. EventKit is the reliable delivery; the
+  daemon scheduler is Gumbo's spoken presence when awake. Both together = complete.
+- Dashboard: images gallery + an upcoming/fired reminders list (bootstrap via `/api/images` +
+  `/api/schedule`, live via `image.created` / `reminder.*` events; no `useEffect`).
 
 **Demo:** "make me a wallpaper of a swamp at dusk and remind me at 5 to review it."
 

@@ -21,7 +21,11 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 - **Web search providers (side feature, merged from `worktree-web-search-providers`):** ✅ built +
   verified — Tavily on the voice hot path (`web_quick_lookup`), Exa for background sub-agents,
   FTS5 memory persistence, JSONL search audit log. See §Web search providers below.
-- **M4–M6:** not started. See SPEC §9.
+- **M4 — Claude Code + supervisor (+ M4.1 OS sandbox):** ✅ built + review-hardened + smoked
+  (see §M4) — live voice demo with the user pending.
+- **M5 — Images + Gumbo-owned scheduler:** ✅ built + smoked end-to-end on an isolated daemon
+  (see §M5) — live voice demo with the user pending (incl. the first-run Reminders TCC prompt).
+- **M6:** not started. See SPEC §9.
 
 ---
 
@@ -1117,6 +1121,117 @@ closed while keeping the session working *and* the network open in a single Seat
 the loopback filtering proxy (network default-deny) from `m41-spike/proxy-verify.mjs`. Flagged for
 the user; left as his capability-first call. The *fixable* credential surfaces (repo `.env`, gh/npm/
 cloud tokens, ssh/aws/gnupg) ARE now closed.
+
+---
+
+## M5 — Images + a Gumbo-owned scheduler (reminders) — 2026-07-16
+
+### Build
+
+- **Images:** `daemon/src/images/generate.ts` (raw fetch client, same conventions as
+  tavily/exa) behind a realtime `generate_image` tool. The tool **acks instantly** — generation
+  takes tens of seconds and must never block a voice turn — then the background half writes the
+  PNG to `~/Gumbo/images/<id>.png`, emits `image.created` with the **filename only**, and
+  speaks a brief completion. Deliberately no task/workspace (a full task is overkill for one
+  API call; the event + gallery are the observability).
+- **Scheduler:** `daemon/src/schedule/scheduler.ts` + a sqlite `schedule` table in the Store
+  (`id, fire_at, kind, text, status, eventkit_id, created_at`) + a 20 s poll loop. On fire:
+  mark fired → `reminder.fired` → deliver by speaking. `kind` is the extensibility seam
+  (recurring digests, timed task spawns later) — M5 ships only `kind:'reminder'`, one-shot.
+- **Announce path generalized, not duplicated:** `announceTaskFinished` was refactored into
+  shared `settleConnecting` / `speakCold` / `injectLive` helpers, and M5's deliveries go
+  through a new `Orchestrator.speakProactively(coldText, liveInstructions)` on the same rules —
+  inject live if a session is open, else cold one-shot TTS `0x02` + (for reminders) a gold
+  `notch_pulse {status:'reminder'}`; never opens a session just to speak; skips synthesis when
+  no shell is connected.
+- **Shell:** `Reminders/RemindersBridge.swift` — EventKit via `requestFullAccessToReminders`
+  (NOT AppleScript — ~100× slower), `NSRemindersFullAccessUsageDescription` added to
+  project.yml (**new TCC grant — first create_reminder prompts**; shell owns all TCC). Due-date
+  components + an absolute `EKAlarm` so Reminders.app actually notifies at fire time. Notch
+  pulse gained a gold 'reminder' case. Dashboard: gallery (thumbnails from `/files/images/`,
+  lightbox) + reminders rail section; `/api/images` (readdir, filesystem is source of truth) +
+  `/api/schedule` bootstrap, live updates from `image.created` / `reminder.*` events.
+
+### The scheduler-vs-EventKit split (why both, recorded per the brief)
+
+`set_reminder` writes BOTH halves because neither alone is complete:
+- The **daemon poll loop** is Gumbo's spoken presence — but it only fires while the daemon
+  runs. Mac asleep at fire time → it fires late, on wake; daemon off → not at all. We do not
+  fight this (no launchd, no wake scheduling) — that's what EventKit is for.
+- **EventKit** is the reliable OS-level delivery (Reminders.app fires even with the daemon off,
+  wakes for its notification, syncs across devices) — but it can't speak as Gumbo.
+So: schedule row = awareness + voice when awake; EventKit twin = durability. The shell replies
+`reminder_created` with the EventKit id, stored on the row so cancel can remove the twin
+(`remove_reminder`, best-effort).
+
+### Decisions that will matter later
+
+- **At-most-once fire:** a due row is marked `fired` BEFORE delivery. A crash mid-delivery
+  loses one spoken reminder (EventKit still notified); marking after would re-fire a throwing
+  row every 20 s forever. Delivery errors land as `session.error`, never unhandled.
+- **No immediate sweep on boot:** the first sweep is one poll interval after `start()`. At
+  daemon boot the shell hasn't reconnected yet (1.5 s retry loop), so a row that came due
+  while the daemon was down would speak into a shell-less hub and be silently lost; 20 s of
+  grace is nothing against the poll granularity, and EventKit already delivered on time if the
+  daemon was off.
+- **Late `reminder_created` after cancel:** if the shell's reply lands after the row was
+  cancelled, the scheduler immediately sends `remove_reminder` with the fresh id instead of
+  orphaning an entry in Reminders.app (and never adopts the id onto a cancelled row).
+- **Reaper untouched:** it only reconciles the `tasks` table; a pending reminder outliving the
+  daemon is the point. Unit-tested (restart reload + reap + fire).
+- **Time-of-day injection:** orchestrator instructions carried only the *date* — "in 10
+  minutes" needs the clock. `timeLabel()` (config.ts) joins `todayLabel()`; the daemon still
+  validates fire_at is in the future (`Date.parse` of a no-offset ISO string is local time,
+  which is exactly the tool's parameter contract).
+- **Tool count is now 14** against SPEC §10's "≤ ~10 forgiving tools" standing risk. Routing
+  held in the smoke (one turn → both `generate_image` and `set_reminder`), but watch the
+  orchestrator's tool selection as the registry grows.
+
+### Images API — verified live before building (2026-07-16)
+
+- `gpt-image-2` exists on `/v1/images/generations` (a dated snapshot `gpt-image-2-2026-04-21`
+  too). Request `{model, prompt, size}` → `data[0].b64_json`, base64 PNG (`output_format`
+  defaults to png); `usage` block included. Quality param accepted (`low` verified) but left to
+  the API default in the client — fewer knobs on a voice tool.
+- **Sizes are free-form**: any width×height divisible by 16 (probed via the API's own
+  invalid-size error — a free call). This differs from gpt-image-1's fixed size list. We still
+  expose only square/landscape/portrait (1024²/1536×1024/1024×1536) — a voice model doesn't
+  need a resolution picker.
+
+### GOTCHA (worktree dev): copy `.env`, don't symlink
+
+A symlinked worktree `.env` broke the M4.1 sandbox-profile test: `buildSandboxProfile`
+realpaths `.env` (resolving the symlink to the main checkout's path) while the test asserts
+the literal `secretFilePaths[0]` (the worktree path). Copy the file into worktrees instead.
+
+### Verified (how)
+
+- **120/120 daemon unit tests** (17 new): scheduler lifecycle (due fires once + event +
+  delivery; future rows wait; restart reload with reaper no-touch; cancel incl. EventKit twin
+  removal + no-fire; `create_reminder`/`reminder_created` message contract incl. the
+  late-reply-after-cancel race; throwing delivery contained; real poll loop start/stop;
+  list ordering), image generation (request serialization against the verified live shape;
+  PNG magic bytes on disk; `image.created` carries a filename and provably not the base64;
+  API-failure and empty-response paths both speak), `set_reminder` past/garbage-time guards,
+  M5 tools present in the registry (Firecrawl exclusion re-asserted).
+- **Full-path smoke** (real `src/index.ts` on GUMBO_PORT 8747, scratchpad GUMBO_HOME, fake
+  shell WS client): the adapted demo phrase — "make me a wallpaper of a swamp at dusk, and
+  remind me in 2 minutes to review it" — in ONE realtime turn produced both tool calls;
+  `set_reminder` resolved "in 2 minutes" to the correct absolute local time (time-injection
+  works); `create_reminder` hit the fake shell, its `reminder_created` (EK-SMOKE-1) landed on
+  the row (verified via `/api/schedule`); the image arrived in 49 s — real 1536×1024 PNG on
+  disk (the model picked landscape for "wallpaper" on its own), `image.created` filename-only,
+  live spoken completion; the poll loop fired the due row within one interval →
+  `reminder.fired` + gold `notch_pulse` + live spoken "the user, review the swamp wallpaper.";
+  a second reminder timed past the session idle-close exercised the **cold** branch (73 × 0x02
+  TTS frames at the fake shell + the gold pulse). Bonus: the **past-time guard recovered live** —
+  the model first passed a fire_at a few seconds in the past, got the tool's "in the past —
+  re-resolve" refusal, and self-corrected to a valid time on the next call. Shell builds +
+  signs clean (xcodegen + xcodebuild).
+- **Not yet verified:** the real EventKit write (the smoke's shell was fake — first real
+  create prompts for the new Reminders TCC grant) and the dashboard render (both dev ports
+  were held by the user's live daemon/vite during the build; data contracts are unit-covered).
+  Both land with the live demo.
 
 ---
 
