@@ -1,5 +1,5 @@
 import { RealtimeAgent, RealtimeSession } from '@openai/agents/realtime';
-import { config } from '../config.ts';
+import { config, todayLabel } from '../config.ts';
 import type { Store, TaskRow } from '../events/store.ts';
 import type { Hub } from '../ws/hub.ts';
 import type { TaskManager } from '../tasks/manager.ts';
@@ -9,10 +9,7 @@ import { createOrchestratorTools } from './tools.ts';
 
 // Rebuilt per session so the date is always current (sessions are short-lived).
 function instructions(): string {
-  const today = new Date().toLocaleDateString('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
-  });
-  return `You are Gumbo, the user's personal agent. Today is ${today}. You speak in short, natural,
+  return `You are Gumbo, the user's personal agent. Today is ${todayLabel()}. You speak in short, natural,
 conversational replies — you are a voice assistant even when the channel is text. Address the user
 as the user.
 Your superpower is delegation: for anything that takes real work (research, analysis, writing,

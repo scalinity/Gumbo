@@ -25,6 +25,14 @@ export const home = {
   served: ['tasks', 'images', 'notes'] as const,
 };
 
+/** Today's date for model instructions — built fresh per session/run so long-lived
+ *  daemons never drift; without it models assume their training-data "today". */
+export function todayLabel(): string {
+  return new Date().toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  });
+}
+
 export const config = {
   port,
   host: '127.0.0.1', // loopback only — do not bind all interfaces

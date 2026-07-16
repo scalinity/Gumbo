@@ -1,7 +1,7 @@
 import { Agent, run, tool, codeInterpreterTool } from '@openai/agents';
 import { z } from 'zod';
 import { Exa } from 'exa-js';
-import { config } from '../config.ts';
+import { config, todayLabel } from '../config.ts';
 import type { Store } from '../events/store.ts';
 
 let exa: Exa | null = null;
@@ -43,11 +43,8 @@ const webSearch = tool({
 // Rebuilt per run so the date is always current — without it the model assumes its
 // training-data "today" and returns stale results for time-sensitive briefs.
 function instructions(): string {
-  const today = new Date().toLocaleDateString('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
-  });
   return `You are a background sub-agent working for Gumbo, a personal voice assistant.
-Today is ${today} — treat words like "today", "latest", and "recent" relative to that date.
+Today is ${todayLabel()} — treat words like "today", "latest", and "recent" relative to that date.
 You were spawned to complete one task. Work autonomously — nobody will answer questions.
 Use web_search whenever current or factual information matters; include the current month and
 year in queries about recent events, prefer recently-published results, and cite source URLs.
