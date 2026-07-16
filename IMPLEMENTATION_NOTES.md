@@ -682,3 +682,74 @@ commits (9addb00…2f8959a), each built/tested, pushed to origin. Highlights:
   announce excerpt cap; cold-announce copy documented as announce-only by design.
 
 **M3 merged to main after this pass. SPEC §9 M3 marked ✅ DONE.**
+
+---
+
+## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15
+
+### Build
+- New `daemon/src/scrape/firecrawl.ts` — raw Firecrawl **v2** client (no SDK, same reasoning
+  as the exa-js removal) behind four background sub-agent tools in `agents/openai-runner.ts`:
+  `scrape_page`, `map_site`, `crawl_site`, `extract_structured`. **Content acquisition from
+  known URLs/sites only — never a third search provider**; Firecrawl `/search` is deliberately
+  not integrated, and `realtime/tools.test.ts` asserts on the actual registry that no
+  Firecrawl tool ever reaches the realtime session config.
+- `search/client.ts` generalized: `postJson` is now an alias of `requestJson`, which takes an
+  optional `method` (`GET`/`DELETE`) and optional body — needed for async-job polling and
+  cancellation. Same retry policy, typed errors, and audit conventions apply unchanged;
+  existing callers didn't move. `FIRECRAWL_API_KEY` joined boot validation + `.env`.
+- Persistence reuses the memory table verbatim: `persistResults` grew a `provider` param
+  (default `'exa'`), so every scraped/crawled page lands FTS5-indexed with source URL +
+  retrieval timestamp. Extract output is persisted as one row of pretty-printed JSON.
+
+### Verified against docs.firecrawl.dev + firecrawl.dev/pricing (2026-07-15)
+- Endpoints: `POST /v2/scrape` (sync), `POST /v2/map` (sync), `POST /v2/crawl` → job id,
+  polled via `GET /v2/crawl/{id}` (status `scraping|completed|failed`, paginated `next`
+  cursor in ~10 MB chunks), cancelled via `DELETE /v2/crawl/{id}`; `POST /v2/extract` → job
+  id, polled via `GET /v2/extract/{id}` (status `processing|completed|failed|cancelled`).
+  **No DELETE is documented for extract** — a task abort stops polling but can't kill the
+  server-side job (bounded: it only touches the given URLs).
+- **Credit costs (they justify the breadth defaults):** scrape and crawl are **1 credit per
+  page**; map is billed per page listed ("1 / page" on the pricing table — ambiguous whether
+  per-call, so our map default limit is 500); extract bills in credits at **15 tokens per
+  credit**; search is 2/10 results (unused). **The crawl API's own `limit` default is
+  10 000 pages** — a blind crawl at API defaults would be 10 000 credits, hence: default
+  100 pages / depth 3, cap sent as the API `limit` AND enforced client-side while
+  collecting. The client-side check caught a real bug in review: pagination followed the
+  `next` cursor once more *before* re-checking the cap (unit test caught it).
+- **robots.txt:** crawl respects it by default; `ignoreRobotsTxt` exists but is
+  enterprise-only and defaults false — we never set it, so compliance is structural.
+- **Polling, not webhooks:** the daemon binds loopback only, so Firecrawl's cloud can never
+  deliver a webhook. No documented recommended poll interval; we poll every 3 s under an
+  overall job budget (crawl 10 min, extract 5 min — background budgets in the spirit of Exa
+  `deep`'s 180 s). Crawl polls emit `crawl.status` events (only on progress change) so the
+  dashboard/bubble panel can watch a long crawl; any error/abort/budget exit with a live job
+  fires a best-effort remote DELETE so a dead task stops spending credits.
+- Audit: one JSONL line per logical operation (scrape / map / crawl job / extract job) at
+  terminal outcome with page count as `resultCount` — polls re-send only a job id, no new
+  query leaves the box, so they get no lines.
+- Extract's tool takes the JSON Schema **as a JSON string** — strict function schemas don't
+  take free-form object params; the tool parses and returns a model-facing error on bad JSON.
+
+### Gating (pre-M4)
+No permission engine yet (M4). scrape/map are auto-allowed like background search; crawl and
+extract ride the existing voice-triggered spawn-task flow — they only exist inside sub-agent
+runs the user deliberately spawns. M4 registration defaults recorded in CLAUDE.md.
+
+### Verified (how)
+- 63/63 unit tests green (`npm test -w daemon`): request serialization for all four ops, the
+  crawl job lifecycle (submit → poll → paginate → complete, failure, budget timeout, and
+  task-abort paths — the latter two assert the remote DELETE), client-side page-cap
+  enforcement, typed-error mapping (401 auth non-retried / 429 quota / abort timeout / 5xx
+  retried max twice), `requestJson` GET/DELETE contracts, and the no-Firecrawl-in-realtime
+  registry assertion.
+- Smoke 1 (real API, scratchpad `GUMBO_HOME`): scraped `bsky.app/profile/bsky.app` — a true
+  SPA that's an empty HTML shell without JS — into 50 991 chars of clean markdown; memory row
+  (provider `firecrawl`, ts, source URL), FTS5 `MATCH` hit, and `/scrape ok:true` audit line
+  all verified.
+- Smoke 2 (real API): mapped `docs.firecrawl.dev` (30 URLs) → selectively scraped 2 mapped
+  pages → crawled with `maxPages: 5`: exactly 5 pages returned (progress polls observed
+  `scraping 4/5 → 5/5 → completed`), page cap held, one audit line per operation.
+- **GOTCHA:** `/map` leans on sitemaps — `tsx.is` (no sitemap) mapped to just its homepage
+  while `docs.firecrawl.dev` returned a full URL list. If a map comes back near-empty, the
+  site probably has no sitemap; scrape/crawl still work there.

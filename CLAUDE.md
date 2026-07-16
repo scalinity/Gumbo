@@ -21,10 +21,11 @@ non-obvious (record *why*, not just *what*).
 ## Provider-client conventions (established by the web-search work — follow for any new provider)
 
 - **Secrets:** keys live in the repo-root `.env` (`OPENAI_API_KEY`, `EXA_API_KEY`,
-  `TAVILY_API_KEY`), loaded by `daemon/src/config.ts` via `process.loadEnvFile`, validated at
-  boot in `index.ts`. Keys are read from `process.env` inside the daemon only — never sent to,
-  or read by, the dashboard/shell.
-- **HTTP + retries:** all provider calls go through `postJson` in `daemon/src/search/client.ts`.
+  `TAVILY_API_KEY`, `FIRECRAWL_API_KEY`), loaded by `daemon/src/config.ts` via
+  `process.loadEnvFile`, validated at boot in `index.ts`. Keys are read from `process.env`
+  inside the daemon only — never sent to, or read by, the dashboard/shell.
+- **HTTP + retries:** all provider calls go through `requestJson`/`postJson` in
+  `daemon/src/search/client.ts` (GET/DELETE exist for async-job polling/cancellation).
   Retry only 429/5xx, max 2 retries, backoff 500 ms → 1500 ms. **Voice hot path passes
   `retries: 0`** — it fails fast instead of stacking backoff on a waiting voice turn.
 - **Typed errors:** throw `SearchError` with `kind` ∈ `timeout | auth | quota | empty_results |
@@ -43,10 +44,28 @@ non-obvious (record *why*, not just *what*).
   sub-agent tools only (`web_search`, `fetch_page_contents`) — full page text + highlights,
   deliberately **no `maxCharacters`/truncation anywhere** (quality over token cost). Don't cross
   these streams: the tool descriptions are the router, and their wording is load-bearing.
+- **Firecrawl = content acquisition, never search:** `scrape/firecrawl.ts` serves background
+  sub-agent tools only (`scrape_page`, `map_site`, `crawl_site`, `extract_structured`) — fetch,
+  crawl, map, and extract content from **known URLs/sites**. Firecrawl's `/search` endpoint is
+  deliberately not integrated (search belongs to Tavily + Exa), and no Firecrawl tool may ever
+  appear in the realtime session config (`realtime/tools.test.ts` asserts this on the registry).
+- **Crawl breadth bounds:** crawls are scope-bounded, not content-clamped — max-pages
+  (default 100) + max-depth (default 3) + include/exclude path patterns. The page cap is sent
+  as the API `limit` (whose own default is 10 000 pages = 10 000 credits) **and** enforced in
+  our client while collecting. Prefer map-then-selective-scrape over blind crawls. robots.txt
+  is respected (Firecrawl's default; never set `ignoreRobotsTxt`).
+- **Async jobs poll, never webhooks:** the daemon binds loopback, so provider webhooks can't
+  reach it. Pattern: submit → poll status on an interval → collect paginated results, under an
+  overall job budget from `config`. Task aborts propagate to a remote cancel where the API
+  supports it (crawl: `DELETE /v2/crawl/{id}`; extract has no documented cancel — polling just
+  stops). One audit line per logical operation at terminal outcome; polls aren't audited
+  (no new query leaves the box).
 - **Permissions:** no permission engine exists yet (spec'd for M4). Current stance: hot-path
   lookup is auto-allowed; background research rides the existing spawn-task flow the user triggers
-  by voice. When the M4 permission engine lands, register both providers under it with those
-  defaults.
+  by voice. Firecrawl `scrape`/`map` are auto-allowed like background search; `crawl` and
+  `extract` ride the voice-triggered spawn-task approval flow (they hit many pages on someone
+  else's infrastructure — deliberate, not automatic). When the M4 permission engine lands,
+  register all providers under it with those defaults.
 
 ## Working rules
 

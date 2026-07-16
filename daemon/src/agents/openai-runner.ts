@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { config, todayLabel } from '../config.ts';
 import type { Store } from '../events/store.ts';
 import { exaSearch, exaContents, type ExaResult } from '../search/exa.ts';
+import { firecrawlScrape, firecrawlMap, firecrawlCrawl, firecrawlExtract, type FirecrawlPage } from '../scrape/firecrawl.ts';
 import { SearchError } from '../search/client.ts';
 
 // Rebuilt per run so the date is always current — without it the model assumes its
@@ -22,6 +23,11 @@ calls a finished event "upcoming" is wrong. Say explicitly what you could not co
 Scope searches with web_search's max_age_days: 1 when the brief says "today", 2–7 for "this
 week" — this excludes stale sources at the API level. Loosen it only if a tight search comes
 back empty, and say so if you had to.
+When the brief or your searches give you specific URLs or a known site, acquire content with
+scrape_page (one page, full markdown), map_site (list a site's URLs), crawl_site (a bounded
+site section), or extract_structured (schema-shaped JSON). Prefer map_site then scrape_page
+on the few pages that matter over crawl_site — crawls cost per page. These tools fetch known
+locations; they never search.
 Your FINAL message must be the complete deliverable as a well-structured markdown report
 (it is saved verbatim as report.md and read back to the user), starting with a one-paragraph summary.`;
 }
@@ -43,11 +49,12 @@ export function persistResults(
   store: Pick<Store, 'saveSearchResult'>,
   taskId: string,
   query: string,
-  results: ExaResult[],
+  results: Array<Pick<ExaResult, 'url' | 'title' | 'text' | 'highlights'>>,
+  provider: 'exa' | 'firecrawl' = 'exa',
 ) {
   const rows = results.map((r) => ({
     taskId,
-    provider: 'exa',
+    provider,
     query,
     url: r.url,
     title: r.title ?? undefined,
@@ -126,7 +133,146 @@ function createSubagentTools(taskId: string, store: Store, signal: AbortSignal) 
     },
   });
 
-  return [webSearch, fetchPageContents, codeInterpreterTool()];
+  // Firecrawl page → the shared formatResults/persistResults row shape.
+  const pageRows = (pages: FirecrawlPage[]) =>
+    pages.map((p) => ({ title: p.title ?? null, url: p.url, text: p.markdown }));
+
+  // Firecrawl tools: content acquisition from KNOWN URLs/sites only — never a third
+  // search provider. The descriptions are the router; their wording is load-bearing.
+  const scrapePage = tool({
+    name: 'scrape_page',
+    description:
+      'Fetch one page you already have the URL for and return its full content as clean markdown ' +
+      '(Firecrawl; renders JavaScript, so dynamic pages work). Content acquisition only — it cannot ' +
+      'find pages. To discover information or URLs, use web_search instead.',
+    parameters: z.object({
+      url: z.string(),
+      wait_for_ms: z
+        .number()
+        .int()
+        .min(0)
+        .max(30_000)
+        .nullable()
+        .describe('Extra milliseconds to let a dynamic page settle before capture; null for normal pages'),
+    }),
+    async execute({ url, wait_for_ms }) {
+      try {
+        const page = await firecrawlScrape(url, { waitForMs: wait_for_ms, signal });
+        persistResults(store, taskId, `scrape: ${url}`, pageRows([page]), 'firecrawl');
+        return formatResults(pageRows([page]));
+      } catch (err) {
+        return describeToolFailure('scrape_page', err);
+      }
+    },
+  });
+
+  const mapSite = tool({
+    name: 'map_site',
+    description:
+      "List the URLs of a website you already know (Firecrawl /map) — cheap, fast site-structure " +
+      'discovery. Prefer map_site followed by scrape_page on the few URLs that matter over ' +
+      'crawl_site, which costs credits per page. Optionally order the list by a search term. This ' +
+      'lists ONE known site’s pages; it does not search the web.',
+    parameters: z.object({
+      url: z.string(),
+      search: z.string().nullable().describe('Optional term to order results by relevance, e.g. "changelog"'),
+      limit: z.number().int().min(1).max(5000).default(500),
+    }),
+    async execute({ url, search, limit }) {
+      try {
+        const links = await firecrawlMap(url, { search, limit, signal });
+        return links.map((l) => (l.title ? `${l.url} — ${l.title}` : l.url)).join('\n');
+      } catch (err) {
+        return describeToolFailure('map_site', err);
+      }
+    },
+  });
+
+  const crawlSite = tool({
+    name: 'crawl_site',
+    description:
+      'Crawl a site or site section you already know, from a seed URL, returning full markdown for ' +
+      'every page (Firecrawl). EXPENSIVE — one credit per page — so prefer map_site + scrape_page ' +
+      'when only part of a site matters. Breadth is bounded by max_pages/max_depth and optional ' +
+      'path patterns; robots.txt is respected. Content acquisition from a known site only — never ' +
+      'use it to search.',
+    parameters: z.object({
+      url: z.string(),
+      max_pages: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .default(100)
+        .describe('Hard cap on pages crawled (each costs a credit) — keep it as low as the task allows'),
+      max_depth: z.number().int().min(1).max(10).default(3).describe('Maximum link-discovery depth from the seed URL'),
+      include_paths: z
+        .array(z.string())
+        .nullable()
+        .describe('Regex pathname patterns to include, e.g. ["^/docs/.*"]; null for the whole site'),
+      exclude_paths: z.array(z.string()).nullable().describe('Regex pathname patterns to exclude'),
+    }),
+    async execute({ url, max_pages, max_depth, include_paths, exclude_paths }) {
+      try {
+        // Progress lands in the task's activity feed (dashboard + bubble mini-panel);
+        // emit only on change so a long poll loop doesn't flood the event store.
+        let lastCompleted = -1;
+        const pages = await firecrawlCrawl(url, {
+          maxPages: max_pages,
+          maxDepth: max_depth,
+          includePaths: include_paths,
+          excludePaths: exclude_paths,
+          signal,
+          onProgress: (p) => {
+            if (p.completed === lastCompleted) return;
+            lastCompleted = p.completed;
+            store.addEvent(taskId, 'crawl.status', { url, ...p });
+          },
+        });
+        persistResults(store, taskId, `crawl: ${url}`, pageRows(pages), 'firecrawl');
+        return formatResults(pageRows(pages));
+      } catch (err) {
+        return describeToolFailure('crawl_site', err);
+      }
+    },
+  });
+
+  const extractStructured = tool({
+    name: 'extract_structured',
+    description:
+      'Extract structured JSON from pages you already know, shaped by a JSON Schema you supply ' +
+      '(Firecrawl /extract). Use it to pull specific fields — prices, specs, listings — out of ' +
+      'known URLs. Not a search tool.',
+    parameters: z.object({
+      urls: z.array(z.string()).min(1).max(10),
+      schema: z.string().describe('JSON Schema (as a JSON string) describing the exact output shape'),
+      prompt: z.string().nullable().describe('Optional guidance on what to extract'),
+    }),
+    async execute({ urls, schema, prompt }) {
+      let parsedSchema: unknown;
+      try {
+        parsedSchema = JSON.parse(schema);
+      } catch {
+        return 'extract_structured failed: `schema` is not valid JSON — pass a JSON Schema object as a JSON string.';
+      }
+      try {
+        const data = await firecrawlExtract(urls, { schema: parsedSchema, prompt, signal });
+        const json = JSON.stringify(data, null, 2);
+        persistResults(
+          store,
+          taskId,
+          `extract: ${urls.join(' ')}`,
+          [{ title: 'structured extraction', url: urls[0], text: json }],
+          'firecrawl',
+        );
+        return json;
+      } catch (err) {
+        return describeToolFailure('extract_structured', err);
+      }
+    },
+  });
+
+  return [webSearch, fetchPageContents, scrapePage, mapSite, crawlSite, extractStructured, codeInterpreterTool()];
 }
 
 function itemText(item: unknown): string {
