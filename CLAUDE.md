@@ -68,7 +68,8 @@ non-obvious (record *why*, not just *what*).
   `extract` ride the voice-triggered spawn-task approval flow. **M4 added a permission model for
   Claude Code sessions only** (see `agents/supervisor.ts`): auto mode + a pure policy table gate
   the session; the hard-escalate class (git push, sudo, deletes outside cwd, network sends) goes
-  to a notch confirm.
+  to a notch confirm. **M4.1 layered an OS sandbox underneath** (macOS Seatbelt via the SDK
+  `sandbox` option) — see the M4.1 gating note below.
 
 ## M4 Claude-session gating (auto mode + hook — follow this exactly)
 
@@ -85,6 +86,23 @@ non-obvious (record *why*, not just *what*).
   rules. A `Bash(...)` allow rule there resolves before the supervisor and would silently ungate
   that command class. the user has no allow rules today (verified), so it's inert — but if
   escalations ever stop firing, check `~/.claude/settings.json` `permissions.allow` first.
+
+## M4.1 OS sandbox (Seatbelt — governs bash only; verified 2026-07-16)
+
+- `sandboxSettings(taskId)` (`claude-runner.ts`) wires the SDK `sandbox` option into `query()`:
+  `enabled` + `failIfUnavailable: true` (fail closed — a Mac that can't sandbox refuses to run,
+  surfaced via `SANDBOX_MARKER` → `CLAUDE_SANDBOX_ERROR`), `allowUnsandboxedCommands: false`
+  (hardcoded — ignores the model's `dangerouslyDisableSandbox`), `filesystem.allowWrite` = the
+  realpath'd task workspace, `credentials.files` read-deny of `secretFilePaths`, and network
+  default-deny (`config.claude.sandbox.allowedDomains` is the only opening — empty by default, so
+  even an approved `git push` fails at the egress proxy until `github.com` is added).
+- **CRITICAL nuance:** the sandbox jails **bash + child processes only**. The CLI's own file tools
+  (`Read`/`Write`/`Edit`/`Grep`/`Glob`) run unsandboxed, so `sandbox.filesystem`/`credentials` do
+  NOT bound them. Their containment is the **supervisor policy** (fires via the same PreToolUse
+  hook): edit-outside-cwd → escalate; secret paths (`.env`, `~/.claude`) → **hard `deny`** route
+  (`protectedPathHit`). When editing the policy, keep both the escalate and deny routes. Full
+  rationale + the spike evidence is in IMPLEMENTATION_NOTES §M4.1 review-address — read it before
+  touching sandbox or secret-path handling. On SDK/CLI upgrade, re-run `m41-spike/` as a gate.
 
 ## Working rules
 
