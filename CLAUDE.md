@@ -63,12 +63,28 @@ non-obvious (record *why*, not just *what*).
   stops). Every outbound call — submit, each poll, each pagination fetch, remote cancels —
   gets its own audit line (job routes logged as `/crawl/:id`-style endpoints, target URL as
   `query`); a failed operation adds exactly one op-level failure line.
-- **Permissions:** no permission engine exists yet (spec'd for M4). Current stance: hot-path
-  lookup is auto-allowed; background research rides the existing spawn-task flow the user triggers
-  by voice. Firecrawl `scrape`/`map` are auto-allowed like background search; `crawl` and
-  `extract` ride the voice-triggered spawn-task approval flow (they hit many pages on someone
-  else's infrastructure — deliberate, not automatic). When the M4 permission engine lands,
-  register all providers under it with those defaults.
+- **Permissions:** the search/scrape providers still have no dedicated engine — hot-path lookup
+  is auto-allowed; background research + Firecrawl `scrape`/`map` are auto-allowed; `crawl`/
+  `extract` ride the voice-triggered spawn-task approval flow. **M4 added a permission model for
+  Claude Code sessions only** (see `agents/supervisor.ts`): auto mode + a pure policy table gate
+  the session; the hard-escalate class (git push, sudo, deletes outside cwd, network sends) goes
+  to a notch confirm.
+
+## M4 Claude-session gating (auto mode + hook — follow this exactly)
+
+- Sessions run `permissionMode: 'auto'` for execution (fresh sessions plan first in `'plan'`,
+  then approve-and-switch to `'auto'`). **`'auto'` bypasses `canUseTool`** — the CLI classifier
+  auto-runs safe ops. So the supervisor's escalations and question-answering ride a **PreToolUse
+  hook** (`claude-runner.ts` → `supervisor.gateForHook`), which fires in every mode. `canUseTool`
+  is left with ONLY the ExitPlanMode plan-approval mode switch (atomic via `updatedPermissions:
+  [{type:'setMode', mode:'auto'}]` — never call `setPermissionMode` inside `canUseTool`/a hook,
+  it reentrant-deadlocks). The intervention cap interrupts via a `setImmediate`-scheduled
+  `query.interrupt()` for the same reason.
+- **FOOTGUN (latent, review 2026-07-16):** the runner leaves `settingSources` at default, so a
+  session loads the user's `~/.claude` skills/agents/CLAUDE.md — AND his `settings.json` permission
+  rules. A `Bash(...)` allow rule there resolves before the supervisor and would silently ungate
+  that command class. the user has no allow rules today (verified), so it's inert — but if
+  escalations ever stop firing, check `~/.claude/settings.json` `permissions.allow` first.
 
 ## Working rules
 

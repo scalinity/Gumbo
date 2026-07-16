@@ -1,7 +1,18 @@
-import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Query, type SDKUserMessage, type HookJSONOutput } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../config.ts';
 import type { Store } from '../events/store.ts';
-import type { Supervisor } from './supervisor.ts';
+import type { Supervisor, GateResult } from './supervisor.ts';
+
+// Auth-failure markers: a not-logged-in / expired-subscription session comes back either
+// as an assistant error field or as result text carrying these strings (verified during
+// the risk-#2 spike, where a bad env produced a 'success' result whose text was the login
+// error). Turned into a clear, actionable failure instead of a cryptic SDK error.
+const AUTH_MARKER = /not logged in|please run\s*\/login|authentication_failed|oauth[^.]*\b(expired|invalid|revoked)\b/i;
+export const CLAUDE_AUTH_ERROR = 'auth: Claude Code needs you to log in again — run `claude` in a terminal, then `/login`.';
+
+// Result subtypes that mean "ran out of room," not "failed": the work is on disk and the
+// session resumes with send_to_session, so the task parks for the user rather than failing.
+const RESUMABLE_LIMIT_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd']);
 
 // M4: one Claude Code session per task, on subscription auth (spike-verified 2026-07-15):
 // the subprocess env must keep USER (keychain credential lookup resolves the login item by
@@ -44,13 +55,16 @@ export class InputQueue implements AsyncIterable<SDKUserMessage> {
 // Claude runs headless — nobody watches its terminal — so the prompt must route questions
 // through AskUserQuestion (the supervisor answers) instead of dangling them at run end,
 // and the final message doubles as the spoken report.
-function composePrompt(brief: string, cwd: string): string {
+function composePrompt(brief: string, cwd: string, planFirst: boolean): string {
+  const planLine = planFirst
+    ? `\nBefore changing anything, investigate read-only and present a concise plan via ExitPlanMode; the user reviews and approves it before you build. Once approved, execute the plan.`
+    : '';
   return `You are working autonomously for Gumbo, the user's personal Mac agent. Nobody is watching a
-terminal. Your working directory is ${cwd}. If you genuinely need a decision you cannot make from
-the brief, use the AskUserQuestion tool — a supervisor answers on the user's behalf; never end your
-run with an unanswered question. When the work is done, end with a concise report of what you did,
-what you verified, and where the changes live — it is saved verbatim as the task's report and its
-key points are read aloud to the user.
+terminal. Your working directory is ${cwd}.${planLine} If you genuinely need a decision you cannot
+make from the brief, use the AskUserQuestion tool — a supervisor answers on the user's behalf; never
+end your run with an unanswered question. When the work is done, end with a concise report of what
+you did, what you verified, and where the changes live — it is saved verbatim as the task's report
+and its key points are read aloud to the user.
 
 Task: ${brief}`;
 }
@@ -73,8 +87,11 @@ function blockText(content: unknown): string {
 }
 
 export interface ClaudeRunResult {
-  /** True when the run stopped for the user (intervention cap) rather than finishing. */
+  /** True when the run stopped for the user (cap, unapproved plan, or a turn/budget limit)
+   *  rather than finishing — the session stays resumable via send_to_session. */
   parked: boolean;
+  /** Why it parked, for the needs_input status/announcement (undefined when not parked). */
+  parkedReason?: string;
   report: string;
 }
 
@@ -83,6 +100,8 @@ export interface ClaudeSessionRunner {
   readonly abort: AbortController;
   run(): Promise<ClaudeRunResult>;
   send(text: string): boolean;
+  /** Rewind the session's file edits to its pre-run state (file checkpointing). */
+  undo(): Promise<string>;
 }
 
 export interface ClaudeRunnerOpts {
@@ -96,6 +115,10 @@ export interface ClaudeRunnerOpts {
   supervisor: Supervisor;
   /** Resume an earlier session (daemon restarted, or a follow-up on a finished task). */
   resumeSessionId?: string;
+  /** Fresh sessions plan-then-execute; a resume is a direct instruction and skips planning. */
+  planFirst?: boolean;
+  /** Surface Claude's plan to the user and resolve his approval (false → don't execute). */
+  onPlanReady?: (plan: string) => Promise<boolean>;
 }
 
 export class ClaudeRunner implements ClaudeSessionRunner {
@@ -106,6 +129,10 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   // turn has resolved — otherwise a mid-run send_to_session would be silently dropped.
   private turnsSent = 0;
   private turnsResolved = 0;
+  private query: Query | null = null; // live handle for setPermissionMode / rewindFiles
+  private firstUserMessageId: string | null = null; // rewind target for undo() (checkpointing)
+  private planRejected = false; // the user declined the plan → park, don't fail
+  private authFailed = false; // an assistant message reported an auth error
 
   // No parameter properties: daemon tests run node --test in strip-only mode.
   constructor(opts: ClaudeRunnerOpts) {
@@ -119,10 +146,14 @@ export class ClaudeRunner implements ClaudeSessionRunner {
     return true;
   }
 
+  private get planning(): boolean {
+    return this.opts.planFirst === true && !this.opts.resumeSessionId;
+  }
+
   async run(): Promise<ClaudeRunResult> {
     const { taskId, brief, cwd, store, supervisor } = this.opts;
     const limit = config.activityLogMaxChars;
-    this.input.push(this.opts.resumeSessionId ? brief : composePrompt(brief, cwd));
+    this.input.push(this.opts.resumeSessionId ? brief : composePrompt(brief, cwd, this.planning));
     this.turnsSent += 1;
 
     const session = query({
@@ -132,13 +163,24 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         resume: this.opts.resumeSessionId,
         abortController: this.abort,
         maxTurns: config.claude.maxTurns,
-        // Auto mode (the user's call): the CLI auto-accepts edits under cwd natively; every
-        // other permission lands in the supervisor's pure policy table.
-        permissionMode: 'acceptEdits',
-        canUseTool: async (toolName, input, { signal }) => supervisor.gateTool(toolName, input, signal),
+        // Plan-then-execute for fresh sessions: start read-only in plan mode; approving
+        // the plan flips to 'auto' (handlePlan). Resumes are direct instructions → straight
+        // to 'auto'. In 'auto' the CLI classifier auto-runs safe actions — but it BYPASSES
+        // canUseTool, so the supervisor's hard escalations and question-answering ride a
+        // PreToolUse hook (which fires in every mode) instead. canUseTool is left with only
+        // the plan-approval mode switch (which happens in plan mode, where it does fire).
+        permissionMode: this.planning ? 'plan' : 'auto',
+        // File checkpointing: back up files before edits so undo() can rewind a session
+        // that made a mess — the safety net for non-git project dirs.
+        enableFileCheckpointing: true,
+        canUseTool: (toolName, input, { signal }) => this.gate(toolName, input, signal),
+        hooks: {
+          PreToolUse: [{ hooks: [(hookInput) => this.preToolUse(hookInput)] }],
+        },
         env: { ...process.env, ANTHROPIC_API_KEY: undefined },
       },
     });
+    this.query = session;
 
     let report = '';
     try {
@@ -152,6 +194,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         if (msg.type === 'system' && msg.subtype === 'init') {
           store.saveClaudeSession(taskId, { sessionId: msg.session_id, cwd, brief: this.opts.persistBrief });
         } else if (msg.type === 'assistant' && !msg.parent_tool_use_id) {
+          if (msg.error === 'authentication_failed') this.authFailed = true;
           for (const block of msg.message.content as ContentBlock[]) {
             if (block.type === 'text' && block.text) {
               store.addEvent(taskId, 'claude.message', { text: block.text });
@@ -162,7 +205,11 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           }
         } else if (msg.type === 'user' && !msg.parent_tool_use_id) {
           const content = msg.message.content;
-          if (Array.isArray(content)) {
+          // Our own prompt echoes back as a string-content user message — capture its uuid
+          // once as the rewind target (files at the first user turn = pre-run state).
+          if (typeof content === 'string') {
+            if (!this.firstUserMessageId && msg.uuid) this.firstUserMessageId = msg.uuid;
+          } else if (Array.isArray(content)) {
             for (const block of content as ContentBlock[]) {
               if (block.type !== 'tool_result') continue;
               store.addEvent(taskId, 'claude.tool_result', { output: blockText(block.content).slice(0, limit), is_error: block.is_error === true });
@@ -170,11 +217,16 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           }
         } else if (msg.type === 'result') {
           this.turnsResolved += 1;
-          if (supervisor.capHit) {
-            this.input.close();
-            return { parked: true, report };
-          }
+          // Auth failure surfaces as an assistant error OR as login text in the result —
+          // turn it into an actionable message instead of a cryptic failure.
+          const resultText = msg.subtype === 'success' ? msg.result : (msg.errors ?? []).join('; ');
+          if (this.authFailed || AUTH_MARKER.test(resultText ?? '')) throw new Error(CLAUDE_AUTH_ERROR);
+          if (supervisor.capHit) return this.park(report, 'reached the supervisor question limit — needs your input');
+          if (this.planRejected) return this.park(report, 'plan needs your approval or revision');
           if (msg.subtype !== 'success') {
+            if (RESUMABLE_LIMIT_SUBTYPES.has(msg.subtype)) {
+              return this.park(report, msg.subtype === 'error_max_turns' ? 'reached the turn limit — needs your go-ahead to continue' : 'reached the budget limit — needs your go-ahead');
+            }
             throw new Error(`Claude session ended: ${msg.subtype}`);
           }
           report = msg.result || report;
@@ -188,6 +240,74 @@ export class ClaudeRunner implements ClaudeSessionRunner {
       throw new Error('Claude session closed before finishing');
     } finally {
       this.input.close();
+    }
+  }
+
+  private park(report: string, reason: string): ClaudeRunResult {
+    this.input.close();
+    return { parked: true, parkedReason: reason, report };
+  }
+
+  /**
+   * canUseTool only exists for the plan-approval mode switch (ExitPlanMode, in plan mode).
+   * Execution-phase gating is the PreToolUse hook's job — it fires in 'auto' too, where
+   * canUseTool doesn't. Anything else that reaches here (reads during planning) is allowed;
+   * the hook has already vetted the escalate-class and questions.
+   */
+  private async gate(toolName: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<GateResult> {
+    if (toolName === 'ExitPlanMode') return this.handlePlan(input, signal);
+    return { behavior: 'allow' };
+  }
+
+  /** The execution-phase gate: escalate-class → notch confirm, AskUserQuestion → supervisor,
+   *  everything else deferred to the CLI's auto classifier. Fires in every permission mode. */
+  private async preToolUse(hookInput: unknown): Promise<HookJSONOutput> {
+    const pre = hookInput as { tool_name?: string; tool_input?: unknown };
+    const toolName = pre.tool_name ?? '';
+    // Plan approval is handled atomically by canUseTool (it can switch mode; a hook can't).
+    if (toolName === 'ExitPlanMode') return {};
+    const gate = await this.opts.supervisor.gateForHook(toolName, (pre.tool_input ?? {}) as Record<string, unknown>, this.abort.signal);
+    if (gate.decision === 'defer') return {};
+    if (gate.decision === 'allow') {
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } };
+    }
+    // Deny (declined escalation, supervisor answer, or the intervention cap). The cap asks
+    // to interrupt the run — scheduled post-return so the control request isn't reentrant.
+    if (gate.interrupt) setImmediate(() => void this.query?.interrupt().catch(() => {}));
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: gate.reason ?? 'Denied.' } };
+  }
+
+  private async handlePlan(input: Record<string, unknown>, signal?: AbortSignal): Promise<GateResult> {
+    const plan = String(input.plan ?? JSON.stringify(input));
+    this.opts.store.addEvent(this.opts.taskId, 'claude.plan', { plan });
+    // No approver wired (tests) → don't execute. Otherwise surface the plan to the user.
+    const approved = this.opts.onPlanReady ? await this.opts.onPlanReady(plan) : false;
+    if (approved) {
+      // Approve ExitPlanMode AND switch to 'auto' mode for execution in one result. Doing
+      // the mode switch via updatedPermissions (not a setPermissionMode control request)
+      // avoids a reentrant deadlock — a control request can't be processed while the SDK
+      // is blocked awaiting this very canUseTool callback. 'auto' lets the CLI classifier
+      // auto-run safe actions while still routing risky ones (git push, deletes outside
+      // cwd, network sends) through the supervisor's policy gate.
+      return { behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode: 'auto', destination: 'session' }] };
+    }
+    // interrupt ends the run; the result handler sees planRejected and parks (resumable).
+    this.planRejected = true;
+    return { behavior: 'deny', message: 'the user did not approve the plan. Stop; he will send revised instructions.', interrupt: true };
+  }
+
+  /** Rewind the session's file edits to its pre-run state. Live session only (rewindFiles
+   *  is a streaming control request); the checkpoints exist on disk regardless. */
+  async undo(): Promise<string> {
+    if (!this.query || !this.firstUserMessageId) {
+      return 'That session has no rewindable checkpoint from this run (it may have already closed).';
+    }
+    try {
+      await this.query.rewindFiles(this.firstUserMessageId);
+      this.opts.store.addEvent(this.opts.taskId, 'claude.tool_result', { output: 'files rewound to pre-run state (undo)' });
+      return 'Rewound the session’s file changes to before it started.';
+    } catch (err) {
+      return `Could not rewind: ${String(err)}`;
     }
   }
 }

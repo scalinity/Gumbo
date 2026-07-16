@@ -26,7 +26,14 @@ const server = createHttpServer(store);
 const hub = new Hub(server);
 // M4: supervisor escalations resolve through the notch (deny on timeout / no shell).
 const confirms = new ConfirmBridge(hub);
-const manager = new TaskManager(store, (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal));
+const manager = new TaskManager(
+  store,
+  (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal),
+  // Plan approval: a longer notch window (the user reads the full plan in the dashboard/bubble;
+  // the confirm shows a one-line summary). Deny/timeout parks the task — nothing is lost.
+  (taskId, taskTitle, plan, signal) =>
+    confirms.request(taskId, taskTitle, 'Approve Claude’s plan?', plan.replace(/\s+/g, ' ').slice(0, 140), signal, config.claude.planConfirmTimeoutMs),
+);
 const orchestrator = new Orchestrator(store, hub, manager);
 manager.onFinished = (task) => {
   // Floating promise: an unexpected sync throw (dead transport, store failure) would

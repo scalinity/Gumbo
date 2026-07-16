@@ -144,8 +144,9 @@ during the fetch (deduped by `seq`) so nothing is dropped.
 Current event `type`s: `transcript.user`, `transcript.assistant`, `tool.call`, `tool.result`,
 `subagent.message`, `task.created`, `task.finished`, `note.saved`, `announce.pending`,
 `session.opened`, `session.closed`, `session.error`. M4 added `claude.message`, `claude.tool_use`,
-`claude.tool_result`, `supervisor.decision`, and `task.status` (mid-run `needs_input` ⇄ `running`
-flips — confirm pending, intervention cap, resume). M5 adds `image.created`.
+`claude.tool_result`, `claude.plan` (a plan awaiting the user's approval), `supervisor.decision`, and
+`task.status` (mid-run `needs_input` ⇄ `running` flips — plan review, confirm pending, intervention
+cap, resume). M5 adds `image.created`.
 
 **Message types** (see `daemon/src/ws/protocol.ts`, extended per phase):
 - shell → daemon: `hello`, (M2) `ptt_start`/`ptt_stop`, mic binary, `confirm_response`,
@@ -266,7 +267,7 @@ daemon smokes (cold path: zero `session.opened`, sample-aligned 0x02 frames; lif
 pulse, linger) + a 2-agent review/address pass (2 criticals found and fixed — see
 IMPLEMENTATION_NOTES §M3). TCC risk #3 closed.
 
-### M4 — Claude Code + supervisor  ✅ built (daemon smoke green; live voice demo pending)
+### M4 — Claude Code + supervisor  ✅ built + review-hardened (daemon smokes green; live voice demo pending)
 
 **Goal:** delegate real code/file/shell work and supervise it autonomously.
 
@@ -276,28 +277,54 @@ IMPLEMENTATION_NOTES §M3). TCC risk #3 closed.
   env; `USER` required for the keychain lookup), resume by persisted session id across daemon
   restarts via `send_to_session`.
 - New tools: `spawn_claude_session` (title, brief, nullable `project_dir`), `send_to_session`.
-- **Sessions run in "auto mode"** (the user, 2026-07-15 — supersedes the per-call judgment tier):
-  `acceptEdits` + a **pure policy table** in the `canUseTool` bridge. Auto-allow reads, edits
-  under `cwd`, ordinary commands; **hard-escalate** `git push`, `sudo`, deletes outside `cwd`,
-  network-sending actions (curl/wget uploads, `gh` writes, mail) → notch confirm, deny on
-  timeout. Every gate logs `supervisor.decision`.
+- **Plan-then-execute** (the user, 2026-07-16): a fresh session runs read-only in `permissionMode:
+  'plan'`, presents its plan (`ExitPlanMode` → `claude.plan` event + a notch confirm), and only
+  builds after the user approves — then it switches to `'auto'` atomically. Resumes/follow-ups skip
+  planning (already a direct instruction). Decline/timeout parks `needs_input` (resumable).
+- **Execution runs in "auto mode" + a PreToolUse hook** (the user, 2026-07-15/16): `'auto'` lets the
+  CLI's classifier auto-run safe actions with zero supervisor calls, but it bypasses `canUseTool`,
+  so the supervisor's gate rides a **PreToolUse hook** (fires in every mode). A **pure policy
+  table** decides: safe ops **defer** to the classifier; the **hard-escalate class** — `git push`,
+  `sudo`, deletes outside `cwd`, network sends (curl/wget uploads, `gh` writes, mail) — routes to a
+  notch confirm, deny on timeout. Every escalation/answer logs `supervisor.decision`.
 - **Supervisor** (`gpt-5.6-terra`) holds the task brief and is invoked **only** when Claude asks
-  (AskUserQuestion → answered via deny-message on the user's behalf), capped per session
-  (`maxInterventions`, default 5) — past the cap the run interrupts and the task parks as
-  `needs_input` until `send_to_session`.
+  (AskUserQuestion → answered on the user's behalf), capped per session (`maxInterventions`, default
+  5) — past the cap the run interrupts and the task parks `needs_input`.
+- **Resilience:** a supervisor-model outage degrades to a safe default instead of killing the run;
+  hitting the turn/budget limit **parks** (resumable) rather than failing; an auth-expired session
+  reports "log in again"; file checkpointing backs up edits so a live session can be undone
+  (`undo_session`); a second session on the same `project_dir` is refused (concurrent-edit guard).
 - `needs_input` is first-class: task.status events, gold beacon orb, dashboard rail state.
-- Dashboard: Claude stream + supervisor-decision feeds.
+- Dashboard: Claude stream + supervisor-decision + plan feeds.
 
-**Demo:** "have Claude add a `--json` flag to <project>" → Claude edits under `cwd` unattended →
-a `git push` escalates to the notch → completion announced (delivery-first). Kill the daemon
-mid-session and resume via voice.
+**Demo:** "have Claude add a `--json` flag to <project>" → Claude presents a plan → the user approves
+on the notch → Claude edits under `cwd` → a `git push` escalates to the notch → completion
+announced (delivery-first). Kill the daemon mid-session and resume via voice.
 
-**Verification so far:** spikes (a) subscription auth + (b) supervisor canned-event harness both
-passed; 50 daemon unit tests green; live daemon smoke (real Claude session on a scratch repo):
-`--json` flag implemented + verified, `git push` escalated → denied → honored, report/supervisor
-logs landed, bubbles flipped running → needs_input → done, finished session resumed by
-`send_to_session` and completed a follow-up. Remaining to observe live with the user: the
-voice-driven flow end-to-end (spawn by voice, notch confirm answer, completion announcement).
+**Verification:** spikes (a) subscription auth + (b) supervisor canned-event harness passed; 95
+daemon unit tests green; live daemon smokes (real Claude session on a scratch repo) — the original
+auto-mode flow (`--json` flag, git push escalate→deny→honor, resume) AND the M4.0-hardening flow
+(plan-mode approve→execute, `--loud` verified, git push escalated via the hook under `'auto'`,
+checkpointing). Remaining to observe live with the user: the voice-driven flow end-to-end (spawn by
+voice, plan-approval + notch confirm answers, completion announcement).
+
+### M4.1 — OS-level sandbox for Claude sessions (planned)
+
+**Why:** the supervisor policy table is a heuristic speed-bump, not a container — a regex tokenizer
+can't fully parse a shell (`eval`, `$(…)`, `/bin/rm`, interpreter one-liners all slip past), and
+Claude reads attacker-influenceable web/file content. M4 mitigates the *common* escapes; M4.1 makes
+the filesystem/network boundary **deterministic**.
+
+**Scope:** enable the Agent SDK's `sandbox` option on Claude sessions so commands run in an OS
+sandbox (macOS Seatbelt / `sandbox-exec`; the SDK notes bubblewrap on Linux and *fails closed* on
+unsupported platforms — so **spike macOS 27-beta support first**, this project's discipline). The
+sandbox confines filesystem writes to the session `cwd` + task workspace and blocks outbound
+network by default; the supervisor policy table then narrows to what it's actually good at —
+**semantic** confirms (git push is legitimate-but-worth-confirming) rather than trying to be
+containment. Keep plan-mode, the PreToolUse hook, and the escalations; layer the sandbox under them.
+Set `failIfUnavailable: true` (fail closed) and surface a clear message if the platform can't
+sandbox, rather than silently running unconfined. Kick this off as its own supervised Claude
+session (prompt in IMPLEMENTATION_NOTES §M4.1).
 
 ### M5 — Images + reminders
 

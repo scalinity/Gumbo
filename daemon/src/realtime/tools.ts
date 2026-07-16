@@ -86,6 +86,16 @@ export function createOrchestratorTools(manager: TaskManager, store: Store) {
     },
   });
 
+  const undoSession = tool({
+    name: 'undo_session',
+    description:
+      "Undo a running Claude Code session's file changes — rewind the files it edited back to how they " +
+      'were before it started. Use when the user wants to throw away what a session did. Only works while ' +
+      'the session is still live; a finished session\'s edits are recovered via git instead.',
+    parameters: z.object({ task_id: z.string() }),
+    execute: async ({ task_id }) => manager.undoSession(task_id),
+  });
+
   const listTasks = tool({
     name: 'list_tasks',
     description: 'List recent background tasks with their statuses.',
@@ -172,5 +182,5 @@ export function createOrchestratorTools(manager: TaskManager, store: Store) {
     execute: async ({ query, topic }) => webQuickLookup(query, topic),
   });
 
-  return [spawnSubagent, spawnClaudeSession, sendToSession, quickLookup, listTasks, getTaskStatus, cancelTask, readReport, saveNote];
+  return [spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, listTasks, getTaskStatus, cancelTask, readReport, saveNote];
 }

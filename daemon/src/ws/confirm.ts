@@ -23,8 +23,9 @@ export class ConfirmBridge {
     this.timeoutMs = timeoutMs;
   }
 
-  request(taskId: string, taskTitle: string, title: string, detail: string, signal?: AbortSignal): Promise<boolean> {
+  request(taskId: string, taskTitle: string, title: string, detail: string, signal?: AbortSignal, timeoutMs?: number): Promise<boolean> {
     if (!this.hub.hasRole('shell') || signal?.aborted) return Promise.resolve(false); // nobody to ask / already cancelled
+    const budget = timeoutMs ?? this.timeoutMs; // plan approval passes a longer window
     const id = randomUUID().slice(0, 8);
     return new Promise<boolean>((resolve) => {
       const settle = (approved: boolean) => {
@@ -40,11 +41,11 @@ export class ConfirmBridge {
         this.hub.broadcast({ type: 'confirm_cancel', id }, 'shell');
         settle(false);
       };
-      const timer = setTimeout(() => settle(false), this.timeoutMs); // deny on timeout (SPEC §6)
+      const timer = setTimeout(() => settle(false), budget); // deny on timeout (SPEC §6)
       signal?.addEventListener('abort', onAbort, { once: true });
       this.pending.set(id, settle);
       this.hub.broadcast(
-        { type: 'confirm_request', id, task_id: taskId, task_title: taskTitle, title, detail, timeout_ms: this.timeoutMs },
+        { type: 'confirm_request', id, task_id: taskId, task_title: taskTitle, title, detail, timeout_ms: budget },
         'shell',
       );
     });

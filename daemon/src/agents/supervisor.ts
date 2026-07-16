@@ -158,9 +158,16 @@ export interface EscalationRequest {
 }
 
 // Mirrors the SDK's PermissionResult without importing its types into every caller.
+// updatedPermissions rides on an allow to atomically change session state (e.g. plan
+// approval switching permissionMode to 'auto') without a reentrant control request.
 export type GateResult =
-  | { behavior: 'allow' }
+  | { behavior: 'allow'; updatedPermissions?: Array<Record<string, unknown>> }
   | { behavior: 'deny'; message: string; interrupt?: boolean };
+
+// A PreToolUse-hook decision. 'defer' means "no supervisor opinion — let the CLI's auto
+// classifier decide" (the common, zero-cost case). The hook is the execution-phase gate
+// because 'auto' mode bypasses canUseTool; the hook fires regardless of permission mode.
+export type HookGate = { decision: 'allow' | 'deny' | 'defer'; reason?: string; interrupt?: boolean };
 
 export interface SupervisorOptions {
   taskId: string;
@@ -200,6 +207,21 @@ export class Supervisor {
     this.lines.push(`- ${new Date().toISOString()} — ${line}`);
   }
 
+  /**
+   * PreToolUse-hook gate (execution phase). In 'auto' mode canUseTool is bypassed, so the
+   * hard escalations and question-answering ride this hook instead. Policy-allow tools
+   * defer to the CLI's auto classifier — no supervisor call, no notch — so the only things
+   * that reach the supervisor are AskUserQuestion and the hard-escalate class.
+   */
+  async gateForHook(toolName: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<HookGate> {
+    if (toolName !== 'AskUserQuestion' && policyDecision(toolName, input, this.opts.cwd).route === 'allow') {
+      return { decision: 'defer' };
+    }
+    const result = await this.gateTool(toolName, input, signal);
+    if (result.behavior === 'allow') return { decision: 'allow' };
+    return { decision: 'deny', reason: result.message, interrupt: result.interrupt === true };
+  }
+
   async gateTool(toolName: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<GateResult> {
     if (toolName === 'AskUserQuestion') return this.answerQuestions(input, signal);
     const policy = policyDecision(toolName, input, this.opts.cwd);
@@ -235,14 +257,31 @@ export class Supervisor {
       return { behavior: 'deny', message: 'Supervisor intervention cap reached — pausing for the user.', interrupt: true };
     }
     // Reserve the slot BEFORE awaiting so two AskUserQuestion gates arriving at max-1
-    // can't both pass the check above and both spend a model call; roll back if it throws.
+    // can't both pass the check above and both spend a model call.
     this.interventions += 1;
     let answer: string;
     try {
       answer = await this.runModel(questions, signal);
     } catch (err) {
-      this.interventions -= 1;
-      throw err;
+      if (signal?.aborted) {
+        // Task cancelled mid-call — not a real intervention; propagate the cancellation.
+        this.interventions -= 1;
+        throw err;
+      }
+      // Supervisor model unavailable (transient gpt-5.6-terra outage). A long coding
+      // session must NOT die because the supervisor hiccupped — degrade to a safe default
+      // and let Claude proceed. This still counts toward the cap, so a persistently broken
+      // supervisor eventually parks the task for the user instead of looping on failed calls.
+      answer =
+        'The supervisor is temporarily unavailable. Use your best judgment to proceed; avoid irreversible or destructive actions; do not wait for further confirmation.';
+      this.decide(
+        { kind: 'reply', question: asked, answer, degraded: true, error: String(err) },
+        `answered (${this.interventions}/${max}) via SAFE DEFAULT — supervisor model error (${String(err)}): ${asked}`,
+      );
+      return {
+        behavior: 'deny',
+        message: `Supervisor answer on the user's behalf: ${answer}\nContinue with the task — do not wait for further confirmation.`,
+      };
     }
     this.decide({ kind: 'reply', question: asked, answer }, `answered (${this.interventions}/${max}): ${asked} → ${answer}`);
     return {

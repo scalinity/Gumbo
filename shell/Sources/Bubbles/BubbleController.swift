@@ -308,6 +308,9 @@ struct BubbleEvent: Identifiable {
         case "subagent.message", "claude.message":
             kind = .message
             body = payload["text"] as? String ?? ""
+        case "claude.plan":
+            kind = .lifecycle
+            body = "Plan awaiting approval — " + (payload["plan"] as? String ?? "")
         case "supervisor.decision":
             kind = .lifecycle
             switch payload["kind"] as? String {

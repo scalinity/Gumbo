@@ -123,6 +123,14 @@ const Row = memo(function Row({ event }: { event: EventRow }) {
           {time}
         </div>
       );
+    case 'claude.plan':
+      return (
+        <div className="machine" data-kind="plan">
+          <span className="tag">plan</span>
+          <span className="body">{chip}⧉ awaiting approval:{'\n'}{String(p.plan ?? '').slice(0, 1200)}</span>
+          {time}
+        </div>
+      );
     case 'supervisor.decision': {
       const body =
         p.kind === 'reply'

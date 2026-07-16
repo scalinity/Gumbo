@@ -11,6 +11,9 @@ import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
  *  The signal fires if the task is cancelled while the confirm is pending. */
 export type EscalateFn = (taskId: string, taskTitle: string, req: EscalationRequest, signal?: AbortSignal) => Promise<boolean>;
 
+/** Surfaces a Claude plan to the user for approval before it executes (routes to the notch). */
+export type ApprovePlanFn = (taskId: string, taskTitle: string, plan: string, signal?: AbortSignal) => Promise<boolean>;
+
 /** Builds the runner for a Claude session — swapped for a fake in tests (no live query()). */
 export type RunnerFactory = (opts: ClaudeRunnerOpts) => ClaudeSessionRunner;
 
@@ -18,8 +21,12 @@ export class TaskManager {
   private aborts = new Map<string, AbortController>();
   private finished = new Set<string>();
   private claudeRunners = new Map<string, ClaudeSessionRunner>();
+  // cwd of every non-terminal Claude session — a second session on the same real project
+  // dir would edit the same files concurrently (git/file conflicts). Kept through park.
+  private activeCwds = new Map<string, string>();
   private store: Store;
   private escalate: EscalateFn;
+  private approvePlan: ApprovePlanFn;
   private makeRunner: RunnerFactory;
   onFinished: (task: TaskRow) => void = () => {};
 
@@ -27,10 +34,12 @@ export class TaskManager {
   constructor(
     store: Store,
     escalate: EscalateFn = async () => false, // no bridge (tests) → deny, fail safe
+    approvePlan: ApprovePlanFn = async () => false, // no bridge (tests) → don't execute
     makeRunner: RunnerFactory = (opts) => new ClaudeRunner(opts),
   ) {
     this.store = store;
     this.escalate = escalate;
+    this.approvePlan = approvePlan;
     this.makeRunner = makeRunner;
   }
 
@@ -88,6 +97,17 @@ export class TaskManager {
     if (dir && !(existsSync(dir) && statSync(dir).isDirectory())) {
       throw new Error(`project_dir does not exist or is not a directory: ${dir}`);
     }
+    // Refuse a second session in a project another live session is already editing —
+    // concurrent edits to one repo conflict. Unnamed sessions get unique workspaces, so
+    // this only ever triggers on a shared, named project_dir.
+    if (dir) {
+      for (const [otherId, otherCwd] of this.activeCwds) {
+        if (otherCwd === dir) {
+          const other = this.store.getTask(otherId);
+          throw new Error(`a Claude session ("${other?.title ?? otherId}") is already working in ${dir}; let it finish or redirect it first`);
+        }
+      }
+    }
     const id = randomUUID().slice(0, 8);
     const workspace = join(config.home.tasks, id);
     mkdirSync(workspace, { recursive: true });
@@ -140,20 +160,33 @@ export class TaskManager {
         this.setTaskStatus(task.id, blocked ? 'needs_input' : 'running', blocked ? 'awaiting notch confirm' : 'confirm answered');
       },
     });
-    const runner = this.makeRunner({ taskId: task.id, brief, persistBrief: fullBrief, cwd, store: this.store, supervisor, resumeSessionId });
+    const runner = this.makeRunner({
+      taskId: task.id,
+      brief,
+      persistBrief: fullBrief,
+      cwd,
+      store: this.store,
+      supervisor,
+      resumeSessionId,
+      // Plan-then-execute only for a fresh spawn; a resume is already a direct instruction.
+      planFirst: config.claude.planFirst && !resumeSessionId,
+      onPlanReady: (plan) => this.reviewPlan(task, plan, runner.abort.signal),
+    });
     this.claudeRunners.set(task.id, runner);
     this.aborts.set(task.id, runner.abort);
+    this.activeCwds.set(task.id, cwd);
 
     runner.run().then(
-      ({ parked, report }) => {
+      ({ parked, parkedReason, report }) => {
         this.claudeRunners.delete(task.id);
         this.writeSupervisorLog(supervisor, task);
         if (parked) {
-          // Intervention cap: not finished, waiting on the user — send_to_session resumes.
-          // Drop the resolved run's AbortController so cancel() reaches the needs_input
-          // close-out instead of "aborting" a finished run and falsely reporting success.
+          // Cap / unapproved plan / turn limit: not finished, waiting on the user —
+          // send_to_session resumes. Drop the resolved run's AbortController so cancel()
+          // reaches the needs_input close-out instead of "aborting" a finished run and
+          // falsely reporting success. cwd stays reserved (the session is still live-ish).
           this.aborts.delete(task.id);
-          this.setTaskStatus(task.id, 'needs_input', 'supervisor intervention cap');
+          this.setTaskStatus(task.id, 'needs_input', parkedReason ?? 'waiting on the user');
           return;
         }
         this.finishWithReport(task.id, task.title, task.workspace, report);
@@ -161,9 +194,37 @@ export class TaskManager {
       (err: unknown) => {
         this.claudeRunners.delete(task.id);
         this.writeSupervisorLog(supervisor, task);
-        this.finish(task.id, runner.abort.signal.aborted ? 'cancelled' : 'failed', { error: String(err) });
+        // Auth failure carries an 'auth:' prefix from the runner — record it as a clear,
+        // actionable failure so the dashboard/bubble say "log in again" not a cryptic error.
+        const raw = String(err);
+        const auth = raw.startsWith('auth:');
+        this.finish(task.id, runner.abort.signal.aborted ? 'cancelled' : 'failed', {
+          error: auth ? raw.slice(5).trim() : raw,
+          ...(auth ? { reason: 'auth' } : {}),
+        });
       },
     );
+  }
+
+  /** Flip the task needs_input while the user reviews the plan, then route to the notch. */
+  private async reviewPlan(task: TaskRow, plan: string, signal?: AbortSignal): Promise<boolean> {
+    if (this.finished.has(task.id)) return false;
+    this.setTaskStatus(task.id, 'needs_input', 'awaiting plan approval');
+    try {
+      return await this.approvePlan(task.id, task.title, plan, signal);
+    } finally {
+      if (!this.finished.has(task.id)) this.setTaskStatus(task.id, 'running', 'plan answered');
+    }
+  }
+
+  /** Rewind a live Claude session's file edits (file checkpointing). No live runner →
+   *  can't rewind (the checkpoints need the running session); git is the fallback. */
+  async undoSession(id: string): Promise<string> {
+    const task = this.store.getTask(id);
+    if (!task || task.kind !== 'claude') return `No Claude session ${id}.`;
+    const runner = this.claudeRunners.get(id);
+    if (!runner) return 'That session already closed — its edits are recoverable via git if the project is version-controlled.';
+    return runner.undo();
   }
 
   private writeSupervisorLog(supervisor: Supervisor, task: TaskRow) {
@@ -184,6 +245,7 @@ export class TaskManager {
     if (this.finished.has(id)) return; // idempotent: never double-emit task.finished / double-announce
     this.finished.add(id);
     this.aborts.delete(id);
+    this.activeCwds.delete(id); // terminal → the project dir is free for a new session
     this.store.updateTaskStatus(id, status);
     this.store.addEvent(id, 'task.finished', { status, ...(payload as object) });
     const task = this.store.getTask(id);

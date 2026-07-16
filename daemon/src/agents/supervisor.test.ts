@@ -140,6 +140,33 @@ test('intervention cap interrupts without a model call', async () => {
   assert.equal(events[0].payload.kind, 'cap');
 });
 
+test('gateForHook defers policy-allow tools to the auto classifier', async () => {
+  const sup = makeSupervisor({});
+  assert.deepEqual(await sup.gateForHook('Read', { file_path: '/etc/hosts' }), { decision: 'defer' });
+  assert.deepEqual(await sup.gateForHook('Bash', { command: 'npm test' }), { decision: 'defer' });
+  assert.deepEqual(await sup.gateForHook('Edit', { file_path: `${CWD}/a.ts` }), { decision: 'defer' });
+});
+
+test('gateForHook escalates the hard class through the notch', async () => {
+  const escalations: Array<{ title: string; detail: string }> = [];
+  const denied = makeSupervisor({ approve: false, escalations });
+  const r = await denied.gateForHook('Bash', { command: 'git push' });
+  assert.equal(r.decision, 'deny');
+  assert.match(String(r.reason), /declined/);
+  assert.equal(escalations.length, 1);
+
+  const approved = makeSupervisor({ approve: true });
+  assert.equal((await approved.gateForHook('Bash', { command: 'git push' })).decision, 'allow');
+});
+
+test('gateForHook answers AskUserQuestion; cap requests interrupt', async () => {
+  const capped = makeSupervisor({ maxInterventions: 0 });
+  const r = await capped.gateForHook('AskUserQuestion', { questions: [{ question: 'Tabs?' }] });
+  assert.equal(r.decision, 'deny');
+  assert.equal(r.interrupt, true);
+  assert.ok(capped.capHit);
+});
+
 test('writeLog lands supervisor.md in the workspace', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'gumbo-sup-'));
   const sup = makeSupervisor({});

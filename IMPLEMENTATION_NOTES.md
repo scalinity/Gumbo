@@ -821,6 +821,69 @@ each committed + pushed; the live smoke was re-run green after the fixes. Highli
 Merged into main (weaving with the Firecrawl side-feature that landed there meanwhile). Full
 merged daemon suite: **88/88 green**. SPEC §9 M4 marked ✅ built.
 
+### M4.0 hardening + plan-mode + auto/hook (2026-07-16, from a gap-analysis the user requested)
+
+After the merge, a gap review surfaced 7 improvements; the user picked which to build (skipped a
+cost/turns readout — subscription, irrelevant — and a wall-clock budget). All landed, 95 unit
+tests green, and TWO live daemon smokes pass (original auto flow + this hardening flow):
+
+- **Plan-then-execute.** Fresh sessions start `permissionMode: 'plan'` (read-only); Claude presents
+  a plan via `ExitPlanMode`, which `canUseTool` intercepts → `claude.plan` event + a notch confirm
+  (longer window, `planConfirmTimeoutMs` = 15 min; the full plan renders in the dashboard/bubble,
+  the confirm shows a one-line summary). Approve → the run switches to execution. Resumes skip
+  planning. Decline/timeout parks `needs_input` (resumable). Verified live: plan → approve → build
+  `--loud` → verify → report → done.
+- **`'auto'` execution + PreToolUse hook (the user's call).** the user: the post-plan transition should
+  be `'auto'`, not `'acceptEdits'`. **Load-bearing discovery from the smoke:** `'auto'` hands the
+  safety decision to the CLI classifier and **bypasses `canUseTool` entirely** — so git push ran
+  with NO escalation and AskUserQuestion wouldn't reach the supervisor. Reconciled (the user chose
+  "auto + hook"): the supervisor gate moved to a **PreToolUse hook** (`supervisor.gateForHook`),
+  which fires in every mode. Safe ops **defer** to the classifier (zero supervisor cost — the user's
+  original goal); the hard-escalate class routes to the notch. Re-verified live: under `'auto'`,
+  git push escalated → denied → Claude didn't retry, while Write/test/commit auto-ran.
+  `canUseTool` now does ONLY the ExitPlanMode plan-approval mode switch.
+- **GOTCHA (cost a debugging round): reentrant control-request deadlock.** Calling
+  `query.setPermissionMode()` *inside* the `canUseTool`/hook callback hangs the run — the SDK can't
+  process a control request while it's blocked awaiting that very callback. Fixes: the plan
+  approval switches mode atomically via the permission result (`updatedPermissions: [{type:
+  'setMode', mode:'auto', destination:'session'}]`), and the cap's `query.interrupt()` is scheduled
+  with `setImmediate` to run after the hook returns. Never `await` a control request from within a
+  gate callback.
+- **#1 supervisor-model outage degrades** to a safe-default answer (still counts toward the cap)
+  instead of throwing and killing the session; an abort still propagates.
+- **#2 turn/budget-limit result** (`error_max_turns`/`error_max_budget_usd`) **parks** the task
+  `needs_input` with a reason (resumable) rather than failing — the work is on disk.
+- **#5 file checkpointing** (`enableFileCheckpointing`): capture the first user-message uuid as the
+  rewind target; `undo_session` tool → `manager.undoSession` → `runner.undo()` rewinds a LIVE
+  session's edits (rewindFiles is a streaming control request; a closed session falls back to git).
+- **#6 auth-expiry**: not-logged-in / `authentication_failed` → a clear "run `claude`, then
+  `/login`" failure (marked `auth:` so the manager records an actionable reason).
+- **#7 concurrent-edit guard**: a second session on the same `project_dir` is refused
+  (`activeCwds`, kept through park, cleared on terminal).
+- **#3 (allowlist footgun) left as a note** in CLAUDE.md — inert today (no allow rules), documented
+  as the first thing to check if escalations ever stop firing.
+- Also: `finishWithReport` shared by both runners; `supervisor.md` appends across resumes; question
+  text wrapped in a neutralized `<questions>` delimiter (mirrors the M3 report path); the cancel
+  signal threads into `ConfirmBridge` (+ `confirm_cancel`) to dismiss a stale notch panel.
+
+### M4.1 — sandbox kickoff prompt (paste into a supervised Claude session)
+
+> In this repo (`/Users/dev/Documents/Apps/Gumbo`), add an OS-level sandbox to the Claude Code
+> sessions the daemon spawns. Read SPEC.md §M4.1 and CLAUDE.md's "M4 Claude-session gating" section
+> first. The daemon spawns sessions in `daemon/src/agents/claude-runner.ts` via the Agent SDK
+> `query()`. **Spike first:** confirm the SDK's `sandbox` option actually works on this macOS 27.0
+> beta (the SDK docs mention bubblewrap on Linux and fail-closed on unsupported platforms — write a
+> ~15-line throwaway `query()` script that runs a command needing filesystem/network access under
+> `sandbox: { enabled: true, failIfUnavailable: true }` and confirm it's confined, before touching
+> the runner). Then wire `sandbox` into the runner's query options so writes are confined to the
+> session `cwd` + task workspace and outbound network is blocked by default, `failIfUnavailable:
+> true` (fail closed — surface a clear message if the platform can't sandbox rather than running
+> unconfined). Keep plan-mode, the PreToolUse hook, and the escalations exactly as they are — the
+> sandbox layers UNDER them (deterministic containment; the policy table stays for semantic
+> confirms like git push). Add a config block under `config.claude`. Daemon tests run `node --test`
+> strip-only — no constructor parameter properties. Update IMPLEMENTATION_NOTES with a dated M4.1
+> entry (why, not just what) and the spike result. Do not run build commands on the JS side.
+
 ---
 
 ## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15

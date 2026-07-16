@@ -295,6 +295,8 @@ body {
 .machine[data-kind='error'] .body { color: var(--alarm); }
 /* M4: Claude session stream + supervisor decisions */
 .machine[data-kind='claude'] .body { color: var(--text); }
+.machine[data-kind='plan'] .tag { color: var(--gold); }
+.machine[data-kind='plan'] .body { color: var(--text); white-space: pre-wrap; }
 .machine[data-kind='supervisor'] .tag { color: var(--gold); }
 .machine[data-kind='supervisor'][data-decision='deny'] .body,
 .machine[data-kind='supervisor'][data-decision='cap'] .body { color: var(--alarm); }

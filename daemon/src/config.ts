@@ -94,6 +94,14 @@ export const config = {
     // Notch confirm: deny on timeout so a missed prompt can't hang a session forever.
     confirmTimeoutMs: 60_000,
     maxTurns: 100, // runaway backstop, not a working budget
+    // Plan-before-execute (the user, 2026-07-16): a fresh session first runs read-only in
+    // plan mode, surfaces its plan for approval, and only then edits. Follow-ups (resumes)
+    // skip planning — they're already a direct instruction. Flip false to disable globally.
+    planFirst: true,
+    // Plan approval is a deliberate review, not a fail-safe like a dangerous action — give
+    // the user room to read the plan (in the dashboard/bubble) before the notch auto-denies.
+    // A denied/timed-out plan parks needs_input; it's resumable, nothing is lost.
+    planConfirmTimeoutMs: 900_000, // 15 min
   },
   // Firecrawl: content acquisition (scrape/crawl/map/extract) for background sub-agents
   // only — never a search provider, never on the voice hot path. All budgets are generous
