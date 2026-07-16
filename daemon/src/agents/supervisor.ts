@@ -21,13 +21,19 @@ export interface PolicyResult {
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 
 // Bash patterns that always escalate to the user, checked before anything else. This list
-// IS the safety boundary in auto mode — everything not matching runs unreviewed.
+// IS the safety boundary in auto mode — everything not matching runs unreviewed. It can't
+// be exhaustive (Claude could shell out to `nc`/`python` — an accepted trade-off of auto
+// mode), but it must not be trivially evaded on the exact tools it names.
 const ESCALATE_BASH: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\bgit\s+push\b/, reason: 'git push' },
+  // `git … push` with any flags in between (`git -C /repo push`, `git --git-dir=… push`).
+  // A commit message that merely contains "push" will over-escalate to a confirm — the safe
+  // direction; genuine pushes must never slip through.
+  { pattern: /\bgit\b[^|;&]*\bpush\b/, reason: 'git push' },
   { pattern: /\bsudo\b/, reason: 'sudo' },
   // Sending data off the machine (uploads, POSTs) — plain downloads stay auto-allowed.
+  // Covers curl (-d/-F/-T/--data*/--form/--upload-file/-X POST…) and wget (--post-*/--body-*).
   {
-    pattern: /\b(curl|wget)\b[^|;&]*(\s-(d|F|T)\b|--data\b|--data-[a-z]+\b|--form\b|--upload-file\b|-X\s*(POST|PUT|PATCH|DELETE)\b)/i,
+    pattern: /\b(curl|wget)\b[^|;&]*(\s-(d|F|T)\b|--data\b|--data-[a-z]+\b|--form\b|--upload-file\b|--post-[a-z]+\b|--body-[a-z]+\b|-X\s*(POST|PUT|PATCH|DELETE)\b)/i,
     reason: 'network send',
   },
   { pattern: /\bgh\b\s+(pr|issue|release|repo|gist)\s+(create|edit|merge|close|comment|delete)\b/, reason: 'GitHub write' },
@@ -35,28 +41,71 @@ const ESCALATE_BASH: Array<{ pattern: RegExp; reason: string }> = [
 ];
 
 const DELETE_COMMANDS = new Set(['rm', 'rmdir', 'unlink', 'shred', 'trash']);
+// $VAR, ${…}, $(…), backticks — a target containing these can't be resolved statically,
+// so we can't prove where it lands. `resolve()` would treat `$D/x` as a literal relative
+// path under cwd and wrongly allow it (the bypass CA1 caught).
+const SHELL_EXPANSION = /[$`]/;
 
 function underDir(path: string, dir: string): boolean {
   const abs = resolve(dir, path);
   return abs === dir || abs.startsWith(dir + sep);
 }
 
+function unquote(token: string): string {
+  return token.replace(/^['"]|['"]$/g, '');
+}
+
+/** The offending target if it isn't provably inside cwd, else null (escalate on non-null). */
+function targetEscapes(target: string, cwd: string): string | null {
+  if (!target) return null;
+  if (SHELL_EXPANSION.test(target)) return target; // unresolvable statically → escalate
+  if (target.startsWith('~')) return target;
+  return underDir(target, cwd) ? null : target;
+}
+
 /**
- * Find a delete target outside the session's cwd. Tokenization is deliberately naive —
- * it only needs to catch obvious outside-the-workspace deletes (absolute paths, ~,
- * ..-escapes); anything it misreads still resolves under cwd and stays deletable there,
- * where the workspace is disposable by design.
+ * Detect a delete whose target isn't provably inside the session cwd. The bias is
+ * deliberately conservative — a delete we can't statically resolve (shell expansion,
+ * stdin-fed `xargs`) escalates rather than allows. Over-escalating an in-cwd delete costs
+ * one confirm; under-escalating an outside delete is data loss, and Claude's inputs are
+ * attacker-influenceable (it reads untrusted web/file content). Still not a real shell
+ * parser: exotic obfuscation can slip through — auto mode's accepted ceiling.
  */
 function deleteOutsideCwd(command: string, cwd: string): string | null {
   for (const segment of command.split(/\|\||&&|;|\|/)) {
-    const tokens = segment.trim().split(/\s+/);
-    const idx = tokens.findIndex((t) => DELETE_COMMANDS.has(t));
+    const tokens = segment.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    const head = unquote(tokens[0]);
+
+    // `xargs … rm` — delete targets arrive on stdin, so where they land is unknowable.
+    if (head === 'xargs') {
+      if (tokens.slice(1).some((t) => DELETE_COMMANDS.has(unquote(t)))) return 'xargs delete (targets from stdin)';
+      continue;
+    }
+
+    // `find <paths…> -delete` / `find … -exec rm …` — the search roots are the targets.
+    if (head === 'find') {
+      const deletes = tokens.some(
+        (t, i) => t === '-delete' || ((t === '-exec' || t === '-execdir') && DELETE_COMMANDS.has(unquote(tokens[i + 1] ?? ''))),
+      );
+      if (!deletes) continue;
+      // Path operands come before the first expression token (a -flag or ( group ).
+      for (const raw of tokens.slice(1)) {
+        if (raw.startsWith('-') || raw.startsWith('(')) break;
+        const escaped = targetEscapes(unquote(raw), cwd);
+        if (escaped) return `find -delete on ${escaped}`;
+      }
+      continue; // no path operand → defaults to cwd → allowed
+    }
+
+    // rm / rmdir / unlink / shred / trash <targets…> — unquote so `bash -c 'rm …'` (token
+    // `'rm`) is still recognized as a delete.
+    const idx = tokens.findIndex((t) => DELETE_COMMANDS.has(unquote(t)));
     if (idx === -1) continue;
     for (const raw of tokens.slice(idx + 1)) {
       if (raw.startsWith('-')) continue;
-      const target = raw.replace(/^['"]|['"]$/g, '');
-      if (target.startsWith('~') || target.includes('$HOME')) return target;
-      if (!underDir(target, cwd)) return target;
+      const escaped = targetEscapes(unquote(raw), cwd);
+      if (escaped) return escaped;
     }
   }
   return null;
