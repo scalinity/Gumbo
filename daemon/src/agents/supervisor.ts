@@ -269,6 +269,30 @@ export class Supervisor {
     return { decision: 'deny', reason: result.message, interrupt: result.interrupt === true };
   }
 
+  /**
+   * Escalate an outbound connection to a non-allowlisted host to the user (M4.1 egress proxy).
+   * Returns true if approved — the proxy tunnels; false → the proxy 403s. Allowlisting and
+   * per-host memoization live in the proxy; this is a one-shot confirm through the same notch
+   * bridge as the policy escalations, so a headless timeout denies (fail-closed).
+   */
+  async escalateHost(host: string, signal?: AbortSignal): Promise<boolean> {
+    this.opts.setBlocked(true);
+    let approved = false;
+    try {
+      approved = await this.opts.escalate(
+        { title: `Allow network access to ${host}?`, detail: `the session wants to reach ${host}, which isn't on the allowlist` },
+        signal,
+      );
+    } finally {
+      this.opts.setBlocked(false);
+    }
+    this.decide(
+      { kind: 'egress', host, decision: approved ? 'allow' : 'deny', source: 'the user' },
+      `${approved ? 'the user approved' : 'the user denied'} network host: ${host}`,
+    );
+    return approved;
+  }
+
   async gateTool(toolName: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<GateResult> {
     if (toolName === 'AskUserQuestion') return this.answerQuestions(input, signal);
     const policy = policyDecision(toolName, input, this.opts.cwd);
