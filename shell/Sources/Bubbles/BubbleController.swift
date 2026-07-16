@@ -417,35 +417,44 @@ struct OrbView: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 40.0)) { context in
-            let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            let now = context.date.timeIntervalSinceReferenceDate
-            // The shader sees float32 — a raw epoch timestamp loses sub-second precision
-            // and the flow stutters. Wrap hourly (one imperceptible seam per hour).
-            let shaderT = reduceMotion ? 0.0 : now.truncatingRemainder(dividingBy: 3600)
-            // Two detuned sines so the breath never reads as a loop.
-            let breath = reduceMotion ? 0.0 :
-                (sin(now * 2 * .pi / 3.4) * 0.7 + sin(now * 2 * .pi / 8.1 + 1.3) * 0.3) * breathAmp
-            let side = diameter * 1.55
-
-            ZStack {
-                Rectangle()
-                    .fill(Color.white)
-                    .frame(width: side, height: side)
-                    .colorEffect(ShaderLibrary.orb(
-                        .float2(side, side),
-                        .float(shaderT),
-                        .float(aliveness),
-                        .float(breath),
-                        .color(palette.hot),
-                        .color(palette.base),
-                        .color(palette.deep)))
-                ring(t: shaderT)
-                ripple(now: context.date)
+        Group {
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                // Reduce Motion: one static frame — no timeline, no per-pixel redraw loop.
+                orbLayers(now: Date(timeIntervalSinceReferenceDate: 0), shaderT: 0, breath: 0)
+            } else {
+                // Settled orbs drop to 15 fps — the calm drift doesn't need 40.
+                TimelineView(.animation(minimumInterval: model.state.isAlive ? 1.0 / 40.0 : 1.0 / 15.0)) { context in
+                    let now = context.date.timeIntervalSinceReferenceDate
+                    // The shader sees float32 — a raw epoch timestamp loses sub-second
+                    // precision and the flow stutters. Wrap hourly (one seam per hour).
+                    let shaderT = now.truncatingRemainder(dividingBy: 3600)
+                    // Two detuned sines so the breath never reads as a loop.
+                    let breath = (sin(now * 2 * .pi / 3.4) * 0.7 + sin(now * 2 * .pi / 8.1 + 1.3) * 0.3) * breathAmp
+                    orbLayers(now: context.date, shaderT: shaderT, breath: breath)
+                }
             }
-            .scaleEffect(1 + 0.04 * breath) // the geometric half of the breath
         }
         .frame(width: diameter * 1.55, height: diameter * 1.55)
+    }
+
+    private func orbLayers(now: Date, shaderT: Double, breath: Double) -> some View {
+        let side = diameter * 1.55
+        return ZStack {
+            Rectangle()
+                .fill(Color.white)
+                .frame(width: side, height: side)
+                .colorEffect(ShaderLibrary.orb(
+                    .float2(side, side),
+                    .float(shaderT),
+                    .float(aliveness),
+                    .float(breath),
+                    .color(palette.hot),
+                    .color(palette.base),
+                    .color(palette.deep)))
+            ring(t: shaderT)
+            ripple(now: now)
+        }
+        .scaleEffect(1 + 0.04 * breath) // the geometric half of the breath
     }
 
     @ViewBuilder
