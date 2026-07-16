@@ -781,5 +781,137 @@ scratch git repo — implemented + verified a `--json` flag; `git push origin ma
 `confirm_request` at a fake shell → denied → deny honored (no retry); event stream persisted
 all four M4 types; bubbles flipped running → needs_input → done + notch_pulse; report.md +
 supervisor.md landed; then `sendToSession` on the *finished* task resumed the same session,
-which added a `--version` flag and completed again. 50/50 unit tests green. **Remaining for
-the live demo with the user:** voice-driven spawn → real notch confirm click → spoken completion.
+which added a `--version` flag and completed again. **Remaining for the live demo with
+the user:** voice-driven spawn → real notch confirm click → spoken completion.
+
+### Review + address pass (2-agent /review-2 → /address, 2026-07-16)
+
+DB1 (debugger, Fable 5) + CA1 (auditor, Opus 4.7) reviewed the full M4 diff vs main. Two
+independent 🔴s (both real, both missed by the first smoke), plus 🟡s/🔵s — **all addressed**,
+each committed + pushed; the live smoke was re-run green after the fixes. Highlights:
+
+- **🔴 delete-command policy bypass (CA1).** `deleteOutsideCwd` treated `$VAR`/`$(…)` as
+  literal path segments, so `D=/Users/dev; rm -rf $D/Documents` resolved under cwd → `allow`
+  → the shell expanded it and deleted outside the workspace with **no notch confirm**. Also
+  `bash -c 'rm …'` (quoted token) and `find -delete`/`xargs rm` (no bare `rm` token). Fix: a
+  delete target that can't be statically proven inside cwd (shell expansion, stdin-fed xargs)
+  now **escalates conservatively** — over-escalating an in-cwd delete costs one confirm;
+  under-escalating is data loss, and Claude's inputs are attacker-influenceable. Also closed
+  `git -C … push` and `wget --post-*` denylist evasions. Regression tests for each.
+- **🔴 cancel-of-parked no-op (DB1).** The intervention-cap park branch deleted the runner
+  from `claudeRunners` but not the stale `AbortController` from `aborts`, so `cancel()` aborted
+  a dead run and returned `true` while the task stayed `needs_input` — the voice model would
+  report "cancelled" while nothing was. Fix: `aborts.delete` on park so cancel reaches the
+  needs_input close-out. De-sugared the manager constructor (strip-only test mode) + added an
+  injectable runner factory; a manager lifecycle test (park→cancel, done, resume) now guards it.
+- **🟡 reaper flipped `needs_input` → `failed` on restart** — a resumable parked task read as
+  failed after any `tsx watch` restart (and the voice model answers from that verbatim). Reaper
+  now leaves `needs_input` alone (resumes off `claude_sessions` regardless of daemon lifetime).
+- **🟡 ConfirmController fade-out wedge** — a confirm arriving in the 180 ms fade window was
+  shown, then the prior fade's completion handler hid it and wedged `showing`, silently killing
+  every future confirm until relaunch. Guarded the completion handler.
+- **🟡 tests** for the fail-safe path: ConfirmBridge (deny-on-no-shell/timeout, approve,
+  unknown/duplicate no-op, abort-dismiss) with an injectable timeout, and the InputQueue.
+- **🔵s:** reserve the intervention slot before the model await; wrap Claude's question text in
+  a neutralized `<questions>` delimiter (mirrors the M3 report path); append `supervisor.md`
+  across resumes; thread the task abort into `ConfirmBridge` (+ a `confirm_cancel` wire message)
+  so cancelling a task dismisses its pending notch panel instead of dangling ~60 s; extracted
+  `finishWithReport` shared by both runners; documented why Claude events write to sqlite inline.
+
+Merged into main (weaving with the Firecrawl side-feature that landed there meanwhile). Full
+merged daemon suite: **88/88 green**. SPEC §9 M4 marked ✅ built.
+
+---
+
+## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15
+
+### Build
+- New `daemon/src/scrape/firecrawl.ts` — raw Firecrawl **v2** client (no SDK, same reasoning
+  as the exa-js removal) behind four background sub-agent tools in `agents/openai-runner.ts`:
+  `scrape_page`, `map_site`, `crawl_site`, `extract_structured`. **Content acquisition from
+  known URLs/sites only — never a third search provider**; Firecrawl `/search` is deliberately
+  not integrated, and `realtime/tools.test.ts` asserts on the actual registry that no
+  Firecrawl tool ever reaches the realtime session config.
+- `search/client.ts` generalized: `postJson` is now an alias of `requestJson`, which takes an
+  optional `method` (`GET`/`DELETE`) and optional body — needed for async-job polling and
+  cancellation. Same retry policy, typed errors, and audit conventions apply unchanged;
+  existing callers didn't move. `FIRECRAWL_API_KEY` joined boot validation + `.env`.
+- Persistence reuses the memory table verbatim: `persistResults` grew a `provider` param
+  (default `'exa'`), so every scraped/crawled page lands FTS5-indexed with source URL +
+  retrieval timestamp. Extract output is persisted as one pretty-printed-JSON row **per
+  source URL** (≤10) so every memory record carries its own provenance.
+
+### Verified against docs.firecrawl.dev + firecrawl.dev/pricing (2026-07-15)
+- Endpoints: `POST /v2/scrape` (sync), `POST /v2/map` (sync), `POST /v2/crawl` → job id,
+  polled via `GET /v2/crawl/{id}` (status `scraping|completed|failed`, paginated `next`
+  cursor in ~10 MB chunks), cancelled via `DELETE /v2/crawl/{id}`; `POST /v2/extract` → job
+  id, polled via `GET /v2/extract/{id}` (status `processing|completed|failed|cancelled`).
+  **No DELETE is documented for extract** — a task abort stops polling but can't kill the
+  server-side job (bounded: it only touches the given URLs).
+- **Credit costs (they justify the breadth defaults):** scrape and crawl are **1 credit per
+  page**; map is billed per page listed ("1 / page" on the pricing table — ambiguous whether
+  per-call, so our map default limit is 500); extract bills in credits at **15 tokens per
+  credit**; search is 2/10 results (unused). **The crawl API's own `limit` default is
+  10 000 pages** — a blind crawl at API defaults would be 10 000 credits, hence: default
+  100 pages / depth 3, cap sent as the API `limit` AND enforced client-side while
+  collecting. The client-side check caught a real bug in review: pagination followed the
+  `next` cursor once more *before* re-checking the cap (unit test caught it).
+- **robots.txt:** crawl respects it by default; `ignoreRobotsTxt` exists but is
+  enterprise-only and defaults false — we never set it, so compliance is structural.
+- **Polling, not webhooks:** the daemon binds loopback only, so Firecrawl's cloud can never
+  deliver a webhook. No documented recommended poll interval; we poll every 3 s under an
+  overall job budget (crawl 10 min, extract 5 min — background budgets in the spirit of Exa
+  `deep`'s 180 s). Crawl polls emit `crawl.status` events (only on progress change) so the
+  dashboard/bubble panel can watch a long crawl; any error/abort/budget exit with a live job
+  fires a best-effort remote DELETE so a dead task stops spending credits.
+- Audit: every outbound call gets its own JSONL line as it happens — submits, each status
+  poll, each pagination fetch, and remote cancels (job routes logged as `/crawl/:id`-style
+  endpoints with the target URL as `query`; polls carry the server-reported page count).
+  A failing call is audited once, by the operation-level catch, which also records logical
+  failures (empty results, budget exhaustion) that have no failing HTTP call behind them.
+- Extract's tool takes the JSON Schema **as a JSON string** — strict function schemas don't
+  take free-form object params; the tool parses and returns a model-facing error on bad JSON.
+
+### Gating (pre-M4)
+No permission engine yet (M4). scrape/map are auto-allowed like background search; crawl and
+extract ride the existing voice-triggered spawn-task flow — they only exist inside sub-agent
+runs the user deliberately spawns. M4 registration defaults recorded in CLAUDE.md.
+
+### Verified (how)
+- 63/63 unit tests green (`npm test -w daemon`): request serialization for all four ops, the
+  crawl job lifecycle (submit → poll → paginate → complete, failure, budget timeout, and
+  task-abort paths — the latter two assert the remote DELETE), client-side page-cap
+  enforcement, typed-error mapping (401 auth non-retried / 429 quota / abort timeout / 5xx
+  retried max twice), `requestJson` GET/DELETE contracts, and the no-Firecrawl-in-realtime
+  registry assertion.
+- Smoke 1 (real API, scratchpad `GUMBO_HOME`): scraped `bsky.app/profile/bsky.app` — a true
+  SPA that's an empty HTML shell without JS — into 50 991 chars of clean markdown; memory row
+  (provider `firecrawl`, ts, source URL), FTS5 `MATCH` hit, and `/scrape ok:true` audit line
+  all verified.
+- Smoke 2 (real API): mapped `docs.firecrawl.dev` (30 URLs) → selectively scraped 2 mapped
+  pages → crawled with `maxPages: 5`: exactly 5 pages returned (progress polls observed
+  `scraping 4/5 → 5/5 → completed`), page cap held, one audit line per operation.
+- **GOTCHA:** `/map` leans on sitemaps — `tsx.is` (no sitemap) mapped to just its homepage
+  while `docs.firecrawl.dev` returned a full URL list. If a map comes back near-empty, the
+  site probably has no sitemap; scrape/crawl still work there.
+
+### Review + address pass (2026-07-15, two-axis standards/spec review)
+- **Audit granularity reverted to per-call.** The build had narrowed "audit every outbound
+  call" to one line per logical operation (polls unlogged) — a self-authorized standards
+  change the review flagged on both axes. Now every submit/poll/pagination/cancel gets its
+  own line via `auditedCall`; failures audit exactly once at the op-level catch (never in
+  the helper) so a failed call can't produce two lines. Volume cost is real (~200 lines for
+  a 10-min crawl) but the audit log is private provenance, not a UX surface — spec wins.
+- `firecrawlHeaders()` moved inside `try` in crawl/extract (was inconsistent with
+  scrape/map, and a missing-key auth throw escaped unaudited).
+- Extract persists one row **per source URL** (was `urls[0]` only — other sources survived
+  only in the query string); mirrors the exaContents row-per-url shape.
+- `map_site`'s relevance-ordering `search` param removed as scope creep (spec: map = URL
+  list). Trade-off accepted: on large sites agents pick from the raw list. Map results are
+  deliberately NOT persisted to memory (URL lists, not content) — now documented in
+  CLAUDE.md rather than implicit.
+- Inline 30 s/10 s job timeouts → `config.firecrawl.requestTimeoutMs`/`cancelTimeoutMs`;
+  poll interval renamed `jobPollIntervalMs` since extract shares it with crawl.
+- Review's informational note, for posterity: crawl/extract gating is tool-description
+  steering + the spawn-task approval flow, not a code-level gate — that IS the pre-M4
+  design, not an oversight.

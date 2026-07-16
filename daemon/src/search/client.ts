@@ -1,8 +1,8 @@
-// Shared HTTP layer for web-search providers (Tavily, Exa). One POST helper with the
-// repo-wide retry policy and one typed error so callers branch on `kind`, never on
-// message strings.
+// Shared HTTP layer for external providers (Tavily, Exa, Firecrawl). One request helper
+// with the repo-wide retry policy and one typed error so callers branch on `kind`, never
+// on message strings.
 
-export type Provider = 'tavily' | 'exa';
+export type Provider = 'tavily' | 'exa' | 'firecrawl';
 export type SearchErrorKind = 'timeout' | 'auth' | 'quota' | 'empty_results' | 'http' | 'network';
 
 export class SearchError extends Error {
@@ -23,15 +23,17 @@ export class SearchError extends Error {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * POST JSON to a provider. Retries only 429/5xx (backoff), never auth or other 4xx.
- * The voice hot path passes retries: 0 — a waiting voice turn must fail fast, not
- * stack backoff.
+ * Send a JSON request to a provider. Retries only 429/5xx (backoff), never auth or other
+ * 4xx. The voice hot path passes retries: 0 — a waiting voice turn must fail fast, not
+ * stack backoff. Defaults to POST; GET/DELETE exist for async-job providers (Firecrawl
+ * crawl/extract polling + cancellation).
  */
-export async function postJson(opts: {
+export async function requestJson(opts: {
   provider: Provider;
   url: string;
+  method?: 'POST' | 'GET' | 'DELETE';
   headers: Record<string, string>;
-  body: unknown;
+  body?: unknown;
   timeoutMs: number;
   retries: number;
   retryDelaysMs?: number[];
@@ -47,9 +49,10 @@ export async function postJson(opts: {
     try {
       const timeout = AbortSignal.timeout(opts.timeoutMs);
       res = await fetch(opts.url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...opts.headers },
-        body: JSON.stringify(opts.body),
+        method: opts.method ?? 'POST',
+        headers:
+          opts.body === undefined ? opts.headers : { 'content-type': 'application/json', ...opts.headers },
+        ...(opts.body !== undefined && { body: JSON.stringify(opts.body) }),
         signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
       });
     } catch (err) {
@@ -79,3 +82,6 @@ export async function postJson(opts: {
     if (!retryable || attempt >= opts.retries) throw lastError;
   }
 }
+
+/** POST JSON to a provider — the common case. Same contract as requestJson. */
+export const postJson = requestJson;

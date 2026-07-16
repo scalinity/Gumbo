@@ -95,6 +95,23 @@ export const config = {
     confirmTimeoutMs: 60_000,
     maxTurns: 100, // runaway backstop, not a working budget
   },
+  // Firecrawl: content acquisition (scrape/crawl/map/extract) for background sub-agents
+  // only — never a search provider, never on the voice hot path. All budgets are generous
+  // background budgets (Exa `deep` precedent: 180 s). Crawl breadth defaults are scope
+  // bounds against runaway credit spend (verified 2026-07-15: 1 credit/page, and the API's
+  // own `limit` default is 10 000 pages = 10 000 credits on a blind crawl).
+  firecrawl: {
+    scrapeTimeoutMs: 120_000, // single page, JS rendering included
+    mapTimeoutMs: 60_000,
+    mapDefaultLimit: 500, // URL-list discovery; bounded because map is billed per page listed
+    requestTimeoutMs: 30_000, // each submit/poll/pagination call inside an async job
+    cancelTimeoutMs: 10_000, // best-effort remote cancel of a dead crawl job
+    jobPollIntervalMs: 3000, // crawl + extract; no documented recommended interval
+    crawlJobBudgetMs: 600_000, // overall async-job budget: submit → poll → collect
+    crawlDefaultMaxPages: 100,
+    crawlDefaultMaxDepth: 3,
+    extractJobBudgetMs: 300_000,
+  },
   // How long a finished task's bubble lingers before the daemon sends bubble_remove.
   bubbleLingerMs: 12_000,
   // Report excerpt embedded in a live completion announcement — enough for the model to

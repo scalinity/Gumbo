@@ -106,6 +106,22 @@ test('caller abort tears down the request and rethrows the raw reason', async ()
   await rejected;
 });
 
+test('requestJson GET sends no body and no content-type (async-job polling contract)', async () => {
+  const { requestJson } = await import('./client.ts');
+  const calls = mockFetch(() => json(200, { status: 'scraping' }));
+  await requestJson({ ...base, method: 'GET', body: undefined });
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.body, undefined);
+  assert.equal((calls[0].init.headers as Record<string, string>)['content-type'], undefined);
+});
+
+test('requestJson DELETE passes the method through (job cancellation contract)', async () => {
+  const { requestJson } = await import('./client.ts');
+  const calls = mockFetch(() => json(200, { status: 'cancelled' }));
+  assert.deepEqual(await requestJson({ ...base, method: 'DELETE', body: undefined }), { status: 'cancelled' });
+  assert.equal(calls[0].init.method, 'DELETE');
+});
+
 test('connection failure → network error', async () => {
   globalThis.fetch = (async () => {
     throw new TypeError('fetch failed');
