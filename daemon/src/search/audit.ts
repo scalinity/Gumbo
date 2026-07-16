@@ -3,6 +3,10 @@ import { join } from 'node:path';
 import { config } from '../config.ts';
 import type { Provider } from './client.ts';
 
+// The boot mkdir in index.ts normally covers this; the memoized fallback keeps tests and
+// unusual boot orders self-healing without a stat syscall on every hot-path lookup.
+let logsDirReady = false;
+
 // Every outbound search call — success or failure — lands as one JSONL line in
 // logs/search-audit.jsonl (private: logs/ is not a /files-served subtree). This is the
 // audit trail of every query Gumbo sends off-box.
@@ -15,7 +19,10 @@ export function auditSearchCall(entry: {
   error?: string;
 }) {
   try {
-    mkdirSync(config.home.logs, { recursive: true });
+    if (!logsDirReady) {
+      mkdirSync(config.home.logs, { recursive: true });
+      logsDirReady = true;
+    }
     appendFileSync(
       join(config.home.logs, 'search-audit.jsonl'),
       JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n',
