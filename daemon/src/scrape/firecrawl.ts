@@ -39,7 +39,6 @@ export interface FirecrawlPage {
 export interface FirecrawlLink {
   url: string;
   title?: string;
-  description?: string;
 }
 
 export interface CrawlProgress {
@@ -131,7 +130,7 @@ export async function firecrawlMap(
   opts: { search?: string | null; limit?: number | null; signal?: AbortSignal } = {},
 ): Promise<FirecrawlLink[]> {
   try {
-    const raw = await auditedCall<{ success?: boolean; links?: Array<{ url?: string; title?: string; description?: string }> }>('/map', url, {
+    const raw = await auditedCall<{ success?: boolean; links?: Array<{ url?: string; title?: string }> }>('/map', url, {
       provider: 'firecrawl',
       url: `${BASE}/map`,
       headers: firecrawlHeaders(),
@@ -145,8 +144,8 @@ export async function firecrawlMap(
       signal: opts.signal,
     }, (r) => (r.links ?? []).filter((l) => typeof l.url === 'string').length);
     const links = (raw.links ?? [])
-      .filter((l): l is { url: string; title?: string; description?: string } => typeof l.url === 'string')
-      .map((l) => ({ url: l.url, title: l.title, description: l.description }));
+      .filter((l): l is { url: string; title?: string } => typeof l.url === 'string')
+      .map((l) => ({ url: l.url, title: l.title }));
     if (links.length === 0) throw new SearchError('firecrawl', 'empty_results', 'no links found for site');
     return links;
   } catch (err) {
@@ -159,7 +158,6 @@ interface CrawlStatus {
   status?: string;
   total?: number;
   completed?: number;
-  creditsUsed?: number;
   next?: string | null;
   data?: PageData[];
 }
