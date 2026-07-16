@@ -9,7 +9,10 @@ try {
   // .env optional when vars are already in the environment
 }
 
-const port = Number(process.env.GUMBO_PORT ?? 8737); // override for isolated test instances
+// Port override for isolated test instances. Malformed values fall back to the default:
+// Number('') is 0 and Number('junk') is NaN — either would bind the wrong port entirely.
+const envPort = Number(process.env.GUMBO_PORT);
+const port = Number.isInteger(envPort) && envPort > 0 && envPort < 65536 ? envPort : 8737;
 const dashboardPort = 5173;
 const agentHome = process.env.GUMBO_HOME ?? join(homedir(), 'Gumbo');
 
