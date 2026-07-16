@@ -93,6 +93,7 @@ final class GumboController {
     private let hotkeys = Hotkeys()
     private let notch = NotchController()
     private let bubbles = BubbleController()
+    private let confirm = ConfirmController()
     private lazy var dashboard = DashboardWindow()
 
     private var daemonState = "idle"
@@ -108,6 +109,10 @@ final class GumboController {
         notch.installClickCatcher() // bare hardware notch opens the dashboard too
         // Bubble clicks expand in place (mini panel); the dashboard is its corner link.
         bubbles.onOpenDashboard = { [weak self] taskId in self?.showDashboard(taskId: taskId) }
+        // M4: notch confirms answer supervisor escalations (deny happens daemon-side on timeout).
+        confirm.onRespond = { [weak self] id, approved in
+            self?.ws.sendJSON(["type": "confirm_response", "id": id, "approved": approved])
+        }
         ws.connect()
     }
 
@@ -188,6 +193,15 @@ final class GumboController {
                 }
             case "notch_pulse":
                 self.notch.pulse(status: msg["status"] as? String ?? "done")
+            case "confirm_request":
+                if let id = msg["id"] as? String {
+                    self.confirm.present(
+                        id: id,
+                        taskTitle: msg["task_title"] as? String ?? "",
+                        title: msg["title"] as? String ?? "Allow this action?",
+                        detail: msg["detail"] as? String ?? "",
+                        timeoutMs: msg["timeout_ms"] as? Double ?? 60_000)
+                }
             case "event":
                 // Task-scoped activity for the bubble mini-panel live tail.
                 if let event = msg["event"] as? [String: Any] {

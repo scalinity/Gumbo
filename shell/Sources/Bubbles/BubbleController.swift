@@ -228,11 +228,12 @@ private final class FirstMouseHostingView<Content: View>: NSHostingView<Content>
 // MARK: - model
 
 /// Single source of truth for the wire status vocabulary (protocol.ts BubbleStatus) on
-/// the Swift side. Every status→visual decision routes through this — a status M4 adds
-/// (e.g. needs_input) lands on .unknown and renders ALIVE with its raw label, instead of
+/// the Swift side. Every status→visual decision routes through this — a status a future
+/// phase adds lands on .unknown and renders ALIVE with its raw label, instead of
 /// silently inheriting the spent/cancelled look from a String switch default.
 enum OrbState: String {
     case running, done, failed, cancelled
+    case needsInput = "needs_input" // M4: paused on the user (notch confirm or capped session)
     case unknown
 
     init(wire: String) {
@@ -240,7 +241,7 @@ enum OrbState: String {
     }
 
     /// Alive = task still in motion (no failsafe, breathing visuals).
-    var isAlive: Bool { self == .running || self == .unknown }
+    var isAlive: Bool { self == .running || self == .needsInput || self == .unknown }
 }
 
 final class BubbleModel: ObservableObject {
@@ -293,12 +294,36 @@ struct BubbleEvent: Identifiable {
             let name = payload["name"] as? String ?? "tool"
             let args = payload["args"] as? String ?? ""
             body = "\(name) \(args)"
+        case "claude.tool_use": // M4: Claude Code session stream
+            kind = .call
+            let name = payload["name"] as? String ?? "tool"
+            let input = payload["input"] as? String ?? ""
+            body = "\(name) \(input)"
         case "tool.result":
             kind = .result
             body = payload["output"] as? String ?? ""
-        case "subagent.message":
+        case "claude.tool_result":
+            kind = .result
+            body = payload["output"] as? String ?? ""
+        case "subagent.message", "claude.message":
             kind = .message
             body = payload["text"] as? String ?? ""
+        case "supervisor.decision":
+            kind = .lifecycle
+            switch payload["kind"] as? String {
+            case "reply":
+                body = "Supervisor answered: \(payload["answer"] as? String ?? "")"
+            case "cap":
+                body = "Supervisor cap hit — paused for the user"
+            default:
+                let decision = payload["decision"] as? String ?? "?"
+                let source = payload["source"] as? String ?? "policy"
+                body = "\(source == "the user" ? "the user" : "Policy") \(decision): \(payload["action"] as? String ?? "")"
+            }
+        case "task.status": // M4: needs_input ⇄ running flips
+            kind = .lifecycle
+            let status = payload["status"] as? String ?? ""
+            body = status == "needs_input" ? "Paused — needs the user" : "Running again"
         case "task.created":
             kind = .lifecycle
             body = "Task started"
@@ -350,6 +375,8 @@ private struct OrbPalette {
         switch state {
         case .running, .unknown: // unknown = alive-but-unrecognized, never spent
             return OrbPalette(hot: hexColor(0xFFCF9E), base: ember, deep: hexColor(0x8A2E12))
+        case .needsInput: // ember/bay hybrid: warm gold — waiting on the user, not working
+            return OrbPalette(hot: hexColor(0xFFEBB0), base: hexColor(0xE0B45A), deep: hexColor(0x6E5A2A))
         case .done:
             return OrbPalette(hot: hexColor(0xD9E9BB), base: bay, deep: hexColor(0x55703F))
         case .failed:
@@ -401,6 +428,7 @@ struct OrbView: View {
     private var aliveness: Double {
         switch model.state {
         case .running, .unknown: return 1.0
+        case .needsInput: return 0.8 // clearly alive, but the churn eases — it's waiting
         case .failed: return 0.3
         case .done: return 0.15
         case .cancelled: return 0.05
@@ -410,6 +438,7 @@ struct OrbView: View {
     private var breathAmp: Double {
         switch model.state {
         case .running, .unknown: return 1.0
+        case .needsInput: return 1.35 // deeper breath — the attention pull
         case .failed: return 0.3
         case .done: return 0.12
         case .cancelled: return 0.0
@@ -471,6 +500,11 @@ struct OrbView: View {
                     style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
                 .frame(width: ringD, height: ringD)
                 .rotationEffect(.radians(t * 2 * .pi / 6.5))
+        case .needsInput: // beacon: the full ring blinks slowly — "your turn"
+            Circle()
+                .stroke(palette.hot.opacity(0.25 + 0.6 * (sin(t * 2 * .pi / 1.8) * 0.5 + 0.5)),
+                        lineWidth: 1.5)
+                .frame(width: ringD, height: ringD)
         case .done:
             Circle().stroke(palette.base.opacity(0.45), lineWidth: 1)
                 .frame(width: ringD, height: ringD)
@@ -576,6 +610,7 @@ private struct BubblePanelView: View {
     private var statusColor: Color {
         switch model.state {
         case .running, .unknown: return ember
+        case .needsInput: return Color(red: 0.88, green: 0.71, blue: 0.35) // the beacon gold
         case .done: return bay
         case .failed: return alarm
         case .cancelled: return faint
@@ -585,6 +620,7 @@ private struct BubblePanelView: View {
     private var statusLabel: String {
         switch model.state {
         case .running: return "running…"
+        case .needsInput: return "needs your input"
         case .unknown: return model.status // show the raw wire status until it's mapped
         default: return model.state.rawValue
         }
