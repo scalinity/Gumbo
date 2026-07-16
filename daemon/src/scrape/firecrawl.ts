@@ -22,9 +22,11 @@ import { auditSearchCall } from '../search/audit.ts';
 // - Async jobs poll — the daemon binds loopback only, so Firecrawl's cloud webhooks can
 //   never reach it.
 //
-// Audit convention: one JSONL line per logical operation (scrape/map/crawl job/extract
-// job) at its terminal outcome, page count as resultCount. Status polls re-send only a
-// job id — no new query leaves the box — so they don't get their own lines.
+// Audit convention: every outbound call gets its own JSONL line as it happens — submits,
+// each status poll, each pagination fetch, remote cancels (job routes logged as
+// /crawl/:id-style endpoints, the target URL as query). A failing call is audited once,
+// by the operation-level catch, which also records logical failures (empty results,
+// budget exhaustion) that have no failing HTTP call behind them.
 
 const BASE = 'https://api.firecrawl.dev/v2';
 
@@ -76,6 +78,20 @@ function auditFailure(endpoint: string, query: string, err: unknown) {
   });
 }
 
+// Success side of the per-call audit: one line per outbound request, resultCount defined
+// per call. Failures are deliberately NOT audited here — they propagate to the single
+// operation-level catch, so a failed call never produces two lines.
+async function auditedCall<T>(
+  endpoint: string,
+  query: string,
+  req: Parameters<typeof requestJson>[0],
+  count: (result: T) => number,
+): Promise<T> {
+  const result = (await requestJson(req)) as T;
+  auditSearchCall({ provider: 'firecrawl', endpoint, query, resultCount: count(result), ok: true });
+  return result;
+}
+
 /**
  * Scrape one known URL to clean markdown (sync, JS-rendered by Firecrawl's headless
  * browser). Full content, no truncation anywhere — same quality-over-token-cost stance
@@ -86,7 +102,7 @@ export async function firecrawlScrape(
   opts: { waitForMs?: number | null; signal?: AbortSignal } = {},
 ): Promise<FirecrawlPage> {
   try {
-    const raw = (await requestJson({
+    const raw = await auditedCall<{ success?: boolean; data?: PageData }>('/scrape', url, {
       provider: 'firecrawl',
       url: `${BASE}/scrape`,
       headers: firecrawlHeaders(),
@@ -99,10 +115,9 @@ export async function firecrawlScrape(
       timeoutMs: config.firecrawl.scrapeTimeoutMs,
       retries: 2,
       signal: opts.signal,
-    })) as { success?: boolean; data?: PageData };
+    }, (r) => (r.data?.markdown?.trim() ? 1 : 0));
     const page = toPage(raw.data ?? {}, url);
     if (!page.markdown.trim()) throw new SearchError('firecrawl', 'empty_results', 'no markdown content for url');
-    auditSearchCall({ provider: 'firecrawl', endpoint: '/scrape', query: url, resultCount: 1, ok: true });
     return page;
   } catch (err) {
     auditFailure('/scrape', url, err);
@@ -116,7 +131,7 @@ export async function firecrawlMap(
   opts: { search?: string | null; limit?: number | null; signal?: AbortSignal } = {},
 ): Promise<FirecrawlLink[]> {
   try {
-    const raw = (await requestJson({
+    const raw = await auditedCall<{ success?: boolean; links?: Array<{ url?: string; title?: string; description?: string }> }>('/map', url, {
       provider: 'firecrawl',
       url: `${BASE}/map`,
       headers: firecrawlHeaders(),
@@ -128,12 +143,11 @@ export async function firecrawlMap(
       timeoutMs: config.firecrawl.mapTimeoutMs,
       retries: 2,
       signal: opts.signal,
-    })) as { success?: boolean; links?: Array<{ url?: string; title?: string; description?: string }> };
+    }, (r) => (r.links ?? []).filter((l) => typeof l.url === 'string').length);
     const links = (raw.links ?? [])
       .filter((l): l is { url: string; title?: string; description?: string } => typeof l.url === 'string')
       .map((l) => ({ url: l.url, title: l.title, description: l.description }));
     if (links.length === 0) throw new SearchError('firecrawl', 'empty_results', 'no links found for site');
-    auditSearchCall({ provider: 'firecrawl', endpoint: '/map', query: url, resultCount: links.length, ok: true });
     return links;
   } catch (err) {
     auditFailure('/map', url, err);
@@ -151,7 +165,7 @@ interface CrawlStatus {
 }
 
 /** Best-effort remote cancel — a dead job must not keep spending credits server-side. */
-function cancelCrawlJob(jobId: string) {
+function cancelCrawlJob(jobId: string, seedUrl: string) {
   requestJson({
     provider: 'firecrawl',
     url: `${BASE}/crawl/${jobId}`,
@@ -159,7 +173,14 @@ function cancelCrawlJob(jobId: string) {
     headers: firecrawlHeaders(),
     timeoutMs: 10_000,
     retries: 0,
-  }).catch((err) => console.error(`firecrawl: crawl ${jobId} cancel failed:`, err));
+  }).then(
+    () => auditSearchCall({ provider: 'firecrawl', endpoint: 'DELETE /crawl/:id', query: seedUrl, resultCount: 0, ok: true }),
+    (err) => {
+      // Fire-and-forget: no operation-level catch will see this, so audit the failure here.
+      auditFailure('DELETE /crawl/:id', seedUrl, err);
+      console.error(`firecrawl: crawl ${jobId} cancel failed:`, err);
+    },
+  );
 }
 
 /**
@@ -187,10 +208,10 @@ export async function firecrawlCrawl(
   const maxDepth = opts.maxDepth ?? config.firecrawl.crawlDefaultMaxDepth;
   const pollIntervalMs = opts.pollIntervalMs ?? config.firecrawl.crawlPollIntervalMs;
   const deadline = Date.now() + (opts.jobBudgetMs ?? config.firecrawl.crawlJobBudgetMs);
-  const headers = firecrawlHeaders();
   let jobId: string | undefined;
   try {
-    const submitted = (await requestJson({
+    const headers = firecrawlHeaders();
+    const submitted = await auditedCall<{ success?: boolean; id?: string }>('/crawl', url, {
       provider: 'firecrawl',
       url: `${BASE}/crawl`,
       headers,
@@ -205,7 +226,7 @@ export async function firecrawlCrawl(
       timeoutMs: 30_000,
       retries: 2,
       signal: opts.signal,
-    })) as { success?: boolean; id?: string };
+    }, () => 0);
     if (!submitted.id) throw new SearchError('firecrawl', 'http', 'crawl submit returned no job id');
     jobId = submitted.id;
 
@@ -213,7 +234,7 @@ export async function firecrawlCrawl(
       if (Date.now() >= deadline) {
         throw new SearchError('firecrawl', 'timeout', `crawl job did not finish within budget`);
       }
-      const status = (await requestJson({
+      const status = await auditedCall<CrawlStatus>('/crawl/:id', url, {
         provider: 'firecrawl',
         url: `${BASE}/crawl/${jobId}`,
         method: 'GET',
@@ -221,7 +242,7 @@ export async function firecrawlCrawl(
         timeoutMs: 30_000,
         retries: 2,
         signal: opts.signal,
-      })) as CrawlStatus;
+      }, (r) => r.completed ?? 0);
       opts.onProgress?.({
         status: status.status ?? 'unknown',
         completed: status.completed ?? 0,
@@ -242,7 +263,7 @@ export async function firecrawlCrawl(
             if (page.markdown.trim()) pages.push(page);
           }
           batch = batch.next && pages.length < maxPages
-            ? ((await requestJson({
+            ? await auditedCall<CrawlStatus>('/crawl/:id', url, {
                 provider: 'firecrawl',
                 url: batch.next,
                 method: 'GET',
@@ -250,11 +271,10 @@ export async function firecrawlCrawl(
                 timeoutMs: 30_000,
                 retries: 2,
                 signal: opts.signal,
-              })) as CrawlStatus)
+              }, (r) => (r.data ?? []).length)
             : undefined;
         }
         if (pages.length === 0) throw new SearchError('firecrawl', 'empty_results', 'crawl returned no pages');
-        auditSearchCall({ provider: 'firecrawl', endpoint: '/crawl', query: url, resultCount: pages.length, ok: true });
         return pages;
       }
       // Abort-aware sleep: a cancelled task must not wait out the poll interval.
@@ -263,7 +283,7 @@ export async function firecrawlCrawl(
   } catch (err) {
     // Any exit with a live job — task abort, budget timeout, poll failure — cancels the
     // remote job so it stops spending credits. Harmless on already-terminal jobs.
-    if (jobId) cancelCrawlJob(jobId);
+    if (jobId) cancelCrawlJob(jobId, url);
     auditFailure('/crawl', url, err);
     throw err;
   }
@@ -294,9 +314,9 @@ export async function firecrawlExtract(
   const query = `extract: ${urls.join(' ')}`;
   const pollIntervalMs = opts.pollIntervalMs ?? config.firecrawl.crawlPollIntervalMs;
   const deadline = Date.now() + (opts.jobBudgetMs ?? config.firecrawl.extractJobBudgetMs);
-  const headers = firecrawlHeaders();
   try {
-    const submitted = (await requestJson({
+    const headers = firecrawlHeaders();
+    const submitted = await auditedCall<{ success?: boolean; id?: string }>('/extract', query, {
       provider: 'firecrawl',
       url: `${BASE}/extract`,
       headers,
@@ -308,14 +328,16 @@ export async function firecrawlExtract(
       timeoutMs: 30_000,
       retries: 2,
       signal: opts.signal,
-    })) as { success?: boolean; id?: string };
+    }, () => 0);
     if (!submitted.id) throw new SearchError('firecrawl', 'http', 'extract submit returned no job id');
 
     for (;;) {
       if (Date.now() >= deadline) {
         throw new SearchError('firecrawl', 'timeout', `extract job did not finish within budget`);
       }
-      const status = (await requestJson({
+      // Page count on the completed poll = the URLs the job touched (extract's per-job
+      // credit cost is token-based, so there is no server-reported page total to use).
+      const status = await auditedCall<ExtractStatus>('/extract/:id', query, {
         provider: 'firecrawl',
         url: `${BASE}/extract/${submitted.id}`,
         method: 'GET',
@@ -323,13 +345,12 @@ export async function firecrawlExtract(
         timeoutMs: 30_000,
         retries: 2,
         signal: opts.signal,
-      })) as ExtractStatus;
+      }, (r) => (r.status === 'completed' ? urls.length : 0));
       if (status.status === 'failed' || status.status === 'cancelled') {
         throw new SearchError('firecrawl', 'http', `extract job ${status.status}${status.error ? `: ${status.error}` : ''}`);
       }
       if (status.status === 'completed') {
         if (status.data == null) throw new SearchError('firecrawl', 'empty_results', 'extract returned no data');
-        auditSearchCall({ provider: 'firecrawl', endpoint: '/extract', query, resultCount: 1, ok: true });
         return status.data;
       }
       await delay(pollIntervalMs, undefined, { signal: opts.signal });

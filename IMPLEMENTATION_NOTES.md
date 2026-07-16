@@ -725,9 +725,11 @@ commits (9addb00…2f8959a), each built/tested, pushed to origin. Highlights:
   `deep`'s 180 s). Crawl polls emit `crawl.status` events (only on progress change) so the
   dashboard/bubble panel can watch a long crawl; any error/abort/budget exit with a live job
   fires a best-effort remote DELETE so a dead task stops spending credits.
-- Audit: one JSONL line per logical operation (scrape / map / crawl job / extract job) at
-  terminal outcome with page count as `resultCount` — polls re-send only a job id, no new
-  query leaves the box, so they get no lines.
+- Audit: every outbound call gets its own JSONL line as it happens — submits, each status
+  poll, each pagination fetch, and remote cancels (job routes logged as `/crawl/:id`-style
+  endpoints with the target URL as `query`; polls carry the server-reported page count).
+  A failing call is audited once, by the operation-level catch, which also records logical
+  failures (empty results, budget exhaustion) that have no failing HTTP call behind them.
 - Extract's tool takes the JSON Schema **as a JSON string** — strict function schemas don't
   take free-form object params; the tool parses and returns a model-facing error on bad JSON.
 

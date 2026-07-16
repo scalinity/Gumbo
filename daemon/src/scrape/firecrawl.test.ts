@@ -15,6 +15,11 @@ const lastAuditLine = () => {
   return JSON.parse(lines[lines.length - 1]);
 };
 
+const auditTail = (n: number) => {
+  const lines = readFileSync(join(config.home.logs, 'search-audit.jsonl'), 'utf8').trim().split('\n');
+  return lines.slice(-n).map((line) => JSON.parse(line));
+};
+
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
@@ -212,10 +217,13 @@ test('crawl lifecycle: submit → poll scraping → completed, breadth defaults 
   assert.equal(pages[0].url, 'https://a.test/p1');
   assert.equal(pages[0].markdown, 'page 1 markdown');
   assert.deepEqual(progress.map((p) => p.status), ['scraping', 'completed']);
-  const entry = lastAuditLine();
-  assert.equal(entry.endpoint, '/crawl');
-  assert.equal(entry.resultCount, 3);
-  assert.equal(entry.ok, true);
+  // Every outbound call gets its own audit line: submit, then each status poll (with the
+  // server-reported page count so far).
+  assert.deepEqual(auditTail(3).map((e) => [e.endpoint, e.resultCount, e.ok]), [
+    ['/crawl', 0, true],
+    ['/crawl/:id', 1, true],
+    ['/crawl/:id', 3, true],
+  ]);
 });
 
 test('crawl overrides: max_pages/max_depth/path patterns reach the API', async () => {
@@ -279,16 +287,18 @@ test('client-side page cap: excess pages are dropped and pagination stops at the
   );
 });
 
-test('crawl job failed server-side → http error, remote job cancelled, audited', async () => {
+test('crawl job failed server-side → http error, remote job cancelled, every call audited', async () => {
   const calls = mockRoutes(crawlHandler({ polls: [{ status: 'failed' }] }));
   await assert.rejects(
     firecrawlCrawl('https://a.test', { pollIntervalMs: 1 }),
     (err: unknown) => err instanceof SearchError && err.kind === 'http',
   );
   await waitFor(() => calls.some((c) => c.init.method === 'DELETE'));
-  const entry = lastAuditLine();
-  assert.equal(entry.ok, false);
-  assert.equal(entry.endpoint, '/crawl');
+  // One operation-level failure line, and the fire-and-forget cancel audits its own line.
+  const cancel = await waitFor(() => auditTail(5).find((e) => e.endpoint === 'DELETE /crawl/:id'));
+  assert.equal(cancel!.ok, true);
+  const failure = auditTail(5).find((e) => e.endpoint === '/crawl' && e.ok === false);
+  assert.equal(failure?.error, 'http');
 });
 
 test('crawl budget exhausted → timeout error and remote DELETE', async () => {
@@ -340,9 +350,12 @@ test('extract lifecycle: submit schema+prompt → poll processing → completed 
   });
   assert.equal(calls[1].url, 'https://api.firecrawl.dev/v2/extract/ex-1');
   assert.deepEqual(data, { price: '$99' });
-  const entry = lastAuditLine();
-  assert.equal(entry.endpoint, '/extract');
-  assert.equal(entry.ok, true);
+  // Per-call audit: submit, processing poll, completed poll (page count = urls touched).
+  assert.deepEqual(auditTail(3).map((e) => [e.endpoint, e.resultCount, e.ok]), [
+    ['/extract', 0, true],
+    ['/extract/:id', 0, true],
+    ['/extract/:id', 1, true],
+  ]);
 });
 
 test('extract job failed → http error, audited as failure', async () => {

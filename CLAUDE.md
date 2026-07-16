@@ -33,7 +33,7 @@ non-obvious (record *why*, not just *what*).
   (never retried), 429 → `quota`, aborts → `timeout`.
 - **Timeouts:** per-call `AbortSignal.timeout`. Hot path budget is
   `config.search.quickLookupTimeoutMs`; background calls get generous budgets (Exa `deep`: 180 s).
-- **Audit log:** every outbound search call — success or failure — appends one JSONL line to
+- **Audit log:** every outbound provider call — success or failure — appends one JSONL line to
   `~/Gumbo/logs/search-audit.jsonl` via `search/audit.ts` (`ts`, `provider`, `endpoint`, `query`,
   `resultCount`, `ok`, `error?`). `logs/` is private (not `/files`-served). New providers must do
   the same.
@@ -58,8 +58,9 @@ non-obvious (record *why*, not just *what*).
   reach it. Pattern: submit → poll status on an interval → collect paginated results, under an
   overall job budget from `config`. Task aborts propagate to a remote cancel where the API
   supports it (crawl: `DELETE /v2/crawl/{id}`; extract has no documented cancel — polling just
-  stops). One audit line per logical operation at terminal outcome; polls aren't audited
-  (no new query leaves the box).
+  stops). Every outbound call — submit, each poll, each pagination fetch, remote cancels —
+  gets its own audit line (job routes logged as `/crawl/:id`-style endpoints, target URL as
+  `query`); a failed operation adds exactly one op-level failure line.
 - **Permissions:** no permission engine exists yet (spec'd for M4). Current stance: hot-path
   lookup is auto-allowed; background research rides the existing spawn-task flow the user triggers
   by voice. Firecrawl `scrape`/`map` are auto-allowed like background search; `crawl` and
