@@ -25,7 +25,13 @@ const server = createHttpServer(store);
 const hub = new Hub(server);
 const manager = new TaskManager(store);
 const orchestrator = new Orchestrator(store, hub, manager);
-manager.onFinished = (task) => orchestrator.announceTaskFinished(task);
+manager.onFinished = (task) => {
+  // Floating promise: an unexpected sync throw (dead transport, store failure) would
+  // otherwise become an unhandled rejection and take the whole daemon down.
+  orchestrator.announceTaskFinished(task).catch((err: unknown) => {
+    store.addEvent(task.id, 'session.error', { message: `announce: ${String(err)}` });
+  });
+};
 
 // Events go to dashboards AND the shell (M3.1): the bubble mini-panel live-tails its
 // task's activity. The shell ignores types it doesn't render.
