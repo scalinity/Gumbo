@@ -21,6 +21,9 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 - **Web search providers (side feature, merged from `worktree-web-search-providers`):** ✅ built +
   verified — Tavily on the voice hot path (`web_quick_lookup`), Exa for background sub-agents,
   FTS5 memory persistence, JSONL search audit log. See §Web search providers below.
+- **Grok (xAI) live X search (side feature, `feat/grok-x-search`):** ✅ built + tested (180/180,
+  live smoke opt-in) — hot-path `x_lookup` + background `x_search`, X+web sources, X-first routing.
+  See §Grok below. Not yet live-demoed with the user; `/review-2` → `/address` pending before merge.
 - **M4 — Claude Code + supervisor (+ M4.1 OS sandbox):** ✅ built + review-hardened + smoked
   (see §M4) — live voice demo with the user pending.
 - **M5 — Images + Gumbo-owned scheduler:** ✅ built + smoked end-to-end on an isolated daemon
@@ -364,6 +367,71 @@ Risk #5 retired — clear to build the real notch UI on DynamicNotchKit 1.1.0.
   needed for the signed build + TCC grant-persistence check (risk #3).
 
 ---
+
+## Grok (xAI) — live X/real-time-social search, both tiers — 2026-07-16
+
+### Build
+- New `daemon/src/search/grok.ts`, a fourth provider following the codified conventions exactly:
+  shared `postJson`/`SearchError`/`auditSearchCall`, keys in `.env` (`XAI_API_KEY` → added to
+  boot validation in `index.ts` **and** `config.secretEnvKeys` so it's stripped from spawned
+  Claude sessions), daemon-only. `'grok'` added to the `Provider` union in `client.ts` (audit.ts
+  gets it for free — it imports the type).
+- **Why Grok at all:** a real capability gap, not a model preference. Exa/Tavily barely see inside
+  X — the trigger was "did the official Claude Dev X account post about the usage-limit reset?",
+  which Grok found and both incumbents missed. So Grok owns the X/real-time-social lane; it does
+  **not** replace general web search (that conflates provider-vs-model and loses Exa full-page text).
+- **Two tiers, one core.** `grokLiveSearch(query, opts)` throws + audits (the core); `xLookup(query)`
+  is the never-throws hot-path wrapper returning the SAME `{answer,sources}`/`lookup_failed` string
+  contract the voice model already knows from `web_quick_lookup`. Hot path: realtime tool `x_lookup`
+  (`retries:0`, `style:'spoken'`). Background: sub-agent tool `x_search` (`retries:2` + task signal,
+  `style:'detailed'`), persisted to `memory` as provider `'grok'` — one row, since citations are
+  URL-only (no page bodies to FTS-index), so `answer + source list` IS the record (`url` = first
+  citation, or a synthetic `grok:x-search` marker when Grok cited nothing).
+- **Routing is by description, X-first.** Sources are X+web (an announcement might be a post OR a
+  blog) but both tool descriptions lead with "what's happening on X right now" so the voice model
+  never reaches for Grok on a general fact/score/price (that stays Tavily) and the sub-agent never
+  uses it for general research (that stays Exa). `realtime/tools.test.ts` asserts `x_lookup` sits
+  beside `web_quick_lookup`.
+
+### Verified against the LIVE API 2026-07-16 (docs were wrong twice — smoke earned its keep)
+- **The declarative Live Search surface is DECOMMISSIONED.** First build used `POST /v1/chat/
+  completions` + a top-level `search_parameters` object (what Context7 docs + my pre-compaction
+  notes described). The live smoke got **HTTP 410**: *"Live search is deprecated. Please switch to
+  the Agent Tools API."* Lesson banked in CLAUDE.md: a new provider ALWAYS needs a live smoke —
+  docs lag deprecations, the wire doesn't.
+- **Rebuilt on the Agent Tools API** (`POST /v1/responses` + server-side `web_search` + `x_search`
+  tools). Still a single non-streaming POST, so it keeps riding the shared `postJson` contract.
+  Response shape (probed live, not from docs): an agentic `output[]` trace of `reasoning` +
+  `*_search_call` items, with the answer in a trailing `type:'message'` item →
+  `content[].type:'output_text'` → `.text`; citations are that part's `annotations[]` of
+  `type:'url_citation'` (`.url`; the annotation `title` is just the citation number, so titles are
+  derived from the URL — x.com/twitter.com → "X post"). The model injects inline `[[n]](url)`
+  markdown markers into the text — **stripped** in code so the voice model never reads them aloud.
+  A non-`completed` status or an empty answer → `empty_results` (ok:false), like the others.
+- **TIERED MODELS — the second live finding.** `grok-4.5` is a REASONING model; its agentic X
+  search measured **28–45 s** on the hot path (26 tool calls at one point) — non-viable for voice.
+  `max_tool_calls` does NOT help (cap=3 still ran 26 calls — it bounds calls, not the reasoning
+  between them), so it isn't sent; the per-call timeout is the real guard. the user's call: use a
+  fast NON-reasoning model for voice, keep `grok-4.5` for background. Catalog on his key (via
+  `GET /v1/language-models`) has no `grok-4.1-fast`; the versions run 4.3 → 4.5 → **4.20** (4.20 is
+  newer than 4.5). `grok-4.20-non-reasoning` measured **2–11 s** (typ ~2–8 s) on live X queries with
+  good answers + citations. So `config.grok = { hotModel:'grok-4.20-non-reasoning',
+  backgroundModel:'grok-4.5', quickLookupTimeoutMs:15_000, backgroundTimeoutMs:120_000,
+  sources:['x','web'] }`. `grokLiveSearch` takes a `model` opt; `xLookup` passes `hotModel`,
+  `x_search` passes `backgroundModel`. Hot-path timeout is 15 s (headroom over the ~11 s tail); a
+  filler covers the wait, a real timeout degrades to `lookup_failed`.
+- **Auth is `Bearer`** (not `x-api-key`). `sources:['x','web']` maps to tools `x_search` +
+  `web_search` (deduped; `news` would fold into `web_search`). System steering rides the
+  Responses-API top-level `instructions` field, two prompts (spoken vs detailed).
+- **Live smoke is opt-in.** `grok.test.ts` mirrors `tavily.test.ts`/`exa.test.ts` (hermetic, fetch
+  stubbed) + one real-API smoke gated behind `GROK_LIVE_SMOKE=1` (needs `XAI_API_KEY`) so
+  `npm test` stays offline + free. It captures the real key at import, then stubs — restoring the
+  real key only for its one call (the client reads the key at call-time, so this works), and
+  asserts the inline citation markers are stripped.
+- **Egress unaffected.** The M4.1 proxy governs only spawned Claude sessions; the daemon's own
+  outbound `daemon→api.x.ai` call is free like the other providers — no sandbox/proxy change.
+- **Deferred (explicitly not built):** the sub-agent MODEL swap to Grok (a cost A/B), and A-style
+  multi-provider (Grok+GPT) consensus fan-out. Both were considered and parked.
 
 ## Web search providers — Tavily (voice hot path) + Exa (background) — 2026-07-15
 
@@ -1598,3 +1666,245 @@ runs the user deliberately spawns. M4 registration defaults recorded in CLAUDE.m
 - Review's informational note, for posterity: crawl/extract gating is tool-description
   steering + the spawn-task approval flow, not a code-level gate — that IS the pre-M4
   design, not an oversight.
+
+### Live-session failure sweep + fixes (2026-07-16, from the "Agent coding harness spec" run)
+the user's first real M4 voice-driven Claude session surfaced a cluster of failures; every root
+cause was reconstructed from the events DB (`~/Gumbo/db/gumbo.db` — the transcripts persist,
+which is what made the forensics possible). Fixes, with the *why*:
+- **Plan approval showed `{}` (🔴).** Current CLIs call `ExitPlanMode` with EMPTY input and
+  persist the plan to `~/.claude/plans/<slug>.md` FIRST — and `protectedPathHit` hard-denied
+  that Write as "protected secret path". Two-part fix: `PROTECTED_EXEMPT` carves
+  `~/.claude/plans` out of the ~/.claude deny (and out of the edit-outside-cwd escalate —
+  otherwise every plan write pops a confirm), and the runner captures the plan-file Write's
+  content as `handlePlan`'s fallback. The Seatbelt layer already write-allows `~/.claude`
+  (minus exec surfaces), so policy was the only gate in the way.
+- **Plan now rides the confirm as `body`** (`confirm_request.body`, capped 24k) — the shell
+  renders a chevron ("Read the full plan") that grows the panel into a scrollable view.
+  Top edge stays pinned under the notch; SwiftUI frame and NSPanel frame resize together.
+- **Voice amnesia (🔴).** Sessions idle-close after 60 s and tsx-watch restarts kill them
+  silently; every reopen was a blank slate ("Did you just forget everything I said?" — live
+  quote). New sessions now carry a continuity block in instructions: recent dialogue from
+  `store.recentTranscripts` (VAD fragments stitched, 45 min lookback, 4k char cap, fenced +
+  tag-neutralized like the M3 report path) + an active-task snapshot. Also: SIGTERM/SIGINT
+  now log `session.closed` before exit — the silent gap was itself a red herring during
+  debugging (a restart at ~12:01 left no trace and looked like an API drop).
+- **Needs-input was SILENT.** The plan approval landed 3 min after the session idle-closed;
+  nobody spoke it and the prompt sat unnoticed ~5 min. `task.status → needs_input` now
+  announces through `speakProactively` (live inject or cold TTS) with the pause reason.
+- **Report readback "cut off out of nowhere".** `announceReportMaxChars` was 2 500 — the 14k
+  report was raw-sliced mid-example and the model read right up to the cliff edge. Now 12k
+  (= reportMaxChars), cut at a line boundary, and the instructions FLAG the truncation so the
+  model summarizes + offers `read_report` instead of narrating into the cut.
+- **`get_task_status` was 5 events × 200 chars** — the voice model literally could not see
+  the brief, the plan, or what the session did (it told the user "no preserved brief" about a
+  cancelled task whose brief sat in `task.created`/`claude_sessions`). Rewritten: title/
+  status/kind + original brief (`getTaskBrief` falls back to the task.created payload, so it
+  survives cancellation) + pause reason + the pending plan text + 12 recent events.
+- **Notch transcript lag (real math bug).** Pacing mapped a *fraction of the whole drain
+  stream* onto the item's text; when a tool-call turn chained a second response, its audio
+  grew the denominator, the fraction fell BELOW the captured baseline, and the clamp froze
+  the reveal until ~90 % of the turn had played. Engine now reports ABSOLUTE (played,
+  enqueued) frame counters; the notch snapshots per-item baselines and detects counter
+  resets (drain end / barge-in flush) by counts going backwards.
+- **Stale plan prompt after cancel.** The daemon restart wiped the ConfirmBridge, so nothing
+  could send `confirm_cancel`; the shell kept the prompt for the full 15-min window. Fixes
+  on both sides: the bridge tracks `taskId` per pending confirm + `cancelForTask` fires on
+  `task.finished`; AND the shell self-dismisses confirms whose task hit a terminal
+  bubble_upsert / bubble_remove — the only fix that works across daemon restarts.
+- **Orb transcript rendering.** The feed showed raw truncated JSON, a blank row (empty
+  ToolSearch result), and was missing the session's opening instruction entirely. Runner now
+  events `claude.prompt` (opener + follow-ups, 4k cap); the shell summarizes tool calls to
+  their primary argument ("Write — /path"), renders empty results as "(no output)", gives
+  message/prompt rows 700 chars/14 lines (tool rows stay compact).
+- **NEW: `present_file` + shell file renderer.** A session's deliverable is often a file
+  (the whole point of the observed run was a spec) and there was no way to see it short of
+  Finder. `present_file` (realtime tool) reads the file daemon-side (absolute paths only,
+  `secretFilePaths` refused, NUL-sniff for binary, 300k cap) and pushes content INLINE over
+  WS (`file_present`) — deliberately no new HTTP file-serving surface on the loopback port.
+  Shell: document cards stack under the image thumbs (stack-bottom chaining extended:
+  orbs → images → files), click opens `FileViewer` — a WKWebView over locally generated
+  HTML from a minimal escaped-first Swift markdown converter (headings/fences/lists/quotes/
+  inline spans; non-md renders as a code block). Links open in the default browser; no
+  scripts are ever emitted.
+- **Noted, not fixed:** `input_audio_buffer_commit_empty` on session open (pendingRelease
+  commits a silence-only buffer — harmless, logged noise; a fix needs VAD state that doesn't
+  exist yet at commit time). The stale-xcodegen gotcha struck again: `shell/Gumbo.xcodeproj`
+  was missing the M5.5 files and failed the build with "cannot find X in scope" — regenerate
+  with `xcodegen generate` before suspecting the code.
+- Suite: 196 daemon tests pass (new: plans exemption, plan-capture precedence, cancelForTask,
+  confirm body, get_task_status shape, continuity stitching, present_file guards). Shell
+  builds clean. NOTE for test runs: pass a FRESH `GUMBO_HOME` per run — a reused dir makes
+  the audit-line-count tests fail on accumulated JSONL.
+
+## M6 design refinement — two-tier computer use (design only, NOT built) — 2026-07-16
+
+- Design conversation with the user amplified SPEC §M6 in place; the SPEC section is now the
+  source of truth. Recording the *why* here:
+- **Rejected: per-verb realtime tools** (`open_app`/`quit_app`/`app_status`/…). the user's call,
+  and correct: the realtime registry is already 16 tools and the voice model's routing degrades
+  as it grows. Generic primitives subsume the verbs. The whole Mac-control domain costs the
+  realtime registry ≤2 tools: `mac_do(script)` + (at most) a widened `spawn_subagent`.
+- **The load-bearing split is WHO runs the act→observe loop, not what the tools are.** The
+  realtime voice model must never iterate AX: (1) each step round-trips a shallow
+  latency-optimized model mid-conversation; (2) AX snapshots are heavy and would accumulate in
+  the voice session's context for its whole life; (3) mid-procedure recovery needs a reasoning
+  model. Identical physics to the Grok hot/background model split (28–45 s reasoning model =
+  non-viable hot path). Loop lives in the `agents/` in-daemon sub-agent runner — NOT the
+  sandboxed Claude CLI (threading AX tools into the Seatbelt/MCP/egress-proxy stack buys
+  nothing and costs TCC attribution headaches).
+- **AX beats screenshots for native apps, but browsers are AX's worst terrain** — Chromium
+  builds renderer a11y trees lazily and they're enormous. Browser tasks route through
+  `run_script` (open/Chrome AppleScript) by tool-description wording, AX as in-page fallback.
+  Vision stays a deferred *observation tool* added to the same loop later — no redesign.
+- **TCC landscape (verified in conversation):** shell already holds Accessibility — it covers
+  ALL AX targets with zero per-app prompts (unlike Automation, which prompts per (sender,
+  target-app) pair for osascript lanes — needs `NSAppleEventsUsageDescription`). FDA (for
+  `tmutil listbackups`-class reads) cannot be prompted programmatically — detect the failure
+  and speak the System Settings instruction. Pure AX needs NO Screen Recording.
+- **Ghost cursor is visualization, not mechanism:** `AXPress` doesn't move the pointer, so the
+  overlay cursor (click-through NSWindow, `.screenSaver` level) animates to `AXFrame` targets
+  while the real mouse stays the user's — which is exactly what makes real-mouse-movement a
+  clean kill switch.
+- **Accepted trade-off (the user):** `mac_do` = model-written script execution outside the
+  Seatbelt; the M4-style policy gate (auto-run read-only/reversible, notch-confirm risky) +
+  per-execution `mac-audit.jsonl` line are the mitigation.
+- Two Fable research agents (AX mechanics/OSS prior art + agent-loop design) were spawned to
+  close gaps before build; fold their findings into SPEC §M6 when they land.
+
+### M6 research pass — two Fable agents' findings, folded into SPEC §M6 — 2026-07-16
+
+Both reports landed same-day and the SPEC section was updated in place. The overall design
+(shell owns TCC + executes, daemon plans, WS RPC, AX-first, ghost cursor) matched the 2026
+consensus architecture almost exactly. What the research CHANGED or ADDED — and the build-time
+mechanics that don't belong in the SPEC:
+
+**Design corrections (SPEC updated):**
+- **Kill switch redesigned.** "Any real-mouse movement aborts" was self-triggering: drags (and
+  other global-rung actions) move the REAL pointer. Fix in SPEC: tag synthetic events via a
+  dedicated `CGEventSource` user-data value; listen-only event tap; untagged HID = the user =
+  abort. (mac-cua's yield-on-interruption is prior art.)
+- **`ax_act` returns a server-side before/after DIFF**, not a full re-snapshot (`+`/`−`/`~`
+  lines, volatile fields stripped pre-diff or reflow makes every action a 200-line change;
+  typical click = 2–15 lines; empty diff = true no-op). Verify by diff, NEVER return code:
+  `AXPress` false-passes on backgrounded/disabled menu items. Prior art: mediar
+  mcp-server-macos-use / Terminator, Playwright MCP's auto-return contract.
+- **Browser lane narrowed (loop report):** AppleScript's page reach is shallow (tabs/URLs yes,
+  reliable in-page action no) — M6 v1 does URL/tab-level only; in-page web tasks = deferred
+  Playwright/CDP lane with a11y-snapshot+ref tools. Never OS-AX on a browser window.
+- **Injection classifiers gap (loop report):** the Claude API's built-in computer-use prompt-
+  injection classifiers run ONLY on the official screenshot `computer_*` tool type — a custom AX
+  toolset gets NONE. Gumbo's gates (notch confirm + policy + audit + "UI text is untrusted data"
+  in instructions) carry the entire load. A11y-text observations are measurably MORE injection-
+  resistant than pixels (RedTeamCUA) but injected text still lands in-context.
+
+**Build-time mechanics (read before writing the Swift executor):**
+- **Dispatch ladder:** AXPress → `CGEventPostToPid` → global `CGEvent`. Chromium drops untrusted
+  per-pid events (cua's primer-click workaround) and coerces synthetic right-clicks to left —
+  use `AXShowMenu`. Drags are global-only. Post a `mouseMoved` ~30 ms before clicks (hover
+  state). `AXActions` lists are advisory — try, then branch on `AXError`.
+- **Typing:** try `AXUIElementSetAttributeValue(kAXValueAttribute)` (check
+  `AXUIElementIsAttributeSettable` first); Electron/web fields need real key events to fire JS
+  listeners — fall back to per-char CGEvents with Unicode payloads.
+- **TCC health (Fazm's four production states, all present on Tahoe):** (1) stale cache —
+  `AXIsProcessTrusted()` true, all calls fail; probe live via listen-only `CGEvent.tapCreate`
+  (invalidate immediately) + functional walk; not fixable in-process → retry ~3× @5 s → prompt
+  relaunch. (2) `kAXErrorCannotComplete` (-25204) is a TRICHOTOMY: no tree (Qt/OpenGL) vs broken
+  permission vs stale handle to a relaunched app — disambiguate by re-running against Finder.
+  (3) `kAXErrorAPIDisabled` (-25211) → deep-link Privacy_Accessibility pane, don't retry.
+  (4) never cache `AXUIElementRef` across ticks — recreate from pid per snapshot. NOTE:
+  `kTCCServicePostEvent` (CGEvent posting) and `kTCCServiceAccessibility` are SEPARATE services
+  that both display under "Accessibility". AX is unsupported under App Sandbox — Developer ID +
+  Hardened Runtime (Gumbo's shape) is required; debugging from Xcode: Xcode holds the grant.
+- **AXObserver is lossy:** `kAXUIElementDestroyed` sometimes never fires (Sequoia/Tahoe);
+  debounced notifications (~150–300 ms silence) + poll reconciliation + per-element
+  `AXUIElementSetMessagingTimeout` (one hung Qt app otherwise stalls the loop). Observer run-loop
+  sources need a pumped CFRunLoop; keep heavy traversal off the shell main thread (notch jank).
+- **Perf budget:** batch reads via `AXUIElementCopyMultipleAttributeValues` (2–5× on dense apps;
+  element-valued attrs don't batch), BFS + depth cap + interactive-role filter DURING traversal.
+  Focused-window read ~50 ms; Slack-scale window ~8k elements / 200–800 KB raw; full
+  perceive→act loop ~350 ms + model latency. Compaction prior art: flat one-line-per-element
+  format (mediar), A11y-Compressor (tokens → 22% while +5.1 pp OSWorld), Tarsier (−69.6%).
+- **Electron/Chromium onboarding:** set `AXManualAccessibility=true` on the app element on first
+  touch (tolerate `kAXErrorAttributeUnsupported` — older Electron returns it while working);
+  plain Chrome keys on `AXEnhancedUserInterface` — and that attr breaks programmatic window
+  move/resize (Rectangle/Phoenix unset it around window ops).
+- **Tahoe Apple-Events regression:** scripts hang to the 2-min -1712 timeout on some apps
+  (Finder empty-trash, Mail) — hard per-call timeouts on the whole `run_script`/`mac_do` lane.
+- **`shortcuts run` added to the action space** (App Intents bridge): `shortcuts list
+  --show-identifiers` → `shortcuts run <uuid>`, JSON over stdin, ALWAYS timeout-wrapped (a
+  prompting shortcut hangs forever; per-shortcut TCC needs one interactive pre-auth).
+
+**Loop-side evidence anchors (loop report):** flat ReAct + verification beat hierarchical
+planners (Agent S3: removed hierarchy, +13.8% with 52% fewer calls); repetition is a top-4
+failure class (detector: same action+target ×3 → inject warning turn); OSWorld-Verified — Sonnet 5
+81.2% vs human 72.36%; verification-after-action is the single largest cheap accuracy win
+(Anthropic's own prompt wording, now in the SPEC loop contract); Anthropic context guidance:
+prune screenshots/snapshots in BATCHES not per-turn (cache-prefix preservation), keep last 2–3.
+Model pick: Sonnet-class @ medium effort for text-observation loops; Haiku viable for short
+flows; avoid max effort (cost, no UI-task gain).
+
+**OSS to study at build time:** mediar-ai/mcp-server-macos-use (+Terminator) — diff contract;
+steipete/Peekaboo 3 — see→act ref workflow, TCC broker; hyprcat/mac-cua — pid-only events,
+human-interruption yield; trycua/cua — SkyLight internals, Chromium workarounds; openclaw/AXorcist —
+Swift AX wrapper (could replace hand-rolled tree walking); alexmx/peek — `--verify` flag +
+`peek_wait`; qdore/application-use — AX + on-device Vision-OCR hybrid (the vision-lane middle
+step). Full URLs in the two research reports (session transcript, 2026-07-16).
+
+### Local VAD barge-in + silence gate (2026-07-16, follow-up to the live-session sweep)
+- **Root cause of "talking over Gumbo" (🔴, found in the SDK source):** the whole barge-in
+  path rides `speech_started → transport.interrupt()`, and the transport CLEARS its
+  interrupt tracking (`#currentItemId`/`_firstAudioTimestamp`) in `_afterAudioDoneEvent` —
+  i.e. the moment audio GENERATION completes (`response.output_audio.done`). Gumbo
+  generates a long reply in seconds and the shell drains it for minutes, so for ~95 % of a
+  long readback `interrupt()` hits its early-return guard and does NOTHING — no
+  `audio_interrupted`, no `playback_flush`, no truncation. The SDK's model assumes playback
+  tracks generation (a WebRTC assumption); our buffered-drain architecture breaks it. Even
+  during generation, the latency stack was graph-switch (~200–300 ms before mic frames
+  flow) + AEC convergence + server-VAD window + network roundtrip. Cold TTS announcements
+  had no barge-in at all (no session to interrupt).
+- **Fix: daemon-side speech-energy gate** (`config.localVad`, RMS ≥ 900 sustained ≥ 90 ms
+  consecutive) on the armed mic stream. Why the daemon: it alone knows the true "Gumbo is
+  audibly talking" state (`responding || shellDraining`, cold TTS included), and the frames
+  it receives are already post-AEC (the shell taps VPIO-processed input) — Gumbo's own
+  speaker output cannot self-trigger. On trigger: broadcast `playback_flush` directly
+  (independent of the SDK's cleared state), then best-effort `session.interrupt()` for
+  server-side truncation while a response IS in flight. One barge-in per armed window.
+- **Same gate fixes the silence-tap bug**: the pendingRelease path used to commit + request
+  a response on byte count alone — a silent ⌃⌥ hold made the model answer an empty buffer
+  with a generic "what can I do for you?" (and produced the `input_audio_buffer_commit_empty`
+  noise). Now: no local speech → clear, never commit. Bonus: `finishTurn` treats
+  `localHadSpeech` as speech too, so a fast utterance released before the server VAD
+  reports is committed instead of silently dropped (the old "deaf turn" cousin).
+- Accepted trade-off: with PTT held during Gumbo speech, a rare AEC-residue false positive
+  could cut Gumbo off early — but the user pressed the button intending to talk; the old
+  design's caution cost seconds of talk-over every time. Thresholds live in config.
+- Pure daemon change (no shell rebuild); suite 200 tests green. `frameRms` exported for the
+  unit tests; square-wave frames make RMS == amplitude exactly.
+
+### M7 + M8 specced — computer-use v2 (coverage + cooperation) and v3 (routines) — 2026-07-16
+
+- the user asked for the v2/v3 milestones same-day; SPEC §M7/§M8 added, absorbing the old post-M6
+  deferred items (browser lane, vision, polish → M7; App Intents watch → M8; the general deferred
+  list is now post-M8). Sequencing logic: **v2 = close the two punted SURFACES** (in-page web via
+  a dedicated Playwright/CDP profile; AX-hostile apps via OCR-first vision) **+ turn interruption
+  into cooperation** (handoff, voice steering); **v3 = make delegation compound** (demonstration
+  teaching off the kill-switch event tap's recordings, procedure memory in the sqlite `memory`
+  table, scheduled routines via the M5 scheduler's `kind` seam — its designed second consumer).
+- Non-obvious decisions a build session must not casually reverse:
+  - Automation browser = DEDICATED profile + storage-state capture-once-replay, never the user's
+    live profile (anti-bot flags CDP sessions; a burned live profile is unacceptable blast
+    radius). Trade-off accepted: no free ride on his existing logged-in sessions — one
+    interactive login per site instead.
+  - Browser send/submit/purchase ALWAYS notch-confirms, allowlist or not (site trust ≠ content
+    trust; pages are the top injection vector).
+  - Unattended routines NEVER auto-approve — would-be-confirms pause + notify, deny-on-timeout
+    stays. Some scheduled runs will therefore stall until the user is around; that's the design,
+    not a bug.
+  - Behavior Best-of-N explicitly REJECTED (parallel rollouts mutate a live machine — the
+    reliability budget goes to verification + procedure memory instead).
+  - Procedure replay IS the safe form of action-batching (steps batch because they were verified
+    together on a prior run, not because the model guessed they'd compose).
+  - Recurrence lands in M8 (the M5 scheduler shipped one-shot rows only).
+- TCC completeness check across the arc: M6 adds nothing (Accessibility already granted;
+  Automation prompts per osascript target as they occur); M7 adds Screen Recording (vision lane)
+  — the LAST planned grant; M8 adds none.

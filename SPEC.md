@@ -375,22 +375,247 @@ session (prompt in IMPLEMENTATION_NOTES §M4.1).
 
 **Demo:** "make me a wallpaper of a swamp at dusk and remind me at 5 to review it."
 
-### M6 — Computer use v1
+### M6 — Computer use v1 (design refined + locked with the user, 2026-07-16)
 
-- Swift primitives over WS: `AXUIElement` tree read/diff, click element, type via `CGEvent`,
-  ScreenCaptureKit screenshot. **AX-tree-first, screenshot+vision fallback.**
-- **Agent cursor**: transparent click-through fullscreen `NSWindow` at `.screenSaver` level with an
-  animated fake cursor view (prior art: `farzaa/clicky`). Never intercepts real clicks.
-- Dedicated computer-use sub-agent driving the primitives.
-- **Guardrails:** free navigation/typing/drafting; send/delete/pay/off-allowlist → **notch confirm**;
-  **kill switch** = hotkey or real-mouse movement (event tap → `AbortController`).
+**Two tiers, one domain — the same physics as the search lanes (hot one-shot vs background loop).**
+The realtime registry grows by **≤2 tools total** for the whole domain — deliberately no per-verb
+tools (`open_app`/`quit_app`/…): the voice model's router degrades as the toolbox bloats, and
+generic primitives subsume the verbs anyway.
+
+- **Hot tier — `mac_do(script)`, one realtime tool:** one-shot commands ("open Chrome to
+  claude.ai", "dark mode on", "how many Time Machine backups?") — the voice model writes the
+  bash/osascript one-liner itself (these are memorized idioms; spawning a sub-agent for a 100 ms
+  `open -a` is wrong by voice). Policy-gated in the M4 spirit: read-only/reversible → auto-run;
+  risky patterns (send/delete/pay, `sudo`, `rm` outside agent home, …) → **notch confirm** via the
+  existing `ConfirmBridge`. Every execution appends one JSONL audit line (`mac-audit.jsonl`, same
+  shape as `search-audit.jsonl`). No-TCC commands run daemon-side (`execFile`); TCC-bound scripts
+  route to the shell (placement below). This tool runs OUTSIDE the Claude-session Seatbelt — the
+  gate + audit ARE the mitigation (accepted trade-off, the user 2026-07-16).
+- **Multi-step tier — the computer-use sub-agent:** "open X, navigate there, do the task" without
+  the user dictating steps. Runs in the **existing background sub-agent runner** (`agents/` —
+  in-daemon loop, in-process tools; NOT the sandboxed Claude CLI — no MCP/Seatbelt/TCC threading),
+  reached via `spawn_subagent` (description widened to cover on-Mac tasks; +1 realtime tool at
+  most). **The voice model NEVER drives the act→observe loop:** each iteration would round-trip a
+  shallow latency-optimized model, and every AX snapshot would sit in the voice session's context
+  for the rest of the session — the same split that put Grok's reasoning model on the background
+  tier only.
+
+**Primitives (sub-agent toolbox — breadth is cheap there, unlike the realtime registry):**
+
+- `ax_snapshot` — **compacted** AX tree of the target/frontmost window: actionable elements only,
+  role/label/value/frame, window scoping, depth caps. **The full tree never enters LLM context**
+  (a Slack-scale window ≈ 8k elements / 200–800 KB raw): the SHELL holds the snapshot (ref →
+  `AXUIElementRef` map, recreated per snapshot — live refs are never cached across event-loop
+  ticks) and the sub-agent gets a flat one-line-per-element interactive sample + summary, with a
+  slice/grep RPC for more. Refs are opaque and **valid for one snapshot generation** (prefer
+  `AXIdentifier` when the app sets one — the only selector stable across runs); a stale ref is a
+  typed error, never a nearest-match guess, and coordinates never enter the primary action space
+  (ref-based grounding eliminates the wrong-coordinate failure class AND measurably resists
+  prompt injection vs pixels). Compaction + settle-detection are the engineering meat — mechanics
+  and perf budgets in IMPLEMENTATION_NOTES §M6 (batched attribute reads, BFS + depth cap,
+  role-filter during traversal, per-element messaging timeouts; ~50 ms focused-window read).
+- `ax_act` — press/focus/set-value/type by ref, via the **dispatch ladder** (2026 consensus):
+  AX action first (`AXPress` — background-safe, works on occluded elements, never moves the
+  pointer) → pid-targeted synthetic event (`CGEventPostToPid`) → global `CGEvent` last (drags are
+  global-only; right-click on Chromium = `AXShowMenu`). Keyboard shortcuts where AX has no verb —
+  and as the *preferred* fallback for stubborn widgets. **The tool settles, then auto-returns
+  post-action state as a server-side before/after DIFF** (`+`/`−`/`~` lines, volatile fields
+  stripped; empty diff = a real no-op signal) + `{ok, error_kind}` — the model never acts blind
+  and never has to *decide* to re-observe (Playwright-MCP/Terminator contract; kills the
+  assume-success failure mode structurally, not by prompt alone). **Verify by diff, never by
+  return code** — `AXPress` false-passes on backgrounded/disabled items. Settle = debounced
+  AXObserver notifications (~150–300 ms of silence) wrapped by poll + timeout (destroyed/changed
+  notifications drop silently on Sequoia/Tahoe). Typed errors mirror `SearchError.kind`:
+  `element_not_found | stale_ref | ax_unavailable | timeout | out_of_scope` (`stale_ref` →
+  re-snapshot). `wait_for(role, name)` covers slow transitions — waits live in the tools, never
+  as model-issued sleeps. Electron/web fields: set `AXManualAccessibility` on first touch
+  (plain Chrome: `AXEnhancedUserInterface`) and type via key events, not `AXValue` writes.
+  **Secure fields: subrole `AXSecureTextField` → the SWIFT EXECUTOR hard-refuses read/type**
+  (policy lives in the executor, never the prompt) and surfaces to the user.
+- `run_script` — bash/osascript for the scriptable world (app dictionaries, `tmutil`, `defaults`,
+  `open`) **plus `shortcuts run <uuid>`** — the sanctioned App Intents bridge (when an intent
+  exists it beats any UI drive; discover via `shortcuts list --show-identifiers`; ALWAYS under a
+  timeout — a prompting shortcut hangs forever). Same gate + audit as `mac_do`. Hard per-call
+  timeouts are mandatory across this lane: Tahoe regressed Apple-Events timing (scripts hang to
+  the 2-min `-1712` timeout on some apps) — one more reason the raw AX + CGEvent layer outranks
+  System Events scripting when both can do the job.
+- **Browser lane (revised by the 2026-07-16 research pass):** browsers are AX's *worst* terrain
+  (lazy, enormous renderer trees) — and AppleScript's page reach is shallow (tabs/URLs yes;
+  reliable in-page action no). **v1: URL/tab-level work only**, via `run_script`
+  (`open` / Chrome dictionary). Multi-step *in-page* web tasks are out of M6 scope — the
+  consensus channel is a dedicated Playwright/CDP lane with a11y-snapshot+ref tools (deferred,
+  post-M6); never drive a browser through OS-level AX. One lane per surface; the tool
+  descriptions are the router (load-bearing wording, as with Tavily/Exa/Grok — don't cross the
+  streams).
+- **Screenshot+vision stays deferred — but the seam is typed NOW:** observations are
+  `{kind: 'ax' | 'screenshot', …}` from day one, so the vision lane later slots in without loop
+  surgery (for hollow trees — canvas, games, Qt/OpenGL, AX-hostile Electron). **Sparse-tree
+  escape hatch:** a near-empty actionable set is *detected* (typed `ax_unavailable`; cross-check
+  against Finder — a guaranteed AX tree — to split "app has no tree" from "permission silently
+  broke") → fall back to the keyboard/`run_script` lane, or fail cleanly with "app not
+  AX-automatable" — never grind the loop against an empty tree. When vision does land: on-device
+  Vision-framework OCR is the middle step before any cloud vision model, and ScreenCaptureKit
+  brings the separate Screen Recording TCC grant.
+
+**Loop contract (research pass folded in 2026-07-16 — evidence + sources in IMPLEMENTATION_NOTES
+§M6):**
+
+- **Never act blind, never assume success:** `ax_act` auto-returns settled state (above), and the
+  sub-agent's instructions carry the verification rule — after each step, evaluate the returned
+  state before the next; verify **states, not elements** ("am I on the compose window?" survives
+  layout drift where element checks break). Every task *starts* with an observe-first
+  "is it already done?" check (idempotency).
+- **Budgets, all of them:** max-steps (default ~50, hard cap 100) + wall-clock + a harness-side
+  **repetition detector** — same action on same target ×3 injects a warning turn (redundant
+  looping is a top-4 documented computer-use failure class; the detector is cheap).
+- **Recovery, layered:** unexpected-dialog check before acting (generic Escape/dismiss
+  affordance); on repeated failure, return to a known state (re-focus app, close stray windows)
+  instead of forward-flailing; login/permission prompts are classified **states** that pause or
+  escalate to the user — never retried through.
+- **Context policy:** keep the last 2–3 snapshots verbatim; older ones collapse to one-line
+  placeholders ("[snapshot omitted — Mail main window]"); long outputs land in the task
+  workspace (file-system-as-context — Gumbo tasks already have one).
+- **Injection posture:** all UI-read text is **untrusted data, never instructions** — stated in
+  the sub-agent's instructions. NOTE: the Claude API's built-in computer-use injection
+  classifiers run ONLY on the official screenshot `computer_*` tool type — a custom AX toolset
+  gets none of that, so Gumbo's own gates (notch confirm + policy + audit) carry the entire
+  injection load.
+- **Model note:** the research sweet spot for text-observation loops is a Sonnet-class model at
+  medium effort (with text observations, vision-grounding gaps between models matter much less).
+  Runner model choice stays the user's call at build.
+
+**Placement — the reminders idiom, third client (confirms were the second):** brain = sub-agent in
+the daemon; hands = shell. New WS RPC pair (`mac_action` / `mac_action_result`, correlation id,
+pending-map + timeout modeled on `ConfirmBridge`; fail-safe error when no shell is connected). The
+shell executes AX via Swift `AXUIElement` under its **one Accessibility grant (already granted —
+covers ALL target apps; no per-app prompts, and no Screen Recording until the vision fallback)**;
+osascript Apple-Events targets prompt Automation per target app (`NSAppleEventsUsageDescription`
+required in Info.plist). **Permission health is a state machine, not a boolean:**
+`AXIsProcessTrusted()` has a documented stale-cache failure (returns true while every real call
+fails; persists on Tahoe) — the shell probes LIVE state (listen-only `CGEvent.tapCreate` +
+a functional walk of Finder's tree), retries ~3× then prompts a relaunch, and reports health over
+the RPC so the daemon can tell "action failed" from "permission silently dead".
+
+- **Agent cursor:** transparent click-through fullscreen `NSWindow` at `.screenSaver` level with an
+  animated fake cursor view (prior art: `farzaa/clicky`). Pure visualization — the AX and
+  pid-targeted rungs never move the real pointer (only the rare global rung, e.g. drags, does);
+  the ghost cursor animates to each target's `AXFrame` with a brief highlight ring before the
+  action fires. Never intercepts real clicks.
+- **Guardrails:** free navigation/typing/drafting; send/delete/pay/off-allowlist app → **notch
+  confirm**; **kill switch = hotkey or HUMAN input — synthetic input must be distinguishable**
+  (research correction 2026-07-16: "any mouse movement aborts" self-triggers once the dispatch
+  ladder's global rung moves the real pointer). Tag every agent-synthesized event (dedicated
+  `CGEventSource` user-data), run a listen-only event tap, and any UNTAGGED HID input = the user =
+  instant abort (event tap → `AbortController`, propagating through the existing task-cancel
+  path). Secure-field deny (executor-level); one audit line per performed action.
 
 **Demo:** "open Notes and draft a packing list" with the visible fake cursor; jiggle the real mouse
-and it halts instantly. Notes scenario completes AX-only (no screenshots in the event log).
+and it halts instantly. Notes scenario completes AX-only (no screenshots in the event log). Hot
+tier: "open Chrome and go to claude.ai" → a single `mac_do`, sub-second, no sub-agent spawned.
 
-**Deferred (post-M6):** wake word; GPT-Live model swap; computer-use polish (multi-display,
-allowlist UI, scrolling heuristics); launchd auto-start; deeper agent self-organization (archiving /
-reorganizing its home).
+### M7 — Computer use v2: full-surface coverage + cooperation (specced 2026-07-16; build after M6)
+
+v1 proves the loop on AX-clean native apps; v2 closes the two observation/action surfaces v1
+deliberately punted (in-page web, AX-hostile apps) and upgrades interruption into cooperation.
+Same loop, same guardrails, same audit — new LANES only; nothing here changes the M6 contracts.
+
+- **Browser lane, in-page (the deferred Playwright/CDP channel):** a DEDICATED automation browser
+  profile driven via Playwright/CDP — never the user's live profile (anti-bot systems flag CDP
+  sessions; a burned live profile is unacceptable blast radius). Auth = capture-once-replay:
+  the user logs in interactively once per site; storage state (cookies + localStorage) is persisted
+  and injected into fresh contexts — no stored passwords, ever. Tools mirror the AX contracts
+  exactly — `browser_snapshot` (a11y tree + one-generation refs; Playwright-MCP prior art),
+  `browser_act` (settles, auto-returns post-action state, same typed `error_kind`s),
+  `open_url`/`navigate` first-class — so the sub-agent learns ONE loop discipline across lanes.
+  One lane per surface: descriptions route (the Tavily/Exa convention), and OS-AX still never
+  touches a browser window. Cursor continuity: CDP element bounds → screen coords → the same
+  ghost cursor rides over web pages. Known holes recorded up front: cross-origin iframes need
+  explicit frame switching; canvas/WebGL is invisible to the tree (vision fallback); anti-bot
+  walls on major consumer sites → a clean "site blocks automation" failure, never an evasion
+  arms race.
+- **Web injection posture (pages are the #1 injection vector):** M6's untrusted-text rule stands,
+  PLUS: any send/submit/purchase inside the browser lane → **notch confirm regardless of the
+  allowlist** (an allowlisted SITE is not trusted CONTENT), and the audit line carries the URL.
+- **Vision observation lane (fills the `{kind:'screenshot'}` seam):** entered ONLY via the
+  sparse-tree escape hatch (`ax_unavailable`, canvas regions) — never the default. Two rungs
+  before any cloud pixels: (1) on-device Vision-framework OCR overlay with deterministic hint
+  labels, `(*)` marking OCR-only elements (application-use prior art); (2) screenshot to the
+  vision-capable sub-agent model with zoom-style region inspection, never full-frame-every-turn
+  (screenshots ≈ 1–1.8k tokens each). Capture via ScreenCaptureKit (occluded windows by id) —
+  brings the **Screen Recording TCC grant, the last planned permission**. Coordinate discipline
+  arrives with this lane and stays confined to it: Retina 2× DPR halving + multi-display mapping
+  are the documented #1 cause of offset clicks.
+- **Cooperative handoff:** M6 classifies login/permission/secure-field as pause states; v2
+  completes the round trip. The notch shows why it paused and what happens next; the user performs
+  the one step HIMSELF — the kill-switch tap already distinguishes his input, so his manual step
+  is *detected as the handoff*, not an abort — then the agent verifies the state diff and
+  resumes. Pause → human step → verify → resume.
+- **Voice steering:** the `send_to_session` idiom, extended to computer-use tasks — a PTT turn
+  while a watched task runs can inject guidance ("use the personal account", "skip that dialog")
+  into the running loop as a user message instead of opening a new conversational thread.
+  Watching the cursor and talking to it is the whole point of a voice agent driving a visible
+  Mac.
+- **Polish (absorbed from the old post-M6 deferred list):** multi-display (per-display cursor
+  overlay + `AXFrame`→display mapping); scrolling heuristics (AXScrollArea verbs first, Page-Down
+  preference — keyboard beats mouse emulation); **allowlist management UI** — a dashboard section
+  over config + `/api`, and the off-allowlist notch confirm gains a "remember this app" that
+  writes through to it.
+
+**Demo:** "grab the latest invoice from the billing portal and file it in ~/Documents/Bills" —
+the first run pauses at the login (handoff: the user types his password himself, the agent verifies
+and resumes), downloads, files, and audits the URL trail; the second run replays the stored
+session with no pause. And the vision rung: "read me the output value from [AX-hostile app]" —
+answered via on-device OCR, no cloud screenshot in the event log.
+
+### M8 — Computer use v3: routines — teaching, procedure memory, scheduled autonomy (specced 2026-07-16)
+
+v2 makes the agent able to act anywhere; v3 makes delegation COMPOUND — Gumbo learns how the user's
+recurring tasks are done, replays them cheaper/faster/more reliably each time, and runs them on
+its own scheduler. Intelligence moves from "figure it out every time" to "remember how we do
+this".
+
+- **Demonstration teaching ("watch me"):** the user performs the task once; the shell's listen-only
+  event tap (the kill-switch plumbing, reused) records his actions WITH their AX context — the
+  role/label/identifier of every element he touches, never coordinates (semantic recording
+  survives layout drift; a pixel recording is stale by the next window resize). The sub-agent
+  compiles the recording into a named procedure. Replay strictness = **adaptive** (research:
+  strict / adaptive / goal-oriented — adaptive recommended: follow the demonstrated path, adapt
+  when the UI drifted, bail to the full loop when adaptation fails).
+- **Procedure memory (learned skills):** any SUCCESSFUL multi-step run — taught or self-derived —
+  can be distilled into a procedure: goal, preconditions, and a step skeleton of (state check →
+  action → verify), persisted in the sqlite `memory` table (FTS5 — same store as search/task
+  results). A matching future request replays the skeleton deterministically with LLM
+  supervision only at the verify checkpoints — the research's "L2 deterministic fallback" made
+  first-class, and the SAFE form of action-batching (steps batch because they were verified
+  together before, not because the model guessed they would). Fewer model decisions = fewer
+  failure points at a fraction of the tokens. A drifted step falls back to the full loop and
+  UPDATES the procedure — self-healing, not brittle macros.
+- **Scheduled routines:** the M5 scheduler's `kind` seam ships its designed second consumer —
+  `kind:'routine'` rows fire a computer-use task at fire time, one-shot or recurring (recurrence
+  itself lands here; M5 shipped one-shot rows only). **Unattended policy:** the notch confirm
+  presumes the user is present; unattended runs are restricted to allowlisted apps + KNOWN
+  procedures, and any would-be-confirm action PAUSES the task + notifies (notch pulse + log)
+  until the user answers — deny-on-timeout stays, and nothing is EVER auto-approved in absentia.
+  Results ride the M3/M5 announce path (spoken if awake, pulse otherwise).
+- **First-party channel contingency (App Intents × MCP):** macOS 26.1 betas staged OS-level
+  MCP→App-Intents wiring, unshipped as of 2026-07. If macOS 27 (Golden Gate) ships it,
+  cooperating apps gain a first-party action channel that OUTRANKS UI driving — the dispatch
+  ladder grows a rung zero (intent → AX → events). Until then, `shortcuts run` (already in the
+  v1 action space) is the bridge.
+- **Considered and REJECTED — parallel rollouts (Behavior Best-of-N):** the 2026 OSWorld leader
+  runs N attempts in parallel and judges the best — in sandboxed VMs. On a LIVE machine, actions
+  mutate real state; parallel attempts are unsafe by construction. Gumbo's reliability budget
+  goes to verification + procedure memory instead. (Recorded so it doesn't get re-imported.)
+- **Long-horizon hygiene:** procedures make interrupted tasks resumable — re-enter at the last
+  VERIFIED state checkpoint, not step 1 (verify-at-start is already the M6 loop contract).
+
+**Demo:** "watch me file an expense report" → the user does it once → "file this month's expense
+report" runs as a learned procedure (visibly faster, near-zero model chatter in the event log) →
+"do that every first Monday at 9" → a scheduled routine that runs unattended and pauses only at
+the confirm-gated submit until the user taps.
+
+**Deferred (post-M8):** wake word; GPT-Live model swap; launchd auto-start; deeper agent
+self-organization (archiving / reorganizing its home).
 
 ---
 
