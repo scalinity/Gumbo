@@ -201,10 +201,11 @@ final class NotchModel: ObservableObject {
     }
 }
 
-private let ember = Color(red: 1.0, green: 0.478, blue: 0.282) // dashboard's ember accent
-private let bay = Color(red: 0.608, green: 0.706, blue: 0.475) // bay green (input/done)
-private let alarm = Color(red: 0.886, green: 0.365, blue: 0.365) // --alarm (failed)
-private let faint = Color(red: 0.42, green: 0.376, blue: 0.333) // --faint (cancelled)
+// Design tokens — single source in DesignTokens.swift; file-local aliases for brevity.
+private let ember = Tokens.ember
+private let bay = Tokens.bay
+private let alarm = Tokens.alarm
+private let faint = Tokens.faint
 
 struct NotchContentView: View {
     @ObservedObject var model: NotchModel

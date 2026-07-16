@@ -307,15 +307,15 @@ struct BubbleEvent: Identifiable {
     }
 }
 
-// MARK: - design tokens (dashboard index.css, mirrored)
+// MARK: - design tokens — single source in DesignTokens.swift; file-local aliases
 
-private let roux = Color(red: 0x19 / 255, green: 0x14 / 255, blue: 0x11 / 255) // --bg
-private let surface = Color(red: 0x20 / 255, green: 0x1A / 255, blue: 0x15 / 255) // --surface
-private let line = Color(red: 0x32 / 255, green: 0x2A / 255, blue: 0x23 / 255) // --line
-private let ember = Color(red: 0xFF / 255, green: 0x7A / 255, blue: 0x48 / 255) // --ember
-private let bay = Color(red: 0x9B / 255, green: 0xB4 / 255, blue: 0x79 / 255) // --bay
-private let alarm = Color(red: 0xE2 / 255, green: 0x5D / 255, blue: 0x5D / 255) // --alarm
-private let faint = Color(red: 0x6B / 255, green: 0x60 / 255, blue: 0x55 / 255) // --faint
+private let roux = Tokens.roux
+private let surface = Tokens.surface
+private let line = Tokens.line
+private let ember = Tokens.ember
+private let bay = Tokens.bay
+private let alarm = Tokens.alarm
+private let faint = Tokens.faint
 
 private func hexColor(_ value: UInt32) -> Color {
     Color(
