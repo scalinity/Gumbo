@@ -140,15 +140,19 @@ export const config = {
     // gates (plan mode, PreToolUse hook, notch escalations). The CLI is wrapped in
     // `sandbox-exec` via the SDK's spawnClaudeCodeProcess seam (see claude-runner.ts):
     // writes confined to cwd + the task workspace + the CLI's runtime dirs, on-disk secrets
-    // read-denied. Network stays open at the OS level (the CLI needs Anthropic and a single
-    // Seatbelt layer can't split CLI-vs-bash egress without an out-of-sandbox proxy) — bash
-    // exfil remains gated by the supervisor policy's network-send escalation. See
-    // IMPLEMENTATION_NOTES §M4.1 for the full rationale and the srt network-deny follow-up.
+    // read-denied. Network is DEFAULT-DENY: the profile allows only loopback to an in-daemon
+    // egress filtering proxy (egress-proxy.ts) that the CLI reaches via HTTPS_PROXY. Known
+    // hosts (Anthropic + MCP + common dev/registry hosts) flow freely; an UNKNOWN host is
+    // escalated to a notch confirm (deny-on-timeout) — closing the GET-exfil channel the open
+    // posture left open. See IMPLEMENTATION_NOTES §M4.1 for the full rationale.
     sandbox: {
       enabled: true,
       // Fail closed: if Seatbelt is unavailable (non-macOS, or sandbox-exec missing), the
       // session refuses to run rather than silently running unconfined.
       failIfUnavailable: true,
+      // Extra egress hosts the user wants flowing freely without a per-host confirm (in addition
+      // to the built-in allowlist in claude-runner). Bare domains match subdomains too.
+      allowedDomains: [] as string[],
     },
     // Docs MCP for headless sessions (the user, 2026-07-16): the sessions don't inherit
     // claude.ai connectors like Context7, so wire it explicitly for up-to-date library docs

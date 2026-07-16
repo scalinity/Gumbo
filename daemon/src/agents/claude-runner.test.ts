@@ -40,7 +40,7 @@ test('buildSandboxProfile: confines writes to cwd + workspace, denies secret rea
   const workspace = join(config.home.tasks, taskId);
   mkdirSync(workspace, { recursive: true });
   const cwd = realpathSync(config.home.tasks); // any real dir stands in for the project cwd
-  const p = buildSandboxProfile(cwd, taskId);
+  const p = buildSandboxProfile(cwd, taskId, 49152);
   const home = homedir();
 
   assert.match(p, /^\(version 1\)/, 'valid SBPL header');
@@ -76,11 +76,28 @@ test('buildSandboxProfile: confines writes to cwd + workspace, denies secret rea
 
   // review 🟡: the load-bearing ordering invariant — deny-all-writes precedes the allows.
   assert.ok(p.indexOf('(deny file-write*)') < p.indexOf('(allow file-write* (subpath'), 'deny-all-writes precedes the allowlist');
+
+  // M4.1 network default-deny: deny all direct egress, re-allow ONLY loopback to the proxy.
+  assert.ok(p.includes('(deny network*)'), 'all direct network denied');
+  assert.ok(p.includes('(allow network-outbound (remote ip "localhost:49152"))'), 'loopback to the proxy port re-allowed');
+  // review 🔴: DNS must be forced through the proxy — deny the mDNSResponder mach ports so
+  // getaddrinfo can't bypass the proxy (the DNS-label exfil channel). And the blanket
+  // unix-socket egress allow is dropped (local-network-bridge exposure).
+  assert.ok(p.includes('(deny mach-lookup (global-name "com.apple.mDNSResponder"))'), 'mDNSResponder mach-lookup denied (no DNS bypass)');
+  assert.ok(p.includes('(deny mach-lookup (global-name "com.apple.mDNSResponder.dnsproxy"))'), 'mDNSResponder dnsproxy denied');
+  assert.ok(!p.includes('(allow network-outbound (remote unix-socket))'), 'blanket unix-socket egress allow dropped');
+  assert.ok(!p.includes('network-bind'), 'no network-bind allow (grants nothing usable under deny-inbound + proxy-only outbound)');
+  // last-match-wins: deny-network must come AFTER (allow default), and the loopback re-allow
+  // AFTER the deny — otherwise the proxy would be unreachable and every request would fail.
+  assert.ok(p.indexOf('(allow default)') < p.indexOf('(deny network*)'), 'deny-network overrides allow-default');
+  assert.ok(p.indexOf('(deny network*)') < p.indexOf('(allow network-outbound (remote ip "localhost:49152"))'), 'loopback re-allow comes after deny-network');
 });
 
-test('buildSandboxProfile: rejects empty cwd/taskId (would open all writes)', () => {
-  assert.throws(() => buildSandboxProfile('', 't'), /non-empty/);
-  assert.throws(() => buildSandboxProfile('/x', ''), /non-empty/);
+test('buildSandboxProfile: rejects empty cwd/taskId or a bad proxy port (would open all writes / break egress)', () => {
+  assert.throws(() => buildSandboxProfile('', 't', 49152), /non-empty/);
+  assert.throws(() => buildSandboxProfile('/x', '', 49152), /non-empty/);
+  assert.throws(() => buildSandboxProfile('/x', 't', 0), /proxyPort/);
+  assert.throws(() => buildSandboxProfile('/x', 't', NaN), /proxyPort/);
 });
 
 test('sandboxUnavailableReason: null on macOS with sandbox-exec, else a reason (fail-closed)', () => {

@@ -234,12 +234,27 @@ export class Supervisor {
   private interventions = 0;
   private lines: string[] = [];
   private opts: SupervisorOptions;
+  // Concurrent confirms can be pending at once — several egress escalations (per-socket, e.g.
+  // parallel `npm install` connects) plus a hook escalation. Reference-count them so the task
+  // status flips only on the 0↔1 edges; otherwise the first confirm to resolve flips the task
+  // back to 'running' while another is still waiting (review 🟡).
+  private blockedDepth = 0;
   /** Set when the intervention cap ended the session — the runner flips to needs_input. */
   capHit = false;
 
   // No parameter properties: daemon tests run node --test in strip-only mode.
   constructor(opts: SupervisorOptions) {
     this.opts = opts;
+  }
+
+  /** Depth-counted blocked flag: opts.setBlocked fires only when the pending-confirm count
+   *  crosses 0↔1, so overlapping confirms don't thrash the task status. */
+  private setBlocked(blocked: boolean) {
+    if (blocked) {
+      if (this.blockedDepth++ === 0) this.opts.setBlocked(true);
+    } else if (this.blockedDepth > 0 && --this.blockedDepth === 0) {
+      this.opts.setBlocked(false);
+    }
   }
 
   private decide(payload: Record<string, unknown>, line: string) {
@@ -269,6 +284,43 @@ export class Supervisor {
     return { decision: 'deny', reason: result.message, interrupt: result.interrupt === true };
   }
 
+  /**
+   * Escalate an outbound connection to a non-allowlisted host to the user (M4.1 egress proxy).
+   * Returns true if approved — the proxy tunnels; false → the proxy 403s. Allowlisting and
+   * per-host memoization live in the proxy; this is a one-shot confirm through the same notch
+   * bridge as the policy escalations, so a headless timeout denies (fail-closed).
+   */
+  async escalateHost(host: string, signal?: AbortSignal): Promise<boolean> {
+    this.setBlocked(true);
+    let approved = false;
+    try {
+      approved = await this.opts.escalate(
+        { title: `Allow network access to ${host}?`, detail: `the session wants to reach ${host}, which isn't on the allowlist` },
+        signal,
+      );
+    } catch (err) {
+      // The bridge errored — leave exactly one audit line (matching the search-audit "one line
+      // per op, success or failure" convention) and rethrow so the proxy's onRejected denies this
+      // attempt WITHOUT caching it (re-escalates once the supervisor recovers). Without this the
+      // blocked host would be invisible in the trail (the proxy's .catch denies silently). 🟡
+      this.decide(
+        { kind: 'egress', host, decision: 'deny', source: 'error', error: String(err) },
+        `egress escalation errored for ${host} — denied: ${String(err)}`,
+      );
+      throw err;
+    } finally {
+      this.setBlocked(false);
+    }
+    // A `false` here is a decline OR a timeout/no-shell — the bridge can't tell them apart — so
+    // don't attribute a deny to an active the user decision the way an approve (only ever a real
+    // confirm_response) is (review 🟡).
+    this.decide(
+      { kind: 'egress', host, decision: approved ? 'allow' : 'deny', source: approved ? 'the user' : 'confirm' },
+      approved ? `the user approved network host: ${host}` : `network host denied (declined or timed out): ${host}`,
+    );
+    return approved;
+  }
+
   async gateTool(toolName: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<GateResult> {
     if (toolName === 'AskUserQuestion') return this.answerQuestions(input, signal);
     const policy = policyDecision(toolName, input, this.opts.cwd);
@@ -281,12 +333,12 @@ export class Supervisor {
       this.decide({ kind: 'gate', tool: toolName, decision: 'deny', source: 'policy', reason: policy.reason, action }, `deny (policy: ${policy.reason}): ${action}`);
       return { behavior: 'deny', message: `Blocked: ${action} touches a protected secret path. Do not retry — it is not needed for the task.` };
     }
-    this.opts.setBlocked(true);
+    this.setBlocked(true);
     let approved = false;
     try {
       approved = await this.opts.escalate({ title: action, detail: policy.reason }, signal);
     } finally {
-      this.opts.setBlocked(false);
+      this.setBlocked(false);
     }
     this.decide(
       { kind: 'gate', tool: toolName, decision: approved ? 'allow' : 'deny', source: 'the user', reason: policy.reason, action },

