@@ -527,3 +527,16 @@ Transcript forensics (event store) found two failure modes, both fixed:
   follow-up search to check whether scheduled events have ALREADY CONCLUDED and report
   outcomes, stating explicitly what couldn't be confirmed. (Kept instruction-level; no
   Exa API changes — the tool demonstrably finds fresh results when asked.)
+
+### Hard recency filter for time-scoped briefs (2026-07-15, late night)
+
+the user: "today's news" must mean *today*, not stale week-old sources. Recency was only a
+prompt hint ("prefer recent results") — nothing constrained the API. `web_search` now
+takes `max_age_days` (nullable; the model sets it per query) mapped to Exa's
+`startPublishedDate` — a **hard API-level cutoff**. Verified live before wiring: with a
+1-day window, every returned result's publishedDate fell inside 24 h. Sub-agent
+instructions: 1 for "today", 2–7 for "this week", null for evergreen; loosen only if a
+tight search returns nothing, and say so. **Merge note:** the parallel
+`worktree-web-search-providers` branch replaces exa-js with a raw Exa 2.0 client and
+already conflicts in this file — whoever resolves must port `max_age_days` →
+`startPublishedDate` onto the new client (same underlying API param; trivial carry-over).

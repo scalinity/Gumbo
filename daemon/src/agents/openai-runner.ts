@@ -8,14 +8,30 @@ let exa: Exa | null = null;
 
 const webSearch = tool({
   name: 'web_search',
-  description: 'Search the live web. Returns titles, URLs, and page text for the top results.',
-  parameters: z.object({ query: z.string() }),
-  async execute({ query }) {
+  description: 'Search the live web. Returns titles, URLs, publish dates, and page text for the top results.',
+  parameters: z.object({
+    query: z.string(),
+    max_age_days: z
+      .number()
+      .int()
+      .min(1)
+      .max(365)
+      .nullable()
+      .describe(
+        'Hard recency filter: only pages published within the last N days. Use 1 for "today" briefs, 2–7 for "this week". Pass null for evergreen topics.',
+      ),
+  }),
+  async execute({ query, max_age_days }) {
     exa ??= new Exa(process.env.EXA_API_KEY);
     const { results } = await exa.searchAndContents(query, {
       type: 'auto',
       numResults: 5,
       text: { maxCharacters: 2000 },
+      // Maps to Exa's startPublishedDate — a hard API-level cutoff, not a prompt hint.
+      // Verified live: with 1 day, every result's publishedDate fell inside 24 h.
+      ...(max_age_days != null && {
+        startPublishedDate: new Date(Date.now() - max_age_days * 86_400_000).toISOString(),
+      }),
     });
     return results
       .map((r: { title?: string | null; url: string; publishedDate?: string; text?: string }) =>
@@ -39,6 +55,9 @@ For time-sensitive briefs (news, scores, "latest", "today"): search snippets are
 previews — when you see an event scheduled for today or recently, run a follow-up search to
 check whether it has ALREADY CONCLUDED and report the outcome, not the preview. A report that
 calls a finished event "upcoming" is wrong. Say explicitly what you could not confirm.
+Scope searches with web_search's max_age_days: 1 when the brief says "today", 2–7 for "this
+week" — this excludes stale sources at the API level. Loosen it only if a tight search comes
+back empty, and say so if you had to.
 Your FINAL message must be the complete deliverable as a well-structured markdown report
 (it is saved verbatim as report.md and read back to the user), starting with a one-paragraph summary.`;
 }
