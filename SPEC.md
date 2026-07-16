@@ -191,8 +191,8 @@ Even as a personal tool, the daemon holds API keys and can spend money, so:
 
 ## 9. Phases
 
-Each phase is independently demoable. **M1 and M2 are complete.** Later phases list scope, not
-final code.
+Each phase is independently demoable. **M1, M2, and M3 are complete.** Later phases list scope,
+not final code.
 
 ### M1 — Brain, text-driven  ✅ DONE
 
@@ -244,17 +244,26 @@ use. See IMPLEMENTATION_NOTES §M2 for the build log and gotchas.
 
 **Deferred:** wake word.
 
-### M3 — Completion presence
+### M3 — Completion presence  ✅ DONE
 
 **Goal:** background work you can feel without the dashboard open.
 
-- Upper-right **bubbles**: one non-activating `NSPanel` per task, stacked, click → dashboard task
-  view; bubble flips to done + **notch pulse** on completion.
-- **Spoken announcements** cold (no live session): one-shot TTS via `0x02` audio frames — never open
-  a realtime session just to announce.
+- Upper-right **bubbles**: one non-activating `NSPanel` per task — shipped as breathing
+  Metal-shader **orbs** (ember plasma while running, cooled bay when done) that click-expand
+  **in place** into a mini observability panel (live activity tail + history; full dashboard is
+  the panel's ⤴ link); **notch pulse** on completion.
+- **Spoken announcements** cold (no live session): one-shot TTS (`gpt-4o-mini-tts`, `marin`, pcm)
+  via `0x02` audio frames — never opens a realtime session just to announce. Live-session
+  completions deliver the report's key finding directly (no "task finished — want details?").
+- Follow-ons landed with M3: playback-truthful `session_state` (`playback_state` from the shell,
+  no idle-close mid-drain), read-along notch transcript paced to audio actually heard, mic-free
+  playback audio graph (mic opens only during PTT), current-date injection + hard search recency
+  filter, bare-notch click-to-dashboard, custom pot menu bar icon.
 
-**Demo:** spawn a task, close the session, get "your sub-agent finished the X task" spoken cold,
-bubble green.
+**Verification:** live with the user (cold announce, bubble flip, barge-in, TCC persistence) +
+daemon smokes (cold path: zero `session.opened`, sample-aligned 0x02 frames; lifecycle: re-sync,
+pulse, linger) + a 2-agent review/address pass (2 criticals found and fixed — see
+IMPLEMENTATION_NOTES §M3). TCC risk #3 closed.
 
 ### M4 — Claude Code + supervisor
 

@@ -548,3 +548,43 @@ grant was made against the real-cert build, the user confirmed **no Accessibilit
 across multiple rebuild+relaunch cycles** the same evening (orb v2, notch click-catcher,
 dashboard fixes — each a new binary). Mic grant was already stable. Stable signing
 identity + clean TCC rows = grants persist. Nothing left to watch here.
+
+### Review + address pass (2-agent /review-2 → /address, 2026-07-15 night)
+
+DB1 (debugger, Fable) + CA1 (auditor, Opus) reviewed the full M3 diff vs main. Unified
+verdict was ❌ (2 introduced criticals) → all findings addressed in 13 conventional
+commits (9addb00…2f8959a), each built/tested, pushed to origin. Highlights:
+
+- **🔴 pumpPlayback cross-thread races (DB1)** — the M3 queue-pump refactor let the main
+  thread and buffer-completion threads run the pump concurrently: chunks could schedule
+  out of order, a stale buffer could play *after* a barge-in flush, and a ⌃⌥ graph switch
+  mid-playback could schedule onto a dead player and wedge `inFlight` forever (silent
+  no-audio until the next flush). **This was a regression I introduced in the mic-mode
+  refactor** — the M2 code never re-pumped from completions, so no such race existed;
+  timing-dependent, so the smokes couldn't catch it. Fix: one serial pump queue,
+  generation re-checked under the lock immediately before `scheduleBuffer`, engine refs
+  read/written under the lock, and `pumpQueue.sync {}` fences in flush/stop before the
+  player/converter are touched.
+- **🔴 reaper-orphaned bubbles (DB1)** — daemon restart mid-task: the boot reaper flips
+  the task to `failed` before any listener exists, hello re-sync only re-sends *running*
+  tasks, and the shell failsafe is cancelled while a bubble shows running → a stale ember
+  orb claimed a dead task was running forever. Reaped ids now get `bubble_remove` on hello.
+- **🟡s:** cold announce now *awaits* an in-flight connect (two-voices braid); TTS fetch
+  gets `AbortSignal.timeout(30s)` (hung request wedged the serialized queue); the
+  `onFinished` floating promise is caught (unhandled rejection killed the daemon);
+  report-into-instructions injection surface hardened (data-only framing + `</report>`
+  neutralization — report text is web-sourced and untrusted); bubble status is now a
+  typed `OrbState` with an explicit `.unknown` that renders ALIVE (six string switches
+  each defaulted M4-future statuses to the dead/cancelled look); `alignPcm16` extracted
+  pure + 7 node:test cases (`npx tsx --test daemon/test/announce.test.ts`) — the
+  extraction also guarantees the carry byte is copied out of pooled chunk memory.
+- **🔵s all taken:** shared `todayLabel()`; `DesignTokens.swift` single palette source
+  (bay had already drifted between files); history fetch sanitized/logged/retried;
+  deep-link survives cold vite starts (fired from didFinish); pointing-cursor push/pop
+  balanced on disappear; read-along pacing rebased per transcript item; bubbles + click
+  catcher anchored to the notch display (NSScreen.main follows focus); playback queue
+  head-cursor (removeFirst was O(n²) over a long read); Reduce Motion renders a static
+  orb frame and settled orbs drop to 15 fps; named constants for the failsafe and the
+  announce excerpt cap; cold-announce copy documented as announce-only by design.
+
+**M3 merged to main after this pass. SPEC §9 M3 marked ✅ DONE.**
