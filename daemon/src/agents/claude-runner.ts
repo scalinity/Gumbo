@@ -1,5 +1,5 @@
 import { query, type Query, type SDKUserMessage, type HookJSONOutput } from '@anthropic-ai/claude-agent-sdk';
-import { config } from '../config.ts';
+import { config, secretEnvKeys } from '../config.ts';
 import type { Store } from '../events/store.ts';
 import type { Supervisor, GateResult } from './supervisor.ts';
 
@@ -13,6 +13,15 @@ export const CLAUDE_AUTH_ERROR = 'auth: Claude Code needs you to log in again �
 // Result subtypes that mean "ran out of room," not "failed": the work is on disk and the
 // session resumes with send_to_session, so the task parks for the user rather than failing.
 const RESUMABLE_LIMIT_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd']);
+
+// Least privilege: hand the Claude subprocess the environment it needs (HOME/PATH/USER for
+// the keychain login lookup, TMPDIR, locale, …) MINUS every daemon-held provider secret —
+// the session needs none of them, and 'auto' mode auto-runs safe bash that could read them.
+function subprocessEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const key of secretEnvKeys) delete env[key];
+  return env;
+}
 
 // M4: one Claude Code session per task, on subscription auth (spike-verified 2026-07-15):
 // the subprocess env must keep USER (keychain credential lookup resolves the login item by
@@ -179,7 +188,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           // can't kill the hook mid-confirm and let an escalate-class action slip.
           PreToolUse: [{ hooks: [(hookInput) => this.preToolUse(hookInput)], timeout: Math.ceil(config.claude.hookTimeoutMs / 1000) }],
         },
-        env: { ...process.env, ANTHROPIC_API_KEY: undefined },
+        env: subprocessEnv(),
       },
     });
     this.query = session;

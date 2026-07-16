@@ -37,6 +37,12 @@ export function todayLabel(): string {
   });
 }
 
+// Daemon-held secrets that must NEVER reach a spawned subprocess (the Claude Code session
+// needs none of them). Stripped from the subprocess env in claude-runner. Add any new
+// provider key here the moment it lands in .env. ANTHROPIC_API_KEY is included because it
+// silently outranks the claude.ai subscription login (spike finding).
+export const secretEnvKeys = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'ANTHROPIC_API_KEY'] as const;
+
 export const config = {
   port,
   host: '127.0.0.1', // loopback only — do not bind all interfaces
