@@ -229,7 +229,7 @@ export async function firecrawlCrawl(
 
     for (;;) {
       if (Date.now() >= deadline) {
-        throw new SearchError('firecrawl', 'timeout', `crawl job did not finish within budget`);
+        throw new SearchError('firecrawl', 'timeout', 'crawl job did not finish within budget');
       }
       const status = await auditedCall<CrawlStatus>('/crawl/:id', url, {
         provider: 'firecrawl',
@@ -330,7 +330,7 @@ export async function firecrawlExtract(
 
     for (;;) {
       if (Date.now() >= deadline) {
-        throw new SearchError('firecrawl', 'timeout', `extract job did not finish within budget`);
+        throw new SearchError('firecrawl', 'timeout', 'extract job did not finish within budget');
       }
       // Page count on the completed poll = the URLs the job touched (extract's per-job
       // credit cost is token-based, so there is no server-reported page total to use).
