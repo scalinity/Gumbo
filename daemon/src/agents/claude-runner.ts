@@ -23,10 +23,13 @@ const RESUMABLE_LIMIT_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_u
 export const SANDBOX_MARKER = /sandbox required but unavailable|refusing to start without a working sandbox/i;
 export const CLAUDE_SANDBOX_ERROR = "this Mac can't run the OS sandbox (Seatbelt unavailable), so the session refused to start rather than run unconfined.";
 
-/** M4.1: OS-level containment under the semantic gates. Writes are confined to the session
- *  cwd (the sandbox's built-in boundary) plus the task workspace; outbound network is
- *  blocked by default (the SDK's egress proxy 403s any domain not allowlisted). Exported
- *  for unit tests. */
+/** M4.1: OS-level containment under the semantic gates. Governs BASH and its child
+ *  processes only — writes confined to cwd + the task workspace, egress 403'd unless
+ *  allow-listed, secret reads blocked. The CLI's OWN file tools (Read/Write/Edit/Grep)
+ *  run unsandboxed and are gated by the supervisor policy instead (edit-outside-cwd
+ *  escalation + protectedPathHit hard-deny), NOT here — see IMPLEMENTATION_NOTES §M4.1
+ *  review-address. Behavior is pinned to CLI 2.1.211; re-run the m41-spike/ probes as an
+ *  upgrade gate (the SDK doc frames these settings as advisory). Exported for unit tests. */
 export function sandboxSettings(taskId: string): SandboxSettings {
   const { enabled, failIfUnavailable, allowedDomains } = config.claude.sandbox;
   // Canonicalize the workspace like the manager canonicalizes cwd (review 🔵): under a

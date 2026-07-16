@@ -901,10 +901,17 @@ not from the model's narration:
   sockets and forces all egress through a local SDK-owned HTTP proxy** which 403s any domain not
   in `network.allowedDomains` — network denial is a proxy refusal, filesystem denial is an OS
   error; two different enforcement layers, both default-deny.
-- **The Write TOOL is confined too** (not just bash): under `permissionMode: 'auto'`, Write to
-  `$HOME` → `EPERM` on the CLI's temp file. The boundary holds even for the CLI's own file ops.
 - **PreToolUse hook still fires and its deny wins under sandbox + 'auto'** — the M4 layering
   invariant. Sandbox is the bottom layer; hook/notch stay the top.
+
+> ⚠️ **Correction after the review-address pass (see below): the OS sandbox governs ONLY bash
+> and its child processes — NOT the CLI's own file tools (Read/Write/Edit/Grep/Glob).** An
+> early probe showed Write→`$HOME` EPERM'ing and I wrongly concluded "the boundary holds for the
+> CLI's own file ops." Deeper probing disproved it: with `filesystem.allowWrite` set (as the
+> runner sets it), the Write TOOL writes freely to `~/Documents`, the repo, anywhere, and the
+> Read TOOL reads a `credentials`-denied `.env`. The file tools run in the CLI's *own* Node
+> process, outside the Seatbelt command jail; the SDK's `sandbox.filesystem`/`sandbox.credentials`
+> only wrap spawned commands. This changes what M4.1 delivers — see the review-address entry.
 
 **Fail-closed shape (from the CLI 2.1.211 internals, needed for a clear message):** with
 `failIfUnavailable: true` the CLI refuses to start and emits a stream-json `result` with subtype
@@ -932,9 +939,73 @@ Decisions that matter:
 
 **Caveats parked for later (from the CLI settings schema, not enabled):** `allowAppleEvents`
 (needed for `open`/`osascript`/browser auth flows; removes code-execution isolation — leave off),
-trustd access (Go-based CLIs like `gh`/`terraform` can't verify TLS through the proxy's MITM CA
-without it; reduces security — leave off until a session actually hits it), and
-`autoAllowBashIfSandboxed` (we rely on 'auto' mode + hook instead; not set).
+`enableWeakerNetworkIsolation` (macOS; lets Go-based CLIs like `gh`/`terraform` verify TLS through
+the proxy's MITM CA, but opens a trustd exfil vector — leave off until a session actually hits it),
+and `autoAllowBashIfSandboxed` (SDK default undocumented; we rely on 'auto' mode + hook, don't set
+it). `enableWeakerNestedSandbox` is Linux/WSL-only — irrelevant on macOS.
+
+### M4.1 — review-address pass (2026-07-16, /review-2 → /address, then deeper verification)
+
+Two reviewers (Fable) returned no 🔴, two 🟡, four 🔵. Addressing W1 by actually exercising it
+uncovered the real shape of the sandbox — the headline finding of this pass:
+
+**THE containment boundary (corrected, spike-verified — this supersedes the "writes confined to
+cwd+workspace" framing above):** the OS sandbox jails **bash and its child processes** —
+filesystem writes (cwd + `allowWrite`), network egress (proxy 403 unless allow-listed), and
+credential *reads* by commands (`cat .env` blocked). It does **not** jail the CLI's own file
+tools — `Read`/`Write`/`Edit`/`MultiEdit`/`NotebookEdit`/`Grep`/`Glob` run in the CLI's unsandboxed
+Node process. So the file-tool surface is governed by the **supervisor policy hook** (fires for
+every tool in every mode, sandbox or not), not the sandbox:
+- **File-tool WRITES outside cwd** → the pre-existing `edit-outside-cwd` escalation → notch confirm
+  → deny on timeout (fail-closed). Semantic gate, not OS-deterministic, but safe.
+- **File-tool access to secret paths** (`.env`, `~/.claude`) → new **hard deny** (`protectedPathHit`
+  in supervisor.ts), because there's no legitimate reason and no confirm should be offered.
+The two layers compose: bash side = OS sandbox, file-tool side = policy hook. Neither alone covers
+the whole surface; together they do. (Evidence: 16 throwaway probes in scratchpad `m41-spike/` —
+the decisive ones showed the Write tool reaching `~/Documents` and the Read tool reading a
+`credentials`-denied decoy, then the hook hard-denying the same Read once wired in.)
+
+**W1 — secret reads (🟡, FIXED, two layers).** The env-strip (`secretEnvKeys`) covers the subprocess
+*environment*; the same keys live on disk in the repo `.env` (a Gumbo self-edit session has the
+repo as cwd) and `~/.claude`. Fix: `secretFilePaths` in config, denied in BOTH layers — sandbox
+`credentials.files` (blocks `cat .env` + child processes) AND the policy hard-deny (blocks the
+Read/Grep tools the sandbox misses). The credential-deny is READ-only (`mode: 'deny'`), so it does
+not block the CLI writing checkpoint backups under `~/.claude/file-history/`.
+
+**W2 — undo/rewindFiles under sandbox (🟡, VERIFIED WORKING, no code change).** The review feared
+checkpoint backups (written to `~/.claude`, outside the write boundary) would EPERM and break
+`undo()`. Disproven: a full-config probe (sandbox + `credentials` deny on `~/.claude` +
+`enableFileCheckpointing`) edited a file and `rewindFiles` rewound it to pre-run state. Checkpoints
+are written by the CLI's own unsandboxed process, and `credentials` deny is read-only — neither
+touches the backup writes. (Aside surfaced while probing: `rewindFiles` needs the *exact* user-msg
+uuid as its target; the runner already captures `firstUserMessageId` from the echoed user turn, so
+this is unchanged — just don't expect a null/wrong uuid to rewind.)
+
+**S1 — SDK-semantics reliance (🔵, documented).** The SDK's `Options.sandbox` doc says filesystem
+access is "configured via permission rules … not these sandbox settings" — which read as stale but
+is actually *correct*: it's describing exactly the bash-vs-file-tool split above. Containment rests
+on the pinned CLI (2.1.211) behaving as probed. **On SDK/CLI upgrade, re-run the `m41-spike/` probes
+as a gate** (write-outside-cwd, egress, bash-read-secret, Read-tool-secret) — fail-closed only fires
+when the sandbox is *unavailable*, not when it silently *widens*.
+
+**S2 — `allowLocalBinding` (🔵, caveat).** Not set → sandboxed commands can't bind a local port. A
+session that runs a dev server or a port-binding test suite (incl. Gumbo's own `npm test`, which
+binds `GUMBO_PORT`) will fail with a confusing bind error, and can't reach the daemon's loopback
+:8737 either (a containment plus, but a footgun for legit dev servers). Wire `allowLocalBinding`
+through config only when a real task needs it.
+
+**S3 — workspace realpath (🔵, FIXED).** `sandboxSettings` now `realpathSync`es the task workspace
+(guarded on existence) so a symlinked `GUMBO_HOME` (e.g. `/tmp` → `/private/tmp` on macOS) can't
+make Seatbelt's real-path matching miss it. Mirrors the manager's cwd canonicalization.
+
+**S4 — marker→error mapping untested (🔵, acknowledged).** `SANDBOX_MARKER` regex is well-tested,
+but the `run()` mapping to `CLAUDE_SANDBOX_ERROR` isn't exercised — same gap as `AUTH_MARKER`
+(no `query()` fake exists; manager.test drives the manager with fake runners). Left as-is per that
+precedent; fold both into a query() fake if one is ever built.
+
+Tests: **104/104**. New: `sandboxSettings` realpath branch, `credentials` shape, and the
+`protectedPathHit` hard-deny (Read/Edit/Grep of `.env`/`~/.claude`, tilde form, containing-dir
+Grep, bash-unaffected, non-secret allowed).
 
 ---
 
