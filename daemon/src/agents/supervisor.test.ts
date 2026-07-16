@@ -6,8 +6,10 @@ import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
 const { policyDecision, describeAction, Supervisor } = await import('./supervisor.ts');
+const { secretFilePaths } = await import('../config.ts');
 
 const CWD = '/fake/tasks/abc';
+const [ENV_PATH, CLAUDE_DIR] = secretFilePaths; // repoRoot/.env , ~/.claude
 
 test('policy: hard-escalate list', () => {
   assert.equal(policyDecision('Bash', { command: 'git push origin main' }, CWD).route, 'escalate');
@@ -72,6 +74,25 @@ test('policy: edits gated by cwd', () => {
   assert.equal(policyDecision('Edit', { file_path: '/Users/dev/.zshrc' }, CWD).route, 'escalate');
   // Path traversal out of the workspace is still "outside".
   assert.equal(policyDecision('Write', { file_path: `${CWD}/../../escape.txt` }, CWD).route, 'escalate');
+});
+
+// M4.1 (review follow-up): the OS sandbox governs only bash/subprocesses — the CLI's own
+// file tools (Read/Write/Edit/Grep/Glob) run unsandboxed, so secret-path protection needs
+// this hard-deny in the policy layer (verified: the Read tool reads a sandbox-denied file).
+test('policy: secret paths hard-deny for the CLI file tools', () => {
+  assert.equal(policyDecision('Read', { file_path: ENV_PATH }, CWD).route, 'deny', 'Read of .env is denied, not just escalated');
+  assert.equal(policyDecision('Read', { file_path: join(CLAUDE_DIR, 'projects/x.jsonl') }, CWD).route, 'deny', 'reads inside ~/.claude are denied');
+  assert.equal(policyDecision('Edit', { file_path: ENV_PATH }, CWD).route, 'deny');
+  assert.equal(policyDecision('Grep', { path: CLAUDE_DIR }, CWD).route, 'deny');
+  // Tilde form resolves to the same protected dir.
+  assert.equal(policyDecision('Read', { file_path: '~/.claude/config' }, CWD).route, 'deny');
+  // A search root that CONTAINS a secret (grep rooted at the repo, where .env lives) is denied.
+  assert.equal(policyDecision('Grep', { path: ENV_PATH.replace(/\/\.env$/, '') }, CWD).route, 'deny');
+  // Bash is the sandbox's job, not this guard — .env in a command still routes by bash rules.
+  assert.equal(policyDecision('Bash', { command: `cat ${ENV_PATH}` }, CWD).route, 'allow');
+  // Non-secret reads/edits are unaffected.
+  assert.equal(policyDecision('Read', { file_path: '/etc/hosts' }, CWD).route, 'allow');
+  assert.equal(policyDecision('Read', { file_path: `${CWD}/src/a.ts` }, CWD).route, 'allow');
 });
 
 test('describeAction renders one short line', () => {

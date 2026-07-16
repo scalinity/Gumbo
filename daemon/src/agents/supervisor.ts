@@ -3,7 +3,8 @@ import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import { resolve, sep } from 'node:path';
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { config, todayLabel } from '../config.ts';
+import { homedir } from 'node:os';
+import { config, secretFilePaths, todayLabel } from '../config.ts';
 import type { Store } from '../events/store.ts';
 
 // M4 permission gating, "auto mode" (the user, 2026-07-15): a pure policy table decides
@@ -12,7 +13,9 @@ import type { Store } from '../events/store.ts';
 // Claude explicitly asks a question (AskUserQuestion), so a session that never asks
 // costs zero supervisor tokens.
 
-export type GateRoute = 'allow' | 'escalate';
+// 'deny' is a hard block (no confirm) for actions with no legitimate use — currently the
+// M4.1 secret-path guard. 'escalate' routes to a notch confirm; 'allow' auto-runs.
+export type GateRoute = 'allow' | 'escalate' | 'deny';
 
 export interface PolicyResult {
   route: GateRoute;
@@ -20,6 +23,29 @@ export interface PolicyResult {
 }
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
+
+// M4.1 (review follow-up, verified 2026-07-16): the OS sandbox governs only bash and its
+// child processes — the CLI's OWN file tools (Read/Write/Edit/Grep/Glob) run in the CLI's
+// unsandboxed Node process, so `sandbox.credentials`/`sandbox.filesystem` do NOT stop the
+// Read tool from reading .env. So secret-path protection needs a deterministic gate in
+// THIS layer (the hook fires for every tool in every mode) to complement the sandbox's
+// bash-side credential deny. Any tool naming a path at/under a secret path is hard-denied.
+const PROTECTED_PATHS = secretFilePaths.map((p) => resolve(p));
+
+// Path-bearing inputs across the CLI file tools: file_path (Read/Write/Edit/MultiEdit),
+// notebook_path (NotebookEdit), path (Grep/Glob search root).
+function protectedPathHit(input: Record<string, unknown>, cwd: string): string | null {
+  for (const raw of [input.file_path, input.notebook_path, input.path]) {
+    if (typeof raw !== 'string' || raw === '') continue;
+    const abs = resolve(cwd, raw.startsWith('~') ? homedir() + raw.slice(1) : raw);
+    for (const secret of PROTECTED_PATHS) {
+      // Deny reading/writing the secret itself, anything inside it (~/.claude/*), and a
+      // search root that CONTAINS it (Grep/Glob rooted above .env would surface it).
+      if (abs === secret || abs.startsWith(secret + sep) || secret.startsWith(abs + sep)) return raw;
+    }
+  }
+  return null;
+}
 
 // Bash patterns that always escalate to the user, checked before anything else. This list
 // IS the safety boundary in auto mode — everything not matching runs unreviewed. It can't
@@ -114,6 +140,14 @@ function deleteOutsideCwd(command: string, cwd: string): string | null {
 
 /** Pure policy table — no model, no I/O. Exported for offline unit tests. */
 export function policyDecision(toolName: string, input: Record<string, unknown>, cwd: string): PolicyResult {
+  // Secret-path guard first, for every tool: a coding session never has a legitimate
+  // reason to read/edit the daemon's own .env or Claude's ~/.claude state. Hard deny
+  // (not a confirm) — this is the file-tool half of the sandbox's bash-side credential
+  // deny (see PROTECTED_PATHS). Bash is handled by the OS sandbox, so skip it here.
+  if (toolName !== 'Bash') {
+    const secret = protectedPathHit(input, cwd);
+    if (secret) return { route: 'deny', reason: `blocked: protected secret path (${secret})` };
+  }
   if (toolName === 'Bash') {
     const command = String(input.command ?? '');
     for (const { pattern, reason } of ESCALATE_BASH) {
@@ -215,8 +249,15 @@ export class Supervisor {
    * that reach the supervisor are AskUserQuestion and the hard-escalate class.
    */
   async gateForHook(toolName: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<HookGate> {
-    if (toolName !== 'AskUserQuestion' && policyDecision(toolName, input, this.opts.cwd).route === 'allow') {
-      return { decision: 'defer' };
+    if (toolName !== 'AskUserQuestion') {
+      const policy = policyDecision(toolName, input, this.opts.cwd);
+      if (policy.route === 'allow') return { decision: 'defer' };
+      // Hard deny (secret-path guard) never reaches the user — record it and block.
+      if (policy.route === 'deny') {
+        const action = describeAction(toolName, input);
+        this.decide({ kind: 'gate', tool: toolName, decision: 'deny', source: 'policy', reason: policy.reason, action }, `deny (policy: ${policy.reason}): ${action}`);
+        return { decision: 'deny', reason: `Blocked: ${action} touches a protected secret path. Do not retry — it is not needed for the task.` };
+      }
     }
     const result = await this.gateTool(toolName, input, signal);
     if (result.behavior === 'allow') return { decision: 'allow' };
@@ -230,6 +271,10 @@ export class Supervisor {
     if (policy.route === 'allow') {
       this.decide({ kind: 'gate', tool: toolName, decision: 'allow', source: 'policy', reason: policy.reason, action }, `allow (policy: ${policy.reason}): ${action}`);
       return { behavior: 'allow' };
+    }
+    if (policy.route === 'deny') {
+      this.decide({ kind: 'gate', tool: toolName, decision: 'deny', source: 'policy', reason: policy.reason, action }, `deny (policy: ${policy.reason}): ${action}`);
+      return { behavior: 'deny', message: `Blocked: ${action} touches a protected secret path. Do not retry — it is not needed for the task.` };
     }
     this.opts.setBlocked(true);
     let approved = false;

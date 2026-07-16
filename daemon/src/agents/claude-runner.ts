@@ -34,10 +34,11 @@ export function sandboxSettings(taskId: string): SandboxSettings {
     // The model can pass dangerouslyDisableSandbox on a Bash call; false makes the CLI
     // ignore it — containment stays deterministic even under prompt injection.
     allowUnsandboxedCommands: false,
-    // Read side (review 🟡): Seatbelt's default read policy is permissive, so without
-    // this the repo .env (all provider keys) and ~/.claude stay readable — the env strip
-    // covers the environment, not the disk. Deny closes the read half while the egress
-    // default-deny closes the exfil half.
+    // Read side (review 🟡): the env strip covers the subprocess environment, not the
+    // secrets on disk (repo .env, ~/.claude). This deny is the BASH half — it blocks
+    // `cat .env` and any child process the session spawns. It does NOT cover the CLI's
+    // own Read/Grep tools, which run unsandboxed (verified 2026-07-16); those are hard-
+    // denied in the supervisor policy (protectedPathHit). Two layers, one for each path.
     credentials: { files: secretFilePaths.map((path) => ({ path, mode: 'deny' as const })) },
     filesystem: { allowWrite: [join(config.home.tasks, taskId)] },
     ...(allowedDomains.length > 0 ? { network: { allowedDomains: [...allowedDomains] } } : {}),
