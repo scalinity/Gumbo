@@ -196,7 +196,9 @@ export class TaskManager {
         this.writeSupervisorLog(supervisor, task);
         // Auth failure carries an 'auth:' prefix from the runner — record it as a clear,
         // actionable failure so the dashboard/bubble say "log in again" not a cryptic error.
-        const raw = String(err);
+        // Use .message, not String(err): String(Error) prepends "Error: ", so the prefix
+        // check would never match (review 🟡 2026-07-16).
+        const raw = err instanceof Error ? err.message : String(err);
         const auth = raw.startsWith('auth:');
         this.finish(task.id, runner.abort.signal.aborted ? 'cancelled' : 'failed', {
           error: auth ? raw.slice(5).trim() : raw,

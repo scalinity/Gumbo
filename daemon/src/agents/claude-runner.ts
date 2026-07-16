@@ -217,18 +217,21 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           }
         } else if (msg.type === 'result') {
           this.turnsResolved += 1;
-          // Auth failure surfaces as an assistant error OR as login text in the result —
-          // turn it into an actionable message instead of a cryptic failure.
-          const resultText = msg.subtype === 'success' ? msg.result : (msg.errors ?? []).join('; ');
-          if (this.authFailed || AUTH_MARKER.test(resultText ?? '')) throw new Error(CLAUDE_AUTH_ERROR);
           if (supervisor.capHit) return this.park(report, 'reached the supervisor question limit — needs your input');
           if (this.planRejected) return this.park(report, 'plan needs your approval or revision');
           if (msg.subtype !== 'success') {
+            // Auth failure surfaces as the assistant error flag or as login text in the
+            // ERROR detail — NEVER in a successful report. Testing report text would fail a
+            // good run whose report merely mentions "not logged in" (review 🔴 2026-07-16).
+            const errText = (msg.errors ?? []).join('; ');
+            if (this.authFailed || AUTH_MARKER.test(errText)) throw new Error(CLAUDE_AUTH_ERROR);
             if (RESUMABLE_LIMIT_SUBTYPES.has(msg.subtype)) {
               return this.park(report, msg.subtype === 'error_max_turns' ? 'reached the turn limit — needs your go-ahead to continue' : 'reached the budget limit — needs your go-ahead');
             }
             throw new Error(`Claude session ended: ${msg.subtype}`);
           }
+          // Success — but the assistant may still have flagged an auth error mid-turn.
+          if (this.authFailed) throw new Error(CLAUDE_AUTH_ERROR);
           report = msg.result || report;
           if (this.turnsResolved >= this.turnsSent) {
             this.input.close();
