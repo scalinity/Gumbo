@@ -372,9 +372,21 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         } catch (err) {
           throw new Error(`${CLAUDE_PROXY_ERROR} (${String(err)})`);
         }
-        spawnClaudeCodeProcess = sandboxWrappedSpawn(buildSandboxProfile(cwd, taskId, proxy.port));
+        // buildSandboxProfile can throw (its guards, or a realpathSync TOCTOU) BEFORE the run
+        // loop's try/finally — a throw there would leak the listening proxy. Close it on failure
+        // (review 🟡). query()'s spawn is lazy (first iteration, inside the try), so the profile
+        // build is the only pre-loop throw that can leak.
+        try {
+          spawnClaudeCodeProcess = sandboxWrappedSpawn(buildSandboxProfile(cwd, taskId, proxy.port));
+        } catch (err) {
+          proxy.close();
+          throw err;
+        }
         const url = `http://127.0.0.1:${proxy.port}`;
-        proxyEnv = { HTTPS_PROXY: url, HTTP_PROXY: url, https_proxy: url, http_proxy: url };
+        // Clear any inherited NO_PROXY/no_proxy: a match there makes the CLI attempt a DIRECT
+        // connect (Seatbelt-denied, no escalation), and NO_PROXY=* would cut it off from Anthropic
+        // entirely — either way a cryptic failure instead of routing through the proxy (review 🟡).
+        proxyEnv = { HTTPS_PROXY: url, HTTP_PROXY: url, https_proxy: url, http_proxy: url, NO_PROXY: '', no_proxy: '' };
       }
     }
 
