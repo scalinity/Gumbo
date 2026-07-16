@@ -92,6 +92,20 @@ test('timeout → timeout error', async () => {
   );
 });
 
+test('caller abort tears down the request and rethrows the raw reason', async () => {
+  globalThis.fetch = ((_url: unknown, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+    })) as typeof fetch;
+  const ctrl = new AbortController();
+  const rejected = assert.rejects(
+    postJson({ ...base, signal: ctrl.signal }),
+    (err: unknown) => !(err instanceof SearchError) && (err as Error).message === 'task cancelled',
+  );
+  ctrl.abort(new Error('task cancelled'));
+  await rejected;
+});
+
 test('connection failure → network error', async () => {
   globalThis.fetch = (async () => {
     throw new TypeError('fetch failed');

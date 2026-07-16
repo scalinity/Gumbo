@@ -1,6 +1,6 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,12 @@ process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
 process.env.EXA_API_KEY = 'exa-test-key';
 const { exaSearch, exaContents } = await import('./exa.ts');
 const { SearchError } = await import('./client.ts');
+const { config } = await import('../config.ts');
+
+const lastAuditLine = () => {
+  const lines = readFileSync(join(config.home.logs, 'search-audit.jsonl'), 'utf8').trim().split('\n');
+  return JSON.parse(lines[lines.length - 1]);
+};
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -79,9 +85,25 @@ test('search results parsed through', async () => {
   assert.equal(results[0].text, 'full page text…');
 });
 
-test('empty results → empty_results error', async () => {
+test('empty results → empty_results error, audited as a failure', async () => {
   capture(200, { requestId: 'r2', results: [] });
   await assert.rejects(exaSearch('q'), (err: unknown) => err instanceof SearchError && err.kind === 'empty_results');
+  const entry = lastAuditLine();
+  assert.equal(entry.ok, false);
+  assert.equal(entry.error, 'empty_results');
+  assert.equal(entry.endpoint, '/search');
+});
+
+test('empty /contents → empty_results error, audited as a failure', async () => {
+  capture(200, { requestId: 'r3', results: [] });
+  await assert.rejects(
+    exaContents(['https://example.com/x']),
+    (err: unknown) => err instanceof SearchError && err.kind === 'empty_results',
+  );
+  const entry = lastAuditLine();
+  assert.equal(entry.ok, false);
+  assert.equal(entry.error, 'empty_results');
+  assert.equal(entry.endpoint, '/contents');
 });
 
 test('background path retries a 5xx (unlike the hot path)', async () => {

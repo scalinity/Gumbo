@@ -1,6 +1,6 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,7 @@ process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
 process.env.TAVILY_API_KEY = 'tvly-test-key';
 const { tavilySearch, webQuickLookup } = await import('./tavily.ts');
 const { SearchError } = await import('./client.ts');
+const { config } = await import('../config.ts');
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -118,4 +119,15 @@ test('webQuickLookup never throws on provider failure', async () => {
   const parsed = JSON.parse(await webQuickLookup('q'));
   assert.equal(parsed.error, 'lookup_failed');
   assert.equal(parsed.reason, 'quota');
+});
+
+test('failures are audited ok:false at the client layer', async () => {
+  capture(429, {});
+  await assert.rejects(tavilySearch('audit-me'));
+  const lines = readFileSync(join(config.home.logs, 'search-audit.jsonl'), 'utf8').trim().split('\n');
+  const entry = JSON.parse(lines[lines.length - 1]);
+  assert.equal(entry.provider, 'tavily');
+  assert.equal(entry.ok, false);
+  assert.equal(entry.error, 'quota');
+  assert.equal(entry.query, 'audit-me');
 });
