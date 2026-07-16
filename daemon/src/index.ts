@@ -58,6 +58,14 @@ store.onEvent((event) => {
 // tsx-watch daemon restarts are routine.
 hub.onHello((role) => {
   if (role !== 'shell') return;
+  // Bubbles for tasks the boot reaper flipped to 'failed' died with the old daemon —
+  // no listener existed when those task.finished events fired, the running-only
+  // re-sync below skips them, and the shell's failsafe is cancelled while a bubble
+  // shows 'running'. Without this, a routine tsx-watch restart leaves a stale ember
+  // orb claiming a dead task is running forever.
+  for (const id of reaped) {
+    hub.broadcast({ type: 'bubble_remove', task_id: id }, 'shell');
+  }
   for (const task of store.listTasks()) {
     if (task.status !== 'running') continue;
     hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status: 'running' }, 'shell');
