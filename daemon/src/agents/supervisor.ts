@@ -298,12 +298,25 @@ export class Supervisor {
         { title: `Allow network access to ${host}?`, detail: `the session wants to reach ${host}, which isn't on the allowlist` },
         signal,
       );
+    } catch (err) {
+      // The bridge errored — leave exactly one audit line (matching the search-audit "one line
+      // per op, success or failure" convention) and rethrow so the proxy's onRejected denies this
+      // attempt WITHOUT caching it (re-escalates once the supervisor recovers). Without this the
+      // blocked host would be invisible in the trail (the proxy's .catch denies silently). 🟡
+      this.decide(
+        { kind: 'egress', host, decision: 'deny', source: 'error', error: String(err) },
+        `egress escalation errored for ${host} — denied: ${String(err)}`,
+      );
+      throw err;
     } finally {
       this.setBlocked(false);
     }
+    // A `false` here is a decline OR a timeout/no-shell — the bridge can't tell them apart — so
+    // don't attribute a deny to an active the user decision the way an approve (only ever a real
+    // confirm_response) is (review 🟡).
     this.decide(
-      { kind: 'egress', host, decision: approved ? 'allow' : 'deny', source: 'the user' },
-      `${approved ? 'the user approved' : 'the user denied'} network host: ${host}`,
+      { kind: 'egress', host, decision: approved ? 'allow' : 'deny', source: approved ? 'the user' : 'confirm' },
+      approved ? `the user approved network host: ${host}` : `network host denied (declined or timed out): ${host}`,
     );
     return approved;
   }
