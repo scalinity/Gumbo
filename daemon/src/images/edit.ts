@@ -78,6 +78,11 @@ export async function runImageEdit(opts: {
   store: Store;
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
 }): Promise<void> {
+  // Yield before the synchronous prefix (readFileSync + mask rasterization): callers
+  // fire-and-forget this promise from the tool's execute / the WS handler, and without
+  // the yield that sync work would run inline on THEIR turn — delaying the "instant"
+  // ack and stalling the event loop that carries live voice audio (review 🟡).
+  await new Promise((resolve) => setImmediate(resolve));
   const { file, prompt, strokes, store, announce } = opts;
   const short = prompt.length > 90 ? `${prompt.slice(0, 87)}…` : prompt;
   const scoped = strokes && strokes.length > 0;

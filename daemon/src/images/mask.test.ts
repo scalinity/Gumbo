@@ -68,6 +68,16 @@ test('sanitizeStrokes: over-LIMIT sizes are clamped, never rejected (review 🔴
   assert.equal(sanitizeStrokes(longStroke)[0].points.length, MAX_POINTS_PER_STROKE);
 });
 
+test('the painted-area work budget turns pathological payloads into a clean throw (review 🟡)', () => {
+  // 200 strokes × 4 max-radius segments each ≈ 2.08M px² of bbox on a 100×100 image —
+  // just past the 200-repaints budget (2M px²). Within-cap counts, unbounded cost.
+  const pathological = Array.from({ length: 200 }, () => ({
+    points: Array.from({ length: 5 }, () => [0.5, 0.5] as [number, number]),
+    radius: 0.25,
+  }));
+  assert.throws(() => strokeMaskPng(100, 100, pathological), /selection too complex/);
+});
+
 test('pngDimensions rejects non-PNG bytes', () => {
   assert.throws(() => pngDimensions(Buffer.from('definitely not a png, sorry')), /not a PNG/);
 });

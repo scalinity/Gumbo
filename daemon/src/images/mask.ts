@@ -91,6 +91,15 @@ export function strokeMaskPng(width: number, height: number, strokes: Stroke[]):
   // alpha[y*width + x]: start fully opaque, strokes punch transparency.
   const alpha = new Uint8Array(width * height).fill(255);
 
+  // Work budget (review 🟡, corroborated by both agents): the count/radius caps alone
+  // don't bound COST — that's Σ segment-bbox areas, and the cap product allows ~10¹¹
+  // pixel tests (minutes of stalled event loop, which also carries live voice audio).
+  // 200 full-image repaints ≈ low hundreds of ms at 1536×1024 — far beyond any human
+  // selection (heaviest realistic shading measures in the tens), yet it turns the
+  // pathological case into a clean "too complex" failure on the image.edit_failed path.
+  const areaBudget = 200 * width * height;
+  let paintedArea = 0;
+
   for (const stroke of strokes) {
     const r = stroke.radius * width;
     const pts = stroke.points.map(([nx, ny]) => [nx * width, ny * height] as const);
@@ -101,6 +110,8 @@ export function strokeMaskPng(width: number, height: number, strokes: Stroke[]):
       const x1 = Math.min(width - 1, Math.ceil(Math.max(ax, bx) + r));
       const y0 = Math.max(0, Math.floor(Math.min(ay, by) - r));
       const y1 = Math.min(height - 1, Math.ceil(Math.max(ay, by) + r));
+      paintedArea += (x1 - x0 + 1) * (y1 - y0 + 1);
+      if (paintedArea > areaBudget) throw new Error('selection too complex — clear it and paint a simpler one');
       const dx = bx - ax;
       const dy = by - ay;
       const lenSq = dx * dx + dy * dy;
