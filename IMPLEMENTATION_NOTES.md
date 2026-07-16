@@ -1118,6 +1118,57 @@ the loopback filtering proxy (network default-deny) from `m41-spike/proxy-verify
 the user; left as his capability-first call. The *fixable* credential surfaces (repo `.env`, gh/npm/
 cloud tokens, ssh/aws/gnupg) ARE now closed.
 
+### M4.1 — egress filtering proxy: network flipped OPEN → default-deny+allowlist+escalate (2026-07-16)
+
+the user's follow-up call after seeing the residual above: **close the GET-exfil channel** by routing
+ALL session egress through a loopback filtering proxy, without turning the sandbox back into a
+capability cage. So it's a *generous* allowlist + **escalate-on-unknown** (a notch confirm), not a
+hard 403 — the filesystem "safety net, not a cage" pattern applied to the network.
+
+- **`daemon/src/agents/egress-proxy.ts`** — a `127.0.0.1:0` CONNECT proxy. Allowlisted host → tunnel
+  (`net.connect` upstream, pipe both ways); UNKNOWN host → `onUnknown(host)` (the runner routes it to
+  `Supervisor.escalateHost` → the same notch confirm as git-push, deny-on-timeout). Decisions are
+  **memoized per session** (a host is prompted at most once; concurrent connects share one in-flight
+  promise). Robust socket error handlers everywhere — a client RST must never crash the daemon (the
+  spike learning: attach `clientSock.on('error')` FIRST). Plain HTTP (non-CONNECT) → 405.
+- **Why a proxy at all / why it can split CLI-vs-bash egress when Seatbelt can't:** a single Seatbelt
+  layer can only allow-or-deny network by IP, not by "who's asking" — it can't allow the CLI's
+  Anthropic egress while denying bash's. The proxy runs UNSANDBOXED in the daemon and is the one
+  choke point: the profile denies every direct socket and re-allows ONLY `localhost:<proxyPort>`, so
+  the CLI *and* any bash it spawns are forced through `HTTPS_PROXY`, where per-host filtering happens.
+- **Profile network rules** (`buildSandboxProfile(cwd, taskId, proxyPort)`, last-match-wins after
+  `allow default`): `(deny network*)` → `(allow network-outbound (remote ip "localhost:<port>"))` →
+  `(allow network-bind (local ip "localhost:*"))` → `(allow network-outbound (remote unix-socket))`.
+  **No DNS rule needed** — the confined process only ever connects to loopback; the *proxy* resolves
+  the real host upstream (verified: works with network otherwise fully denied). unix-socket egress is
+  allowed for local IPC.
+- **Allowlist = base + config-MCP + the user's extras.** `EGRESS_BASE_ALLOWLIST` (Anthropic/claude.ai,
+  the inherited `mcp.exa.ai`, and common dev/registry hosts: github, npm, pypi, crates) + the hosts of
+  `config.claude.mcpServers` **derived from their URLs** (so a changed MCP URL can't drift out of the
+  allowlist) + `config.claude.sandbox.allowedDomains`. MCP hosts are pre-allowlisted deliberately — a
+  headless confirm-timeout would otherwise break an MCP.
+- **Fail-closed** twice: sandbox-unavailable throws (unchanged), and a proxy that won't bind throws
+  `CLAUDE_PROXY_ERROR` before spawn — no session runs with unfiltered network. Proxy lifetime = the
+  session's; closed in `run()`'s `finally`.
+- **Verified live against the SHIPPED code** (`m41-spike/proxy-ship-verify.mjs`), not just the spike:
+  (a) CLI auths THROUGH the proxy (`init:true`); (b) `curl --noproxy` direct socket → sandbox-blocked;
+  (c) unlisted host (example.com), escalate→deny → proxy **403** (`CONNECT tunnel failed, response
+  403`); (d) allowlisted github → tunnels; (e) `~/Documents` write still **CONFINED** (file rules
+  untouched); (f) **context7 MCP connects through the proxy** — the one real unknown, RESOLVED: the
+  CLI's MCP HTTP transport honors `HTTPS_PROXY` (global dispatcher), so allowlisting the MCP host is
+  sufficient — no separate carve-out. Tests: 105/105 (+2 proxy tests; profile test gained network
+  assertions).
+- **The Keychain/transcript residual is now CLOSED for attacker-controlled hosts.** A prompt-injected
+  session can still *read* `~/.claude/**` or the OAuth token, but it can no longer ship them to an
+  attacker host — that host isn't allowlisted and the confirm denies on timeout headlessly. The
+  supervisor's network-SEND escalation stays as the semantic layer for *approved-host* sends (git push).
+- **Known follow-on:** inherited `~/.claude` MCPs the runner can't see (e.g. the claude.ai **Tavily**
+  connector) aren't pre-allowlisted, so their FIRST use escalates to a confirm (interactive: approve;
+  headless: denies → that MCP call fails, session continues). Add such hosts to `allowedDomains` if a
+  session needs them headlessly. **Undici caveat:** MCP-over-HTTP honoring `HTTPS_PROXY` relies on the
+  CLI setting a global dispatcher from env — re-verify `proxy-ship-verify.mjs` step (f) on SDK/CLI
+  upgrade.
+
 ---
 
 ## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15

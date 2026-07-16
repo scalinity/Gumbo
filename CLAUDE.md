@@ -94,23 +94,35 @@ non-obvious (record *why*, not just *what*).
   via the SDK's `spawnClaudeCodeProcess` seam — so the CLI's **own file tools** (Read/Write/Edit/
   Grep) are OS-confined too, not just spawned bash. macOS forbids nesting a second sandbox, so this
   **REPLACES** the SDK `sandbox` option (do not re-add it — `sandbox_apply` EPERMs under the wrap).
-- **Safety net, not a cage (the user):** the profile is `(allow default)` MINUS two subtractions —
+- **Safety net, not a cage (the user):** the profile is `(allow default)` MINUS three subtractions —
   (1) **writes** confined to cwd + task workspace + runtime/cache dirs (`~/.claude`, `$TMPDIR`,
-  `~/.npm`, `~/.cache`, `~/Library/Caches`); (2) **secret reads** denied (`.env`, `~/.ssh`,
-  `~/.aws`). Reads are otherwise open and **network is OPEN** (the user's call — a session should run
-  like an interactive one: any CLI/MCP/research). Exfil net = secrets unreadable + the supervisor
-  policy still escalates network-SENDS (curl -d/POST/git push → notch confirm).
-- **Fail-closed** is a pre-spawn check (`sandboxUnavailableReason`): non-macOS or missing
-  `/usr/bin/sandbox-exec` → the runner throws `CLAUDE_SANDBOX_ERROR` before starting.
-- **Capability:** CLIs work (read+exec + open network; `firecrawl` uses its own stored auth, so the
-  env-strip stays intact). Context7 docs MCP is wired via `config.claude.mcpServers` on top of the
-  inherited `~/.claude` MCPs.
+  `~/.npm`, `~/.cache`, `~/Library/Caches`); (2) **secret reads** denied (`.env`, `~/.ssh`, `~/.aws`,
+  gh/npm/cloud tokens); (3) **network default-deny** — every direct socket denied, only loopback to
+  the egress proxy re-allowed. Reads are otherwise open. Same "safety net not cage" spirit on the
+  network: known hosts flow freely, unknown ones ESCALATE to a notch confirm (not a hard 403).
+- **Egress filtering proxy (M4.1 follow-up, 2026-07-16 — network flipped OPEN → default-deny):**
+  `egress-proxy.ts` is a loopback CONNECT proxy running UNSANDBOXED in the daemon; the CLI reaches it
+  via `HTTPS_PROXY`, so the CLI AND any bash it spawns are forced through one choke point (a single
+  Seatbelt layer can't split CLI-vs-bash egress by IP — that's why the proxy exists). Allowlisted host
+  → tunnel; unknown → `Supervisor.escalateHost` (same notch confirm as git-push, deny-on-timeout,
+  memoized per session). Allowlist = base (Anthropic + inherited exa MCP + dev/registry hosts) +
+  config MCP hosts (derived from URLs) + `config.claude.sandbox.allowedDomains`. **No DNS rule** — the
+  proxy resolves upstream. This CLOSED the Keychain/transcript GET-exfil residual for attacker hosts.
+- **Fail-closed** twice, pre-spawn: `sandboxUnavailableReason` (non-macOS / missing `sandbox-exec` →
+  `CLAUDE_SANDBOX_ERROR`) and a proxy that won't bind → `CLAUDE_PROXY_ERROR`. No unconfined/unfiltered run.
+- **Capability:** CLIs work (read+exec; egress via the proxy — allowlisted hosts flow, unknown ones
+  confirm; `firecrawl` uses its own stored auth, so the env-strip stays intact). Context7 docs MCP is
+  wired via `config.claude.mcpServers` on top of the inherited `~/.claude` MCPs, and connects through
+  the proxy (MCP-over-HTTP honors `HTTPS_PROXY`). Inherited MCP hosts the runner can't see (e.g. the
+  claude.ai Tavily connector) escalate on first use — add to `allowedDomains` if needed headlessly.
 - **Belt-and-suspenders (still in supervisor.ts):** `protectedPathHit` hard-`deny` + edit-outside-cwd
   escalate remain — redundant with the OS layer for `.env` but give a clean message and cover the
-  Read tool on `~/.claude` (OS-readable so the CLI can read its own state). Keep both routes.
-- Full rationale, the nesting/network trade-offs, and the discarded loopback-proxy option are in
-  IMPLEMENTATION_NOTES §M4.1 REBUILT — read it before touching sandbox/secret-path/network handling.
-  On SDK/CLI upgrade, re-run `m41-spike/` as a gate.
+  Read tool on `~/.claude` (OS-readable so the CLI can read its own state). The policy's network-SEND
+  escalation stays as the semantic layer for approved-host sends (git push). Keep all routes.
+- Full rationale, the nesting/network trade-offs, and the egress-proxy verification are in
+  IMPLEMENTATION_NOTES §M4.1 (REBUILT + the egress-proxy entry) — read it before touching
+  sandbox/secret-path/network handling. On SDK/CLI upgrade, re-run `m41-spike/` (incl.
+  `proxy-ship-verify.mjs` for the MCP-through-proxy check) as a gate.
 
 ## Working rules
 
