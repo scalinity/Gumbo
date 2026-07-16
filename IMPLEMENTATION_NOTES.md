@@ -374,3 +374,28 @@ Risk #5 retired — clear to build the real notch UI on DynamicNotchKit 1.1.0.
   audit lines.
 - Failure path live (during the Tavily incident): timeout → structured failure → model offered
   backgrounding, then actually ran it via Exa. Exactly the designed routing.
+
+### Review + address pass (2-agent /review-2, then /address) — 2026-07-15
+Two Opus reviewers (debugger + code-auditor) reviewed the changeset: 0 critical, 5 warnings,
+7 suggestions — **all addressed** (8 commits after `f810bd0`). Notable:
+- **Completion truthfulness:** a sqlite failure while indexing the report (or persisting search
+  results mid-run) could flip a *succeeded* task to `failed` / kill a task holding good results.
+  Both persistence paths are now best-effort: `report.md` + `finish('done')` stay on the critical
+  path, memory indexing logs-and-continues.
+- **Audit consistency:** Exa logged `empty_results` as `ok:true` before throwing, and Tavily
+  audited in the tool wrapper instead of the client. Both providers now audit at the client
+  choke point with `empty_results` as `ok:false`.
+- **Realtime-loop protection:** FTS tokenization of full-page bodies is synchronous sqlite work
+  on the loop that also carries voice audio — persistence now indexes one row per event-loop
+  turn (`setImmediate` chain) instead of 10 × ~200 KB in one burst.
+- **Cancellation reaches the wire:** task abort now composes into every provider fetch via
+  `AbortSignal.any` (raw abort reason rethrown so `cancelled` status survives); previously a
+  cancelled `deep` search kept its HTTP request alive up to 180 s.
+- Smaller: `GUMBO_PORT` validated (empty string → port 0 trap), stale "≤2 s" comment fixed,
+  insert-only FTS invariant + missing retention policy documented in the schema, audit-dir
+  mkdir memoized off the hot path, test glob widened to `src/**` with new coverage for the
+  store round-trip, audit JSONL contract (incl. newline-forge resistance), and runner helpers
+  (37 tests total).
+- **GOTCHA (test runner):** `node --test <pattern>` exits **0** when the pattern matches zero
+  files — a wrong glob or cwd silently "passes". Bit us once mid-review (ran from repo root
+  instead of `daemon/`); there's no non-hacky guard, so just check the reported test count.
