@@ -97,8 +97,9 @@ export function createOrchestratorTools(manager: TaskManager, store: Store) {
     },
   });
 
-  // Hot path: Tavily, ≤2 s, no retries. The description below IS the router between this
-  // and spawn_subagent — its wording is part of the spec; don't loosen it.
+  // Hot path: Tavily, hard-capped at config.search.quickLookupTimeoutMs, no retries. The
+  // description below IS the router between this and spawn_subagent — its wording is part
+  // of the spec; don't loosen it.
   const quickLookup = tool({
     name: 'web_quick_lookup',
     description:
