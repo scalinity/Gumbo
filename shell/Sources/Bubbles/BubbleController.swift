@@ -188,7 +188,7 @@ final class BubbleController {
     }
 
     private func frameOrigin(forIndex index: Int, size: NSSize) -> NSPoint {
-        guard let screen = NSScreen.main else { return .zero }
+        guard let screen = NSScreen.gumboHome else { return .zero }
         let visible = screen.visibleFrame
         var top = visible.maxY - margin
         for (i, id) in order.enumerated() {
@@ -200,7 +200,7 @@ final class BubbleController {
     }
 
     private func layout() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.gumboHome else { return }
         let visible = screen.visibleFrame
         var top = visible.maxY - margin
         NSAnimationContext.runAnimationGroup { ctx in

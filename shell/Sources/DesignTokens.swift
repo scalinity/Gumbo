@@ -1,4 +1,15 @@
+import AppKit
 import SwiftUI
+
+extension NSScreen {
+    /// The MacBook's own display (the one with a notch), falling back to main.
+    /// `NSScreen.main` is the *key window's* screen — bubbles would follow whatever
+    /// display has focus, and the notch click-catcher could vanish whenever an
+    /// external display was frontmost.
+    static var gumboHome: NSScreen? {
+        screens.first { $0.safeAreaInsets.top > 0 } ?? main
+    }
+}
 
 /// Dashboard design tokens (dashboard/src/index.css :root) — the single Swift source of
 /// truth. Two files previously redefined these with divergent encodings and had already

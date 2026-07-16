@@ -36,7 +36,7 @@ final class NotchController {
     }
 
     private func positionClickCatcher() {
-        guard let screen = NSScreen.main,
+        guard let screen = NSScreen.gumboHome,
               let left = screen.auxiliaryTopLeftArea,
               let right = screen.auxiliaryTopRightArea,
               screen.safeAreaInsets.top > 0 else {
