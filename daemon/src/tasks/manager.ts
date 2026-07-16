@@ -7,8 +7,9 @@ import { runSubagent } from '../agents/openai-runner.ts';
 import { ClaudeRunner, type ClaudeRunnerOpts, type ClaudeSessionRunner } from '../agents/claude-runner.ts';
 import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
 
-/** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod). */
-export type EscalateFn = (taskId: string, taskTitle: string, req: EscalationRequest) => Promise<boolean>;
+/** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod).
+ *  The signal fires if the task is cancelled while the confirm is pending. */
+export type EscalateFn = (taskId: string, taskTitle: string, req: EscalationRequest, signal?: AbortSignal) => Promise<boolean>;
 
 /** Builds the runner for a Claude session — swapped for a fake in tests (no live query()). */
 export type RunnerFactory = (opts: ClaudeRunnerOpts) => ClaudeSessionRunner;
@@ -47,27 +48,33 @@ export class TaskManager {
     // Two-arg then(): the rejection handler sees ONLY runSubagent errors, so a failure
     // while writing the report (success path) can't be mislabeled 'cancelled'/'failed'.
     runSubagent({ taskId: id, brief, store: this.store, signal: abort.signal }).then(
-      (report) => {
-        try {
-          writeFileSync(join(workspace, 'report.md'), report);
-        } catch (err) {
-          this.finish(id, 'failed', { error: `report write failed: ${String(err)}` });
-          return;
-        }
-        // Memory indexing is best-effort: once report.md is on disk the task succeeded,
-        // and a sqlite hiccup here must never flip it to 'failed'.
-        try {
-          this.store.saveTaskOutput(id, title, report);
-        } catch (err) {
-          console.error(`task ${id}: memory index failed (task still done):`, err);
-        }
-        this.finish(id, 'done', { report_path: `tasks/${id}/report.md` });
-      },
+      (report) => this.finishWithReport(id, title, workspace, report),
       (err: unknown) => {
         this.finish(id, abort.signal.aborted ? 'cancelled' : 'failed', { error: String(err) });
       },
     );
     return task;
+  }
+
+  /**
+   * Land a finished task's report and mark it done. Shared by the OpenAI sub-agent and
+   * Claude runners: report.md + finish('done') are the critical path; memory indexing is
+   * best-effort (a sqlite hiccup once the report is on disk must never flip a succeeded
+   * task to 'failed'). A report-write failure IS terminal — there's nothing to deliver.
+   */
+  private finishWithReport(id: string, title: string, workspace: string, report: string) {
+    try {
+      writeFileSync(join(workspace, 'report.md'), report || '(no report)');
+    } catch (err) {
+      this.finish(id, 'failed', { error: `report write failed: ${String(err)}` });
+      return;
+    }
+    try {
+      this.store.saveTaskOutput(id, title, report);
+    } catch (err) {
+      console.error(`task ${id}: memory index failed (task still done):`, err);
+    }
+    this.finish(id, 'done', { report_path: `tasks/${id}/report.md` });
   }
 
   /**
@@ -126,7 +133,7 @@ export class TaskManager {
       brief: fullBrief,
       cwd,
       store: this.store,
-      escalate: (req) => this.escalate(task.id, task.title, req),
+      escalate: (req, signal) => this.escalate(task.id, task.title, req, signal),
       setBlocked: (blocked) => {
         // Transient: the run itself continues the moment the user answers the confirm.
         if (this.finished.has(task.id)) return;
@@ -149,18 +156,7 @@ export class TaskManager {
           this.setTaskStatus(task.id, 'needs_input', 'supervisor intervention cap');
           return;
         }
-        try {
-          writeFileSync(join(task.workspace, 'report.md'), report || '(no report)');
-        } catch (err) {
-          this.finish(task.id, 'failed', { error: `report write failed: ${String(err)}` });
-          return;
-        }
-        try {
-          this.store.saveTaskOutput(task.id, task.title, report);
-        } catch (err) {
-          console.error(`task ${task.id}: memory index failed (task still done):`, err);
-        }
-        this.finish(task.id, 'done', { report_path: `tasks/${task.id}/report.md` });
+        this.finishWithReport(task.id, task.title, task.workspace, report);
       },
       (err: unknown) => {
         this.claudeRunners.delete(task.id);

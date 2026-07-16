@@ -21,16 +21,25 @@ final class ConfirmController {
     private var model: ConfirmModel?
     private var expireWork: DispatchWorkItem?
     private var showing = false
+    private var currentId: String?
 
     func present(id: String, taskTitle: String, title: String, detail: String, timeoutMs: Double) {
         queue.append(Request(id: id, taskTitle: taskTitle, title: title, detail: detail, timeoutMs: timeoutMs))
         if !showing { showNext() }
     }
 
+    /// The confirm's task was cancelled (daemon already resolved it deny) — drop it whether
+    /// it's queued or on screen so a stale panel doesn't linger until its local countdown.
+    func cancel(id: String) {
+        queue.removeAll { $0.id == id }
+        if currentId == id { answer(id, approved: nil) }
+    }
+
     private func showNext() {
         guard !queue.isEmpty else { return }
         let request = queue.removeFirst()
         showing = true
+        currentId = request.id
 
         let model = ConfirmModel(
             taskTitle: request.taskTitle,
@@ -62,6 +71,7 @@ final class ConfirmController {
     private func answer(_ id: String, approved: Bool?) {
         guard showing else { return }
         showing = false
+        currentId = nil
         expireWork?.cancel()
         expireWork = nil
         if let approved { onRespond?(id, approved) }
@@ -70,8 +80,15 @@ final class ConfirmController {
                 ctx.duration = 0.18
                 panel.animator().alphaValue = 0
             }, completionHandler: { [weak self] in
+                guard let self else { return }
+                // A confirm_request arriving during this 180 ms fade calls present() →
+                // showNext() (showing was already false) and re-shows the shared panel.
+                // If that happened, this stale completion must NOT hide it or re-run
+                // showNext — that path hides the new confirm and wedges `showing` true,
+                // silently killing every future confirm until relaunch.
+                guard !self.showing else { return }
                 panel.orderOut(nil)
-                self?.showNext()
+                self.showNext()
             })
         } else {
             showNext()

@@ -202,6 +202,10 @@ final class GumboController {
                         detail: msg["detail"] as? String ?? "",
                         timeoutMs: msg["timeout_ms"] as? Double ?? 60_000)
                 }
+            case "confirm_cancel":
+                if let id = msg["id"] as? String {
+                    self.confirm.cancel(id: id)
+                }
             case "event":
                 // Task-scoped activity for the bubble mini-panel live tail.
                 if let event = msg["event"] as? [String: Any] {

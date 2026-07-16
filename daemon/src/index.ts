@@ -26,7 +26,7 @@ const server = createHttpServer(store);
 const hub = new Hub(server);
 // M4: supervisor escalations resolve through the notch (deny on timeout / no shell).
 const confirms = new ConfirmBridge(hub);
-const manager = new TaskManager(store, (taskId, taskTitle, req) => confirms.request(taskId, taskTitle, req.title, req.detail));
+const manager = new TaskManager(store, (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal));
 const orchestrator = new Orchestrator(store, hub, manager);
 manager.onFinished = (task) => {
   // Floating promise: an unexpected sync throw (dead transport, store failure) would

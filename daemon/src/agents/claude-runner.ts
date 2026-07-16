@@ -10,8 +10,8 @@ import type { Supervisor } from './supervisor.ts';
 // mid-run redirects; the session id is persisted so send_to_session can resume after a
 // daemon restart.
 
-/** Push queue → async-generator streaming input for query(). */
-class InputQueue implements AsyncIterable<SDKUserMessage> {
+/** Push queue → async-generator streaming input for query(). Exported for unit tests. */
+export class InputQueue implements AsyncIterable<SDKUserMessage> {
   private queue: SDKUserMessage[] = [];
   private wake: (() => void) | null = null;
   private closed = false;
@@ -142,6 +142,12 @@ export class ClaudeRunner implements ClaudeSessionRunner {
 
     let report = '';
     try {
+      // Each claude.* event is an inline synchronous sqlite insert + WS broadcast on the
+      // loop that also carries realtime audio. Unlike the M3 search path (which bursts ~10
+      // ~200 KB rows at once and so chunks via setImmediate), Claude events arrive one per
+      // assistant/tool turn with model latency between them — naturally spaced, no burst —
+      // so they write inline. Revisit with setImmediate chunking if a chatty session ever
+      // shows loop lag.
       for await (const msg of session) {
         if (msg.type === 'system' && msg.subtype === 'init') {
           store.saveClaudeSession(taskId, { sessionId: msg.session_id, cwd, brief: this.opts.persistBrief });

@@ -37,4 +37,6 @@ export type OutboundMessage =
   | { type: 'bubble_remove'; task_id: string } // shell: fade the panel out (sent after the done-linger)
   | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running' | 'needs_input'> } // shell: brief completion pulse
   // shell: a supervisor escalation needs the user's yes/no; deny happens daemon-side on timeout.
-  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number };
+  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number }
+  // shell: dismiss a pending confirm — its task was cancelled (daemon already resolved it deny).
+  | { type: 'confirm_cancel'; id: string };
