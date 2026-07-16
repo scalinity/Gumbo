@@ -1,5 +1,7 @@
-import { query, type Query, type SDKUserMessage, type HookJSONOutput, type SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Query, type SDKUserMessage, type HookJSONOutput, type SpawnOptions, type SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
+import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { config, secretEnvKeys, secretFilePaths } from '../config.ts';
 import type { Store } from '../events/store.ts';
@@ -16,44 +18,94 @@ export const CLAUDE_AUTH_ERROR = 'auth: Claude Code needs you to log in again �
 // session resumes with send_to_session, so the task parks for the user rather than failing.
 const RESUMABLE_LIMIT_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd']);
 
-// M4.1 fail-closed detection: with failIfUnavailable the CLI refuses to start and emits a
-// result (subtype error_during_execution) whose errors[] carries this exact phrasing —
-// matched on the ERROR detail only, never on report text (same discipline as AUTH_MARKER).
-// Exported for unit tests.
-export const SANDBOX_MARKER = /sandbox required but unavailable|refusing to start without a working sandbox/i;
 export const CLAUDE_SANDBOX_ERROR = "this Mac can't run the OS sandbox (Seatbelt unavailable), so the session refused to start rather than run unconfined.";
 
-/** M4.1: OS-level containment under the semantic gates. Governs BASH and its child
- *  processes only — writes confined to cwd + the task workspace, egress 403'd unless
- *  allow-listed, secret reads blocked. The CLI's OWN file tools (Read/Write/Edit/Grep)
- *  run unsandboxed and are gated by the supervisor policy instead (edit-outside-cwd
- *  escalation + protectedPathHit hard-deny), NOT here — see IMPLEMENTATION_NOTES §M4.1
- *  review-address. Behavior is pinned to CLI 2.1.211; re-run the m41-spike/ probes as an
- *  upgrade gate (the SDK doc frames these settings as advisory). Exported for unit tests. */
-export function sandboxSettings(taskId: string): SandboxSettings {
-  const { enabled, failIfUnavailable, allowedDomains } = config.claude.sandbox;
-  // Canonicalize the workspace like the manager canonicalizes cwd (review 🔵): under a
-  // symlinked GUMBO_HOME (e.g. /tmp → /private/tmp on macOS) Seatbelt matches the real
-  // path, so a literal allowWrite entry would miss the workspace and EPERM its writes.
-  // Guard existsSync — the manager mkdirs the workspace before the runner starts, but the
-  // unit test calls this for a taskId that doesn't exist.
-  const workspace = join(config.home.tasks, taskId);
-  const allowWrite = existsSync(workspace) ? realpathSync(workspace) : workspace;
-  return {
-    enabled,
-    failIfUnavailable,
-    // The model can pass dangerouslyDisableSandbox on a Bash call; false makes the CLI
-    // ignore it — containment stays deterministic even under prompt injection.
-    allowUnsandboxedCommands: false,
-    // Read side (review 🟡): the env strip covers the subprocess environment, not the
-    // secrets on disk (repo .env, ~/.claude). This deny is the BASH half — it blocks
-    // `cat .env` and any child process the session spawns. It does NOT cover the CLI's
-    // own Read/Grep tools, which run unsandboxed (verified 2026-07-16); those are hard-
-    // denied in the supervisor policy (protectedPathHit). Two layers, one for each path.
-    credentials: { files: secretFilePaths.map((path) => ({ path, mode: 'deny' as const })) },
-    filesystem: { allowWrite: [allowWrite] },
-    ...(allowedDomains.length > 0 ? { network: { allowedDomains: [...allowedDomains] } } : {}),
-  };
+// M4.1 (rebuilt 2026-07-16 — the review-follow-up discovery): the SDK's `sandbox` option
+// only jails spawned BASH; the CLI's OWN file tools (Read/Write/Edit/Grep) run in the CLI's
+// Node process and escape it. The only way to OS-confine the file tools too is to run the
+// WHOLE CLI process under macOS Seatbelt — which we do by wrapping the spawn in
+// `sandbox-exec` via the SDK's `spawnClaudeCodeProcess` seam. macOS forbids NESTING a second
+// sandbox inside the first (sandbox_apply → EPERM), so this REPLACES the SDK `sandbox` option
+// rather than layering under it. This is the same approach Anthropic's own
+// `@anthropic-ai/sandbox-runtime` takes; we hand-roll the profile to avoid a beta dependency.
+
+/** Absolute, symlink-resolved dir if it exists (Seatbelt matches real paths — /tmp is
+ *  /private/tmp); otherwise the literal path (a not-yet-created dir the CLI may make). */
+function realOrLiteral(path: string): string {
+  return existsSync(path) ? realpathSync(path) : path;
+}
+
+/** Null when the OS sandbox is available; otherwise a human reason (→ fail-closed). */
+export function sandboxUnavailableReason(): string | null {
+  if (process.platform !== 'darwin') return `OS sandbox requires macOS Seatbelt; platform is ${process.platform}`;
+  if (!existsSync('/usr/bin/sandbox-exec')) return 'sandbox-exec not found at /usr/bin/sandbox-exec';
+  return null;
+}
+
+/**
+ * Build the SBPL (Seatbelt) profile that confines the ENTIRE CLI process — file tools and
+ * bash alike. The design goal (the user, 2026-07-16) is a SAFETY NET, not a capability cage:
+ * the headless session should run like an interactive one (any CLI, MCP, package install,
+ * research) but be unable to escape its task. So `allow default` keeps the CLI fully
+ * functional (network, Keychain, node, reading libs/docs anywhere) and we SUBTRACT only the
+ * two things that matter for a headless, prompt-injectable session:
+ *   1. WRITES — confined to the project cwd + the task workspace + the runtime/cache dirs
+ *      tools legitimately need (~/.claude for checkpoints, $TMPDIR, package caches). Writes to
+ *      the user's documents, other projects, dotfiles, and system stay denied — the session
+ *      can't clobber anything outside its task.
+ *   2. SECRET READS — .env (repo provider keys), ~/.ssh, ~/.aws are unreadable, so there is
+ *      little sensitive material to exfiltrate even though egress is open.
+ * Exported for unit tests. `cwd` should already be realpath'd by the caller (the manager is).
+ *
+ * Network is OPEN (the user's call): a single Seatbelt layer can't allow the CLI's egress while
+ * denying bash's without an out-of-sandbox filtering proxy, and locking egress to an allowlist
+ * would limit research/docs (which live on arbitrary hosts) — defeating "run like you". The
+ * exfil net instead is: secrets are unreadable (above) + the supervisor policy still escalates
+ * network-SENDS (curl -d / POST / wget --post / git push) to a notch confirm. See IMPLEMENTATION_NOTES.
+ */
+export function buildSandboxProfile(cwd: string, taskId: string): string {
+  const home = homedir();
+  const writable = [
+    realOrLiteral(cwd),
+    realOrLiteral(join(config.home.tasks, taskId)),
+    realOrLiteral(join(home, '.claude')), // session state + file-checkpoint backups (undo)
+    realOrLiteral(tmpdir()),
+    '/private/tmp',
+    '/private/var/folders',
+    '/dev',
+    // Package-manager + tool caches, so `npm/pip install` and caching CLIs work like they do
+    // interactively (verified: without these, ~/.npm etc. EPERM and installs fail).
+    realOrLiteral(join(home, '.npm')),
+    realOrLiteral(join(home, '.cache')),
+    realOrLiteral(join(home, 'Library', 'Caches')),
+  ];
+  // Deny reading the on-disk secrets a coding session never needs. .env is secretFilePaths[0]
+  // (the repo's provider keys); ~/.claude is NOT denied here (the CLI needs to read its own
+  // state) — the supervisor policy hard-denies the Read TOOL on ~/.claude instead.
+  const readDenied = [realOrLiteral(secretFilePaths[0]), realOrLiteral(join(home, '.ssh')), realOrLiteral(join(home, '.aws'))];
+  const q = (p: string) => JSON.stringify(p); // SBPL uses double-quoted strings; JSON escaping is compatible
+  return [
+    '(version 1)',
+    '(allow default)',
+    '(deny file-write*)',
+    ...writable.map((p) => `(allow file-write* (subpath ${q(p)}))`),
+    `(allow file-write* (literal ${q(join(home, '.claude.json'))}))`,
+    ...readDenied.map((p) => `(deny file-read* (subpath ${q(p)}))`),
+    '', // trailing newline
+  ].join('\n');
+}
+
+/** `spawnClaudeCodeProcess` implementation: launch the CLI under `sandbox-exec -p <profile>`
+ *  so the whole process — file tools included — runs inside Seatbelt. A missing sandbox-exec
+ *  would make spawn emit 'error', which the SDK surfaces as a failed session — fail-closed. */
+function sandboxWrappedSpawn(profile: string): (opts: SpawnOptions) => SpawnedProcess {
+  return (opts) =>
+    spawn('/usr/bin/sandbox-exec', ['-p', profile, opts.command, ...opts.args], {
+      cwd: opts.cwd,
+      env: opts.env,
+      signal: opts.signal,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }) as unknown as SpawnedProcess;
 }
 
 // Least privilege: hand the Claude subprocess the environment it needs (HOME/PATH/USER for
@@ -204,6 +256,20 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   async run(): Promise<ClaudeRunResult> {
     const { taskId, brief, cwd, store, supervisor } = this.opts;
     const limit = config.activityLogMaxChars;
+
+    // M4.1: wrap the whole CLI process in a Seatbelt sandbox (file tools included). Fail
+    // closed BEFORE spawning — if the platform can't sandbox, the session refuses to run
+    // unconfined rather than silently dropping containment.
+    let spawnClaudeCodeProcess: ((opts: SpawnOptions) => SpawnedProcess) | undefined;
+    if (config.claude.sandbox.enabled) {
+      const reason = sandboxUnavailableReason();
+      if (reason) {
+        if (config.claude.sandbox.failIfUnavailable) throw new Error(`${CLAUDE_SANDBOX_ERROR} (${reason})`);
+      } else {
+        spawnClaudeCodeProcess = sandboxWrappedSpawn(buildSandboxProfile(cwd, taskId));
+      }
+    }
+
     this.input.push(this.opts.resumeSessionId ? brief : composePrompt(brief, cwd, this.planning));
     this.turnsSent += 1;
 
@@ -230,10 +296,15 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           // can't kill the hook mid-confirm and let an escalate-class action slip.
           PreToolUse: [{ hooks: [(hookInput) => this.preToolUse(hookInput)], timeout: Math.ceil(config.claude.hookTimeoutMs / 1000) }],
         },
-        // M4.1: OS sandbox (Seatbelt) UNDER the gates above — the hook/notch stay the
-        // semantic layer (git push confirms); the sandbox is the deterministic one
-        // (can't escape cwd+workspace, can't phone home). Fail closed when unavailable.
-        sandbox: sandboxSettings(taskId),
+        // M4.1: the whole CLI runs under Seatbelt (spawnClaudeCodeProcess above) so the
+        // hook/notch stay the semantic layer (git push confirms) while the OS sandbox is
+        // the deterministic containment — for the file tools AND bash. undefined on a
+        // non-macOS host with failIfUnavailable off (the throw above covers fail-closed).
+        spawnClaudeCodeProcess,
+        // Context7 docs MCP (the user's call) — headless sessions don't inherit claude.ai
+        // connectors, so give them the same library-docs tool an interactive session has.
+        // Merged with the ~/.claude MCP servers the session already inherits.
+        mcpServers: config.claude.mcpServers,
         env: subprocessEnv(),
       },
     });
@@ -282,7 +353,6 @@ export class ClaudeRunner implements ClaudeSessionRunner {
             // good run whose report merely mentions "not logged in" (review 🔴 2026-07-16).
             const errText = (msg.errors ?? []).join('; ');
             if (this.authFailed || AUTH_MARKER.test(errText)) throw new Error(CLAUDE_AUTH_ERROR);
-            if (SANDBOX_MARKER.test(errText)) throw new Error(CLAUDE_SANDBOX_ERROR);
             if (RESUMABLE_LIMIT_SUBTYPES.has(msg.subtype)) {
               return this.park(report, msg.subtype === 'error_max_turns' ? 'reached the turn limit — needs your go-ahead to continue' : 'reached the budget limit — needs your go-ahead');
             }

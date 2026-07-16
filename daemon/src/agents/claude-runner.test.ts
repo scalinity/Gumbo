@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
-const { InputQueue, sandboxSettings, SANDBOX_MARKER } = await import('./claude-runner.ts');
+const { InputQueue, buildSandboxProfile, sandboxUnavailableReason } = await import('./claude-runner.ts');
 const { config, secretFilePaths } = await import('../config.ts');
+const { homedir } = await import('node:os');
 
 function content(msg: { message: { content: unknown } }): string {
   return typeof msg.message.content === 'string' ? msg.message.content : '';
@@ -34,48 +35,37 @@ test('InputQueue wakes a pending iterator when a message arrives later', async (
   q.close();
 });
 
-test('sandboxSettings: fail-closed containment — workspace writable, escapes off, network default-deny', () => {
-  const s = sandboxSettings('task-123');
-  assert.equal(s.enabled, true);
-  assert.equal(s.failIfUnavailable, true, 'refuse to run unconfined when Seatbelt is unavailable');
-  assert.equal(s.allowUnsandboxedCommands, false, 'dangerouslyDisableSandbox must be ignored');
-  assert.deepEqual(s.filesystem?.allowWrite, [join(config.home.tasks, 'task-123')]);
-  assert.ok(!('network' in s), 'no allowedDomains configured → no network key → egress fully denied');
-  assert.deepEqual(
-    s.credentials?.files,
-    secretFilePaths.map((path) => ({ path, mode: 'deny' })),
-    'on-disk secrets (.env, ~/.claude) are read-denied inside the sandbox',
-  );
-});
-
-test('sandboxSettings: an existing workspace is canonicalized (symlink-safe allowWrite)', () => {
-  const taskId = 'realpath-task';
+test('buildSandboxProfile: confines writes to cwd + workspace, denies secret reads', () => {
+  const taskId = 'profile-task';
   const workspace = join(config.home.tasks, taskId);
   mkdirSync(workspace, { recursive: true });
-  // GUMBO_HOME is a mkdtemp under the OS temp dir, itself reached via a symlink on macOS
-  // (/var → /private/var), so realpath differs from the literal join — the fix must apply it.
-  assert.deepEqual(sandboxSettings(taskId).filesystem?.allowWrite, [realpathSync(workspace)]);
+  const cwd = realpathSync(config.home.tasks); // any real dir stands in for the project cwd
+  const p = buildSandboxProfile(cwd, taskId);
+  const home = homedir();
+
+  assert.match(p, /^\(version 1\)/, 'valid SBPL header');
+  assert.match(p, /\(allow default\)/, 'allow-default base keeps the CLI functional (network, keychain)');
+  assert.match(p, /\(deny file-write\*\)/, 'deny-all writes then re-allow the boundary');
+  // cwd + the (symlink-resolved) workspace are writable.
+  assert.ok(p.includes(`(allow file-write* (subpath ${JSON.stringify(cwd)}))`), 'cwd writable');
+  assert.ok(p.includes(`(allow file-write* (subpath ${JSON.stringify(realpathSync(workspace))}))`), 'workspace writable (canonicalized)');
+  // The CLI's own runtime dirs must stay writable or checkpointing/undo breaks.
+  assert.ok(p.includes(JSON.stringify(realpathSync(join(home, '.claude')))), '~/.claude writable (checkpoints)');
+  // Package-manager caches must stay writable so installs work like an interactive session.
+  assert.ok(p.includes('(allow file-write*') && p.includes(JSON.stringify(realpathSync(join(home, 'Library', 'Caches')))), '~/Library/Caches writable (tool caches)');
+  // Secret reads denied — .env (repo provider keys) plus ~/.ssh, ~/.aws.
+  assert.ok(p.includes(`(deny file-read* (subpath ${JSON.stringify(secretFilePaths[0])}))`), '.env read-denied');
+  assert.ok(p.includes(JSON.stringify(join(home, '.ssh'))) && p.includes(JSON.stringify(join(home, '.aws'))), 'ssh/aws read-denied');
+  // ~/.claude is NOT read-denied at the OS level (the CLI needs its own state) — that path
+  // is covered by the supervisor policy hard-deny of the Read tool instead.
+  assert.ok(!p.includes(`(deny file-read* (subpath ${JSON.stringify(realpathSync(join(home, '.claude')))}))`), '~/.claude stays OS-readable');
 });
 
-test('sandboxSettings: configured allowedDomains open egress without mutating config', () => {
-  const saved = config.claude.sandbox.allowedDomains;
-  config.claude.sandbox.allowedDomains = ['github.com'];
-  try {
-    const s = sandboxSettings('t');
-    assert.deepEqual(s.network?.allowedDomains, ['github.com']);
-    s.network!.allowedDomains!.push('evil.example'); // settings are per-session copies
-    assert.deepEqual(config.claude.sandbox.allowedDomains, ['github.com']);
-  } finally {
-    config.claude.sandbox.allowedDomains = saved;
+test('sandboxUnavailableReason: null on macOS with sandbox-exec, else a reason (fail-closed)', () => {
+  const reason = sandboxUnavailableReason();
+  if (process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
+    assert.equal(reason, null, 'available on macOS with sandbox-exec');
+  } else {
+    assert.equal(typeof reason, 'string', 'a non-null reason drives the fail-closed throw');
   }
-});
-
-test('SANDBOX_MARKER matches the CLI fail-closed errors, not a report that mentions sandboxing', () => {
-  // Exact phrasings extracted from the CLI (2.1.211) fail-closed paths.
-  assert.ok(SANDBOX_MARKER.test('Sandbox required but unavailable: sandbox-exec not found. Set sandbox.failIfUnavailable=false to allow unsandboxed execution.'));
-  assert.ok(SANDBOX_MARKER.test('failIfUnavailable is set — refusing to start without a working sandbox.'));
-  // Same failure mode as the auth-marker review 🔴: a good run whose REPORT merely
-  // discusses sandboxing must not be flagged (the runner only tests error text, but
-  // the marker itself should still be narrow).
-  assert.ok(!SANDBOX_MARKER.test('I added a sandbox config block and verified the sandbox is enabled.'));
 });

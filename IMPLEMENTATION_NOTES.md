@@ -1007,6 +1007,75 @@ Tests: **104/104**. New: `sandboxSettings` realpath branch, `credentials` shape,
 `protectedPathHit` hard-deny (Read/Edit/Grep of `.env`/`~/.claude`, tilde form, containing-dir
 Grep, bash-unaffected, non-secret allowed).
 
+### M4.1 — REBUILT as a whole-CLI Seatbelt wrap (2026-07-16, from the user's "run like you, with a safety net")
+
+> ⚠️ **This supersedes the two sections above.** The SDK-`sandbox`-option approach they describe is
+> GONE. The `sandbox governs bash only; the policy hook does the file tools` framing no longer
+> holds — the OS sandbox now governs the file tools too.
+
+**Why the rebuild:** the review-address pass left file-tool filesystem containment to the supervisor
+policy (a *semantic* gate — escalate-outside-cwd → confirm → fail-closed-on-timeout). the user wanted
+it **OS-deterministic** — "so even the cloud process tools can't escape the sandbox." A research
+sub-agent (report in the transcript) confirmed the approach: the SDK `sandbox` option only jails
+spawned bash (Anthropic issue #26616 "isolate all tool execution, not just Bash" — closed
+not-planned; the docs say file tools are out of `/sandbox` scope). The only way to OS-confine the
+CLI's own file tools is to run the **whole CLI process** under macOS Seatbelt. Anthropic's own
+`@anthropic-ai/sandbox-runtime` does exactly this; we hand-roll it to avoid a beta dependency (and
+the permission classifier blocked auto-adopting an un-vetted package for the security boundary).
+
+**How:** `spawnClaudeCodeProcess` (the SDK's VM/container seam) launches the CLI as
+`sandbox-exec -p <SBPL profile> <cli> <args>`. macOS forbids **nesting** a second sandbox inside the
+first (`sandbox_apply` → EPERM, even for a strictly-tighter inner profile — confirmed), so this
+**REPLACES** the SDK `sandbox` option rather than layering under it. Verified end-to-end with the
+shipped `buildSandboxProfile` (16+ probes, `m41-spike/`): the **Write/Edit/Read tools EPERM** outside
+the boundary and on secrets, bash is confined the same way, auth (Keychain) works, and
+undo/`rewindFiles` still works (checkpoints under `~/.claude`, which stays writable).
+
+**Design philosophy — a safety net, not a cage (the user).** The headless session should run like an
+interactive one (any CLI, MCP, package install, research on any host) but be unable to escape its
+task. So the profile is `(allow default)` **minus** two subtractions:
+- **Writes** confined to the project cwd + task workspace + the runtime/cache dirs tools need
+  (`~/.claude`, `$TMPDIR`, `~/.npm`, `~/.cache`, `~/Library/Caches`). The user's Documents, other
+  projects, dotfiles, and system stay unwritable — can't clobber anything outside the task.
+- **Secret reads** denied: `.env` (repo provider keys), `~/.ssh`, `~/.aws`. Reads are otherwise
+  open, so the agent can read libs/docs/source for research.
+
+**Network — OPEN (the user's explicit call, asked directly).** A single Seatbelt layer can't allow the
+CLI's egress while denying bash's without an out-of-sandbox filtering proxy, and an allowlist would
+limit research/docs (arbitrary hosts) — defeating "run like you." I built and verified a zero-dep
+loopback filtering proxy (deny-all-direct + allowlist via a CONNECT proxy — it worked: CLI auth
+through it, direct sockets EPERM'd, non-allowlisted hosts 403'd), but the user chose **open** for
+capability parity. The exfil net is therefore: **secrets are unreadable** (little to leak) + the
+supervisor policy **still escalates network-SENDS** (curl -d / POST / wget --post / git push →
+notch confirm, fail-closed). Residual (accepted): a plain GET could leak non-secret data.
+
+**Capability wiring (the user wanted parity with an interactive session):**
+- **CLIs** the user has work directly — the sandbox allows read+exec of any binary and network is
+  open. `firecrawl` uses its **own stored auth** (`~/Library/Application Support/firecrawl-cli`,
+  readable under the sandbox) — so the daemon's least-privilege env-strip stays intact (no provider
+  key injected into the session env). `git`/`node`/etc. verified runnable.
+- **Context7 MCP** wired explicitly (`config.claude.mcpServers`, `type:'http'`,
+  `https://mcp.context7.com/mcp`) — headless sessions don't inherit claude.ai connectors. It's
+  **added on top** of the `~/.claude` MCPs the session inherits (verified at init: playwright, exa,
+  claude.ai Tavily all present alongside context7). Package installs work (`~/.npm` writable).
+
+**Fail-closed** is now our own pre-spawn check (`sandboxUnavailableReason`): non-macOS or missing
+`/usr/bin/sandbox-exec` → the runner throws `CLAUDE_SANDBOX_ERROR` before the session starts, rather
+than running unconfined. (The old SDK-emitted `SANDBOX_MARKER` result string is gone with the SDK
+sandbox.)
+
+**Belt-and-suspenders retained:** the supervisor policy's `protectedPathHit` hard-deny and
+edit-outside-cwd escalation stay — now redundant with the OS layer for `.env`, but they give a clean
+"blocked: protected secret path" message instead of a raw EPERM and cover the Read tool on
+`~/.claude` (which the OS layer intentionally leaves readable so the CLI can read its own state).
+
+Tests: **102/102** (replaced the SDK-`sandboxSettings`/`SANDBOX_MARKER` tests with
+`buildSandboxProfile` shape + `sandboxUnavailableReason`).
+
+**Open follow-up:** if the user later wants OS-level network default-deny back, the loopback filtering
+proxy is the way (proven in `m41-spike/proxy-verify.mjs`) — or adopt `@anthropic-ai/sandbox-runtime`
+which bundles it. Left out now by his capability-first choice.
+
 ---
 
 ## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15
