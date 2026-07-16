@@ -374,6 +374,16 @@ export class Orchestrator {
   }
 
   async announceTaskFinished(task: TaskRow) {
+    if (!this.session && this.connecting) {
+      // A session is opening right now (a PTT press in flight). Announcing cold would
+      // braid two voices chunk-by-chunk at the shell's single player — wait for the
+      // connect and announce live instead (a failed connect falls back to cold).
+      try {
+        await this.connecting;
+      } catch {
+        // fall through to the cold path
+      }
+    }
     if (!this.session) {
       // No live session — never open one just to announce (locked decision). Persist the
       // pending marker for the dashboard, then speak it cold via one-shot TTS. Skipped
