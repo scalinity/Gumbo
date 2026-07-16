@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // LSUIElement apps have no Dock icon; a minimal status item is the quit / dashboard affordance.
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Gumbo")
+        item.button?.image = Self.statusIcon()
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Open Dashboard", action: #selector(openDashboard), keyEquivalent: "d"))
         menu.addItem(.separator())
@@ -37,6 +37,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openDashboard() {
         controller?.showDashboard()
+    }
+
+    /// Gumbo's own menu-bar mark: a simmering pot (wide rim, rounded body, two steam
+    /// wisps). Custom-drawn — the stock `waveform` symbol collided with the user's
+    /// dictation tool sitting in the same menu bar. Template image: adapts to any bar.
+    private static func statusIcon() -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            NSColor.black.setFill()
+            NSColor.black.setStroke()
+
+            // pot body — square shoulders under the rim, rounded base
+            let x0: CGFloat = 3.4, x1: CGFloat = 14.6, yTop: CGFloat = 8.8, yBot: CGFloat = 3.2
+            let r: CGFloat = 2.6
+            let body = NSBezierPath()
+            body.move(to: NSPoint(x: x0, y: yTop))
+            body.line(to: NSPoint(x: x0, y: yBot + r))
+            body.appendArc(withCenter: NSPoint(x: x0 + r, y: yBot + r), radius: r, startAngle: 180, endAngle: 270)
+            body.line(to: NSPoint(x: x1 - r, y: yBot))
+            body.appendArc(withCenter: NSPoint(x: x1 - r, y: yBot + r), radius: r, startAngle: 270, endAngle: 360)
+            body.line(to: NSPoint(x: x1, y: yTop))
+            body.close()
+            body.fill()
+
+            // rim — wider than the body, reads as the handles
+            NSBezierPath(roundedRect: NSRect(x: 2.2, y: 9.4, width: 13.6, height: 1.7),
+                         xRadius: 0.85, yRadius: 0.85).fill()
+
+            // two steam wisps, gentle opposing sway
+            let steam = NSBezierPath()
+            steam.lineWidth = 1.5
+            steam.lineCapStyle = .round
+            steam.move(to: NSPoint(x: 7.0, y: 12.0))
+            steam.curve(to: NSPoint(x: 7.0, y: 15.6),
+                        controlPoint1: NSPoint(x: 5.9, y: 13.1),
+                        controlPoint2: NSPoint(x: 8.1, y: 14.5))
+            steam.move(to: NSPoint(x: 11.0, y: 12.0))
+            steam.curve(to: NSPoint(x: 11.0, y: 15.6),
+                        controlPoint1: NSPoint(x: 12.1, y: 13.1),
+                        controlPoint2: NSPoint(x: 9.9, y: 14.5))
+            steam.stroke()
+            return true
+        }
+        image.isTemplate = true // monochrome mask — the system tints it for any menu bar
+        image.accessibilityDescription = "Gumbo"
+        return image
     }
 }
 
