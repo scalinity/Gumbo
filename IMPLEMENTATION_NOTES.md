@@ -1233,6 +1233,74 @@ the literal `secretFilePaths[0]` (the worktree path). Copy the file into worktre
   were held by the user's live daemon/vite during the build; data contracts are unit-covered).
   Both land with the live demo.
 
+### M5.5 — image thumbnails + in-place editing (brush select, text + voice) — 2026-07-16
+
+the user's follow-up to M5, same session: incoming images should be *present* (thumbnail
+bubbles with the task orbs) and *editable in place* (enlarged viewer, brush selection,
+typed or voiced edit requests). Brush shipped immediately per his call — no rect-marquee
+interim.
+
+**Edits API — verified live before building:** `gpt-image-2` on `/v1/images/edits`,
+multipart `{model, image, mask?, prompt}` → the same `data[0].b64_json` envelope, and the
+result **preserves the source dimensions** (1536×1024 in → out; no size param). Mask
+contract: **transparent pixels = edit region, opaque = preserve**. Confirmed end-to-end
+with our own mask on the M5 smoke's swamp wallpaper: sky band replaced with a starry
+night, dock/water/fireflies untouched.
+
+**Architecture decisions (the why):**
+- **Strokes over the wire, daemon rasterizes the mask.** The shell sends the brush
+  selection as normalized round-capped polylines (`points` 0–1 + `radius` normalized to
+  image width) — a few hundred bytes of JSON. `images/mask.ts` is a **zero-dependency PNG
+  encoder** (node:zlib + hand-built chunks/CRC) that stamps capsule segments into the
+  alpha channel at the source image's exact pixel size. This keeps binary/base64 off the
+  WS text channel entirely, makes masks unit-testable (decode IDAT, assert per-pixel
+  alpha), and means the shell overlay and the API mask are the *same geometry* — what
+  the user highlights IS what gets masked. Payload guards (`sanitizeStrokes`): stroke/point
+  caps, radius clamp, coordinate clamp.
+- **Voice edits reuse ⌃⌥ + the orchestrator — no second audio path.** The viewer arms
+  `image_context {file, strokes}` on the daemon (updated on open/selection change,
+  cleared on close AND on shell disconnect — a dead shell must not leave a stale target
+  armed). The new `edit_image` tool resolves `file: null` → the armed context; a
+  *different* named file deliberately does NOT inherit the strokes. Coordinates never
+  pass through the voice model.
+- **Typed edits skip the orchestrator** (`image_edit_request` → `runImageEdit` directly)
+  — no realtime session, no tokens; completion/failure still speaks through
+  `speakProactively`.
+- **Non-destructive versions:** every edit is a NEW file + `image.created
+  {edited_from, selection}`. The shell viewer swaps itself to the new version off that
+  event (and the new thumbnail replaces its parent's slot — an edit loop doesn't grow a
+  tower). Failures emit a dedicated **`image.edit_failed`** event (not a bare
+  session.error) because the viewer needs a signal to leave its busy state; a local 240 s
+  failsafe covers a daemon that dies mid-edit.
+- **Shell layering:** thumbnails are their own `ImageBubbleController` stacked directly
+  beneath the task orbs — `BubbleController` just reports its stack bottom after every
+  layout (`onStackBottomChange`) instead of weaving a second entity type through the
+  reviewed orb machinery. Thumbs cap at 3, linger 10 min (the dashboard gallery is the
+  durable home), hover-✕ to dismiss. The viewer panel is `.nonactivatingPanel` with
+  `canBecomeKey = true` + `becomesKeyOnlyIfNeeded` — Spotlight-style typing without
+  activating the app (and the panels still need the M3 `acceptsFirstMouse` treatment,
+  now shared from BubbleController). Selection highlight = dim layer punched out with
+  destination-clear strokes + a gold rim drawn beneath, so the selected area reads bright.
+
+**Verified:** 135/135 daemon tests (15 new: capsule/tap rasterization by decoding the
+mask and asserting per-pixel alpha, stroke sanitization guards, multipart contract incl.
+mask-matches-source-dimensions, new-file/no-overwrite, `edited_from` lineage + no-base64,
+`image.edit_failed` on API failure, `safeImageFile` traversal rejection, edit_image
+tool refusals + armed-context ack). Shell builds + signs.
+
+**Live smoke (isolated daemon, fake shell, real API):** (1) typed path —
+`image_context` + `image_edit_request` with a sky-band brush stroke → masked edit landed
+in 63 s as `6b070083.png → 70b3ca4a.png (selection: true)`; **visually confirmed** the
+stroke mask scoped it (starry purple night sky, dock/lantern/water/fireflies preserved).
+(2) voice path — context re-armed on the new version, `debug_text` "make the lantern
+glow brighter" → the orchestrator called `edit_image` (file null → armed context), spoke
+an on-the-way ack live, and the whole-image edit landed as `70b3ca4a.png → c6ebb49b.png`
+with a **cold** spoken completion (79 × 0x02 frames — the session idle-closed during the
+88 s edit, so both delivery branches ran again). Zero `image.edit_failed`;
+`/api/images` shows the full three-version chain. **Pending live with the user:** the
+actual panel UX — thumbnail click, brush feel, composer typing in the non-activating
+panel (first key-status click), viewer auto-swap — needs a screen.
+
 ---
 
 ## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15

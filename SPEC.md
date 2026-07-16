@@ -147,11 +147,15 @@ Current event `type`s: `transcript.user`, `transcript.assistant`, `tool.call`, `
 `claude.tool_result`, `claude.plan` (a plan awaiting the user's approval), `supervisor.decision`, and
 `task.status` (mid-run `needs_input` ⇄ `running` flips — plan review, confirm pending, intervention
 cap, resume). M5 adds `image.created` (payload carries the **filename only** — base64 never rides
-the event stream) and the scheduler lifecycle: `reminder.set`, `reminder.fired`, `reminder.cancelled`.
+the event stream; edits add `edited_from` lineage + `selection`) and the scheduler lifecycle:
+`reminder.set`, `reminder.fired`, `reminder.cancelled`. M5.5 adds `image.edit_requested` and
+`image.edit_failed` (the shell viewer leaves its busy state on the latter).
 
 **Message types** (see `daemon/src/ws/protocol.ts`, extended per phase):
 - shell → daemon: `hello`, (M2) `ptt_start`/`ptt_stop`, mic binary, `confirm_response`,
-  `kill_switch`, (M5) `reminder_created`, (M6) `ax_tree`/`ax_result`/`screenshot`.
+  `kill_switch`, (M5) `reminder_created`, (M5.5) `image_context` (open image + brush strokes;
+  what voice edits target) / `image_edit_request` (typed edit), (M6) `ax_tree`/`ax_result`/
+  `screenshot`.
 - daemon → shell: `session_state`, speaker binary, `audio_interrupted`, `notch_transcript`,
   `bubble_upsert`/`bubble_remove`, `notch_pulse` (M5 adds status `reminder`), `confirm_request`,
   (M5) `create_reminder`/`remove_reminder`, (M6) `computer_cmd`.
@@ -356,6 +360,18 @@ session (prompt in IMPLEMENTATION_NOTES §M4.1).
   daemon scheduler is Gumbo's spoken presence when awake. Both together = complete.
 - Dashboard: images gallery + an upcoming/fired reminders list (bootstrap via `/api/images` +
   `/api/schedule`, live via `image.created` / `reminder.*` events; no `useEffect`).
+- **M5.5 — image thumbnails + in-place editing (the user, 2026-07-16):** a new image surfaces as a
+  **thumbnail bubble** stacked directly beneath the task orbs (top-right); click → an enlarged
+  **full-resolution viewer/editor** panel. The viewer carries a **brush select tool** — paint the
+  area to change (bright inside, dimmed outside) — and takes edit requests **typed** (composer in
+  the panel → `image_edit_request`) or **by voice** (normal ⌃⌥ turn; the viewer arms
+  `image_context` — open file + strokes — on the daemon, and the orchestrator's `edit_image` tool
+  resolves "this image"/"the highlighted area" from it, so coordinates never pass through the
+  voice model). Strokes travel as normalized polylines; the **daemon rasterizes the mask**
+  (`images/mask.ts`, zero-dep PNG encoder) and calls `gpt-image-2` on `/v1/images/edits`
+  (verified live: transparent mask pixels = edit region, source dimensions preserved). Edits are
+  **non-destructive**: each lands as a new `image.created` with `edited_from` lineage; the open
+  viewer swaps to the new version and its thumbnail replaces the parent's.
 
 **Demo:** "make me a wallpaper of a swamp at dusk and remind me at 5 to review it."
 
