@@ -171,7 +171,7 @@ function cancelCrawlJob(jobId: string, seedUrl: string) {
     url: `${BASE}/crawl/${jobId}`,
     method: 'DELETE',
     headers: firecrawlHeaders(),
-    timeoutMs: 10_000,
+    timeoutMs: config.firecrawl.cancelTimeoutMs,
     retries: 0,
   }).then(
     () => auditSearchCall({ provider: 'firecrawl', endpoint: 'DELETE /crawl/:id', query: seedUrl, resultCount: 0, ok: true }),
@@ -206,7 +206,7 @@ export async function firecrawlCrawl(
 ): Promise<FirecrawlPage[]> {
   const maxPages = opts.maxPages ?? config.firecrawl.crawlDefaultMaxPages;
   const maxDepth = opts.maxDepth ?? config.firecrawl.crawlDefaultMaxDepth;
-  const pollIntervalMs = opts.pollIntervalMs ?? config.firecrawl.crawlPollIntervalMs;
+  const pollIntervalMs = opts.pollIntervalMs ?? config.firecrawl.jobPollIntervalMs;
   const deadline = Date.now() + (opts.jobBudgetMs ?? config.firecrawl.crawlJobBudgetMs);
   let jobId: string | undefined;
   try {
@@ -223,7 +223,7 @@ export async function firecrawlCrawl(
         ...(opts.excludePaths?.length ? { excludePaths: opts.excludePaths } : {}),
         scrapeOptions: { formats: ['markdown'], onlyMainContent: true },
       },
-      timeoutMs: 30_000,
+      timeoutMs: config.firecrawl.requestTimeoutMs,
       retries: 2,
       signal: opts.signal,
     }, () => 0);
@@ -239,7 +239,7 @@ export async function firecrawlCrawl(
         url: `${BASE}/crawl/${jobId}`,
         method: 'GET',
         headers,
-        timeoutMs: 30_000,
+        timeoutMs: config.firecrawl.requestTimeoutMs,
         retries: 2,
         signal: opts.signal,
       }, (r) => r.completed ?? 0);
@@ -268,7 +268,7 @@ export async function firecrawlCrawl(
                 url: batch.next,
                 method: 'GET',
                 headers,
-                timeoutMs: 30_000,
+                timeoutMs: config.firecrawl.requestTimeoutMs,
                 retries: 2,
                 signal: opts.signal,
               }, (r) => (r.data ?? []).length)
@@ -312,7 +312,7 @@ export async function firecrawlExtract(
   },
 ): Promise<unknown> {
   const query = `extract: ${urls.join(' ')}`;
-  const pollIntervalMs = opts.pollIntervalMs ?? config.firecrawl.crawlPollIntervalMs;
+  const pollIntervalMs = opts.pollIntervalMs ?? config.firecrawl.jobPollIntervalMs;
   const deadline = Date.now() + (opts.jobBudgetMs ?? config.firecrawl.extractJobBudgetMs);
   try {
     const headers = firecrawlHeaders();
@@ -325,7 +325,7 @@ export async function firecrawlExtract(
         schema: opts.schema,
         ...(opts.prompt ? { prompt: opts.prompt } : {}),
       },
-      timeoutMs: 30_000,
+      timeoutMs: config.firecrawl.requestTimeoutMs,
       retries: 2,
       signal: opts.signal,
     }, () => 0);
@@ -342,7 +342,7 @@ export async function firecrawlExtract(
         url: `${BASE}/extract/${submitted.id}`,
         method: 'GET',
         headers,
-        timeoutMs: 30_000,
+        timeoutMs: config.firecrawl.requestTimeoutMs,
         retries: 2,
         signal: opts.signal,
       }, (r) => (r.status === 'completed' ? urls.length : 0));

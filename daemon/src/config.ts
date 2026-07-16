@@ -91,7 +91,9 @@ export const config = {
     scrapeTimeoutMs: 120_000, // single page, JS rendering included
     mapTimeoutMs: 60_000,
     mapDefaultLimit: 500, // URL-list discovery; bounded because map is billed per page listed
-    crawlPollIntervalMs: 3000, // no documented recommended interval; job status is cheap
+    requestTimeoutMs: 30_000, // each submit/poll/pagination call inside an async job
+    cancelTimeoutMs: 10_000, // best-effort remote cancel of a dead crawl job
+    jobPollIntervalMs: 3000, // crawl + extract; no documented recommended interval
     crawlJobBudgetMs: 600_000, // overall async-job budget: submit → poll → collect
     crawlDefaultMaxPages: 100,
     crawlDefaultMaxDepth: 3,
