@@ -105,6 +105,7 @@ final class GumboController {
         wireWS()
         wireHotkeys()
         notch.onTap = { [weak self] in self?.showDashboard() }
+        notch.installClickCatcher() // bare hardware notch opens the dashboard too
         // Bubble clicks expand in place (mini panel); the dashboard is its corner link.
         bubbles.onOpenDashboard = { [weak self] taskId in self?.showDashboard(taskId: taskId) }
         ws.connect()

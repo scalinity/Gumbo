@@ -19,6 +19,53 @@ final class NotchController {
     private var visible = false
     private var hideWork: DispatchWorkItem?
     private var pulseWork: DispatchWorkItem?
+    private var clickCatcher: NSPanel?
+    private var screenObserver: NSObjectProtocol?
+
+    /// The expanded panel's tap gesture only exists while the panel is showing — the bare
+    /// hardware notch is a dead black rect. This keeps an invisible, non-activating panel
+    /// over the notch permanently, so clicking it opens the dashboard anytime.
+    func installClickCatcher() {
+        positionClickCatcher()
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.positionClickCatcher()
+        }
+    }
+
+    private func positionClickCatcher() {
+        guard let screen = NSScreen.main,
+              let left = screen.auxiliaryTopLeftArea,
+              let right = screen.auxiliaryTopRightArea,
+              screen.safeAreaInsets.top > 0 else {
+            clickCatcher?.orderOut(nil) // no hardware notch on this display
+            return
+        }
+        let height = screen.safeAreaInsets.top
+        let frame = NSRect(x: left.maxX, y: screen.frame.maxY - height,
+                           width: right.minX - left.maxX, height: height)
+        if clickCatcher == nil {
+            let panel = NSPanel(contentRect: frame,
+                                styleMask: [.borderless, .nonactivatingPanel],
+                                backing: .buffered, defer: false)
+            panel.level = .statusBar
+            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = false
+            panel.isMovable = false
+            panel.hidesOnDeactivate = false
+            panel.isReleasedWhenClosed = false
+            let view = NotchClickCatcherView()
+            view.onClick = { [weak self] in self?.model.onTap?() }
+            panel.contentView = view
+            clickCatcher = panel
+        }
+        clickCatcher?.setFrame(frame, display: true)
+        clickCatcher?.orderFrontRegardless()
+    }
 
     /// M3 completion pulse: briefly surface the notch with a status-colored flourish when
     /// a background task finishes. Purely transient — session state resumes afterwards.
@@ -118,6 +165,24 @@ final class NotchController {
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work) // don't flap between turns
+    }
+}
+
+/// Nearly invisible fill keeps the window hit-testable (a fully transparent window goes
+/// click-through); 2% black is imperceptible on the pure-black hardware notch. Accepts
+/// first mouse — the panel never becomes key, so every click is a "first mouse".
+private final class NotchClickCatcherView: NSView {
+    var onClick: (() -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.black.withAlphaComponent(0.02).setFill()
+        dirtyRect.fill()
     }
 }
 
