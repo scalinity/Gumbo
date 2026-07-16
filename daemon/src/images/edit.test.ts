@@ -55,6 +55,10 @@ test('multipart contract: endpoint, model, prompt, source image, and a dimension
   assert.ok(form instanceof FormData, 'edits are multipart, not JSON');
   assert.equal(form.get('model'), 'gpt-image-2');
   assert.equal(form.get('prompt'), 'make the sky purple');
+  // Highest-fidelity defaults (probed live 2026-07-16): input_fidelity preserves the
+  // source outside the mask — the whole point of a scoped brush edit.
+  assert.equal(form.get('quality'), 'high');
+  assert.equal(form.get('input_fidelity'), 'high');
   const image = form.get('image') as Blob;
   assert.ok(image instanceof Blob && image.size > 0, 'source image attached');
   const mask = form.get('mask') as Blob;

@@ -112,6 +112,23 @@ test('edit_image uses the armed context (file + brush strokes) when file is null
   }
 });
 
+test('edit_image falls back to the LATEST created image when no viewer is open (live gap: "edit the one you just made")', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('{}', { status: 500 })) as typeof fetch;
+  try {
+    const tool = toolByName('edit_image', {
+      store: { addEvent: () => ({}) },
+      imageContext: { get: () => null, latest: 'fresh-1.png' },
+    });
+    const ack = await tool.invoke({}, JSON.stringify({ prompt: 'add a deer on the rock', file: null }));
+    assert.match(ack, /Edit started in the background/);
+    assert.doesNotMatch(ack, /highlighted area/, 'the latest-fallback never inherits viewer strokes');
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 // present_file (2026-07-16): the deliverable-on-screen path — absolute paths only, secret
 // paths refused, content pushed to the shell inline.
 test('present_file guards: relative path, protected path, missing file all refuse cleanly', async () => {

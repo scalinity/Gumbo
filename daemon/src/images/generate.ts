@@ -11,6 +11,7 @@ import { echoForInstructions } from '../audio/announce.ts';
 import type { Store } from '../events/store.ts';
 
 export type ImageShape = 'square' | 'landscape' | 'portrait';
+export type ImageQuality = 'low' | 'medium' | 'high' | 'auto';
 
 /** One retry on 429/5xx (the repo's provider-retry convention, scaled to a single long
  *  background call rather than a search fan-out — review 🔵): a transient 500 on a
@@ -25,7 +26,7 @@ export async function imagesFetch(url: string, init: RequestInit): Promise<Respo
 }
 
 /** Generate one image and land it in ~/Gumbo/images/. Returns the bare filename. */
-export async function generateImage(prompt: string, shape: ImageShape): Promise<string> {
+export async function generateImage(prompt: string, shape: ImageShape, quality?: ImageQuality): Promise<string> {
   const res = await imagesFetch('https://api.openai.com/v1/images/generations', {
     method: 'POST',
     headers: {
@@ -36,6 +37,7 @@ export async function generateImage(prompt: string, shape: ImageShape): Promise<
       model: config.models.image,
       prompt,
       size: config.images.sizes[shape] ?? config.images.sizes.square,
+      quality: quality ?? config.images.quality,
     }),
   });
   return saveImageResponse(res);
@@ -75,13 +77,14 @@ export async function saveImageResponse(res: Response): Promise<string> {
 export async function runImageGeneration(opts: {
   prompt: string;
   shape: ImageShape;
+  quality?: ImageQuality;
   store: Store;
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
 }): Promise<void> {
-  const { prompt, shape, store, announce } = opts;
+  const { prompt, shape, quality, store, announce } = opts;
   const short = echoForInstructions(prompt); // quoted inside live instructions — defanged (review 🔵)
   try {
-    const file = await generateImage(prompt, shape);
+    const file = await generateImage(prompt, shape, quality);
     store.addEvent(null, 'image.created', { file, prompt });
     await announce(
       'the user, your image is ready — it landed in the gallery.',

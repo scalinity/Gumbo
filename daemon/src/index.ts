@@ -74,6 +74,12 @@ store.onEvent((event) => hub.broadcast({ type: 'event', event }));
 // The shell's pulse already defers to a live session display, so always sending is safe.
 store.onEvent((event) => {
   if (event.type === 'reminder.fired') hub.broadcast({ type: 'notch_pulse', status: 'reminder' }, 'shell');
+  // M5.5 follow-up: remember the newest image so a voice edit can target "the image you
+  // just created" with no viewer open (the model itself never sees filenames).
+  if (event.type === 'image.created') {
+    const file = (event.payload as { file?: string })?.file;
+    if (file) imageContext.noteCreated(file);
+  }
 });
 
 // M3 completion presence: mirror the task lifecycle to the shell as bubbles, pulse the

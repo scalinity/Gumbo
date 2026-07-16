@@ -20,6 +20,10 @@ export async function editImage(file: string, prompt: string, strokes?: Stroke[]
   const form = new FormData();
   form.append('model', config.models.image);
   form.append('prompt', prompt);
+  // Highest-fidelity defaults (probed live 2026-07-16): quality high, and
+  // input_fidelity high so everything OUTSIDE the mask survives the edit faithfully.
+  form.append('quality', config.images.quality);
+  form.append('input_fidelity', config.images.editInputFidelity);
   form.append('image', new Blob([new Uint8Array(source)], { type: 'image/png' }), file);
   if (strokes && strokes.length > 0) {
     const { width, height } = pngDimensions(source);

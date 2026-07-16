@@ -42,7 +42,7 @@ function harness() {
   return { store, events, announced, announce };
 }
 
-test('request serialization: endpoint, bearer auth, verified model id, shape → size', async () => {
+test('request serialization: endpoint, bearer auth, verified model id, shape → size, quality default HIGH', async () => {
   const calls = capture();
   await generateImage('a swamp at dusk', 'landscape');
   assert.equal(calls.length, 1);
@@ -53,7 +53,15 @@ test('request serialization: endpoint, bearer auth, verified model id, shape →
     model: 'gpt-image-2',
     prompt: 'a swamp at dusk',
     size: '1536x1024',
+    // Highest-quality default (the user, 2026-07-16) — values probed against the live API.
+    quality: 'high',
   });
+});
+
+test('an explicit quality (quick draft) overrides the high default', async () => {
+  const calls = capture();
+  await generateImage('a sketch', 'square', 'low');
+  assert.equal(JSON.parse(String(calls[0].init.body)).quality, 'low');
 });
 
 test('decodes b64_json and writes a real PNG into the images home', async () => {

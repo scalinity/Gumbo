@@ -28,6 +28,7 @@ export function applyImageContext(
 export class ImageEditContext {
   private file: string | null = null;
   private strokes: Stroke[] = [];
+  private latestCreated: string | null = null;
 
   /** file null = viewer closed (strokes are meaningless without their image). */
   set(file: string | null, strokes: Stroke[] = []) {
@@ -37,5 +38,18 @@ export class ImageEditContext {
 
   get(): { file: string; strokes: Stroke[] } | null {
     return this.file ? { file: this.file, strokes: this.strokes } : null;
+  }
+
+  /** index.ts notes every image.created here. "Edit the image you just created" must
+   *  work by voice with NO viewer open (live gap 2026-07-16: the filename is deliberately
+   *  withheld from the voice model everywhere, so without this the model literally cannot
+   *  name the file the user means). Survives viewer open/close; in-memory like the rest of
+   *  the context — after a daemon restart the user's next generation re-seeds it. */
+  noteCreated(file: string) {
+    this.latestCreated = file;
+  }
+
+  get latest(): string | null {
+    return this.latestCreated;
   }
 }

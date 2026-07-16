@@ -227,11 +227,15 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         .enum(['square', 'landscape', 'portrait'])
         .default('square')
         .describe("'landscape' for wallpapers and scenes, 'portrait' for people or posters, 'square' otherwise"),
+      quality: z
+        .enum(['low', 'medium', 'high', 'auto'])
+        .default('high')
+        .describe("Render quality — default 'high'; lower it ONLY if the user asks for a quick or draft version"),
     }),
-    execute: async ({ prompt, shape }) => {
+    execute: async ({ prompt, shape, quality }) => {
       // Fire-and-forget: runImageGeneration handles (and speaks) its own failures; this
       // catch only guards the announce path itself so nothing becomes an unhandled rejection.
-      runImageGeneration({ prompt, shape, store, announce: deps.announce }).catch((err: unknown) => {
+      runImageGeneration({ prompt, shape, quality, store, announce: deps.announce }).catch((err: unknown) => {
         store.addEvent(null, 'session.error', { message: `image announce: ${String(err)}` });
       });
       return "Image generation started in the background — tell the user it's on the way. You will be told when it lands in his gallery; no need to wait.";
@@ -244,27 +248,31 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     name: 'edit_image',
     description:
       'Edit a previously generated image with a plain-language instruction. Use when the user asks to ' +
-      'change, tweak, fix, or redo an image. If he is viewing one in the image panel, that image — ' +
-      'and any area he highlighted with the brush — is targeted automatically: pass file null. Only ' +
-      'pass a filename if the user explicitly named a different image. Returns immediately; the edit ' +
-      "lands as a NEW version and you will be told when it's ready.",
+      'change, tweak, fix, or redo an image. Pass file null (the usual case): that targets the image ' +
+      'he has open in the image panel — including any area he highlighted with the brush — or, if ' +
+      'none is open, the most recently created image ("edit the image you just made"). Only pass a ' +
+      'filename if the user explicitly named a different image. Returns immediately; the edit lands ' +
+      "as a NEW version and you will be told when it's ready.",
     parameters: z.object({
       prompt: z.string().describe("The edit instruction, faithful to the user's words"),
       file: z
         .string()
         .nullable()
-        .describe('null = the image the user is currently viewing (the usual case); a filename only if he named one'),
+        .describe('null = the open image, else the latest created one (the usual case); a filename only if the user named one'),
     }),
     execute: async ({ prompt, file }) => {
       const ctx = deps.imageContext.get();
       const named = file?.trim() || null;
-      const target = named ?? ctx?.file;
+      // Resolution ladder (live gap 2026-07-16): named file → the viewer's open image →
+      // the most recently created image. The voice model never sees filenames, so
+      // "edit the one you just made" is only resolvable daemon-side.
+      const target = named ?? ctx?.file ?? deps.imageContext.latest;
       if (!target) {
-        return 'No image is open in the viewer and none was named — ask the user to open the image (click its thumbnail) or say which one to edit.';
+        return 'No image is open, none was named, and nothing has been generated yet this run — ask the user to open or describe the image to edit.';
       }
-      // The brush selection belongs to the viewer's image; a differently-named target
-      // must not inherit it.
-      const strokes = named && named !== ctx?.file ? undefined : ctx?.strokes;
+      // The brush selection belongs to the viewer's OPEN image; a target resolved any
+      // other way (named differently, or the latest-created fallback) must not inherit it.
+      const strokes = target === ctx?.file ? ctx?.strokes : undefined;
       try {
         safeImageFile(target);
       } catch {

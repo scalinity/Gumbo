@@ -233,12 +233,19 @@ export const config = {
     extractJobBudgetMs: 300_000,
   },
   // M5 images: generation runs in the background off the voice turn (the tool acks
-  // instantly), so the budget is generous like other background calls. Quality is left
-  // to the API default deliberately — fewer knobs on a voice tool.
+  // instantly), so the budget is generous like other background calls.
   images: {
     timeoutMs: 180_000,
     // The voice model picks a shape; sizes verified against the live API (÷16 rule).
     sizes: { square: '1024x1024', landscape: '1536x1024', portrait: '1024x1536' } as Record<string, string>,
+    // Highest-fidelity defaults (the user, 2026-07-16 — his "highest quality" ask was
+    // silently droppable when quality wasn't a knob). Probed live: generations take
+    // quality low|medium|high|auto (no reasoning-class param exists on this endpoint);
+    // edits additionally take input_fidelity high|low — high preserves the source
+    // outside the mask, exactly right for brush edits. The generate_image tool can
+    // still lower quality per request ("quick draft").
+    quality: 'high' as 'low' | 'medium' | 'high' | 'auto',
+    editInputFidelity: 'high' as 'high' | 'low',
   },
   // M5 scheduler: Gumbo's own timed-action primitive (kind 'reminder' for now). The poll
   // loop is the spoken-presence half; EventKit is the OS-durable half (fires even if the
