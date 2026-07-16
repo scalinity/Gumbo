@@ -42,6 +42,11 @@ final class AudioEngine {
     private var loggedChannelPeaks = false
 
     private let lock = NSLock()
+    // All pop→convert→schedule work is serialized here. playChunk (main) and buffer
+    // completion handlers (audio thread) both used to run the pump concurrently, which
+    // could schedule chunks out of order, schedule a stale buffer after a barge-in
+    // flush, or schedule onto a dead player mid graph-switch (wedging inFlight forever).
+    private let pumpQueue = DispatchQueue(label: "ai.scalinity.gumbo.audio.pump")
     private var armed = false
     private var inFlight = 0 // buffers scheduled on the player, not yet played back
     private var generation = 0 // invalidates completion handlers of flushed buffers
@@ -97,9 +102,9 @@ final class AudioEngine {
     }
 
     private func stopEngine(keepQueue: Bool) {
-        guard running else { return }
-        running = false
         lock.lock()
+        guard running else { lock.unlock(); return }
+        running = false
         generation += 1 // completion handlers of dying buffers become stale
         inFlight = 0
         if !keepQueue {
@@ -109,6 +114,7 @@ final class AudioEngine {
         }
         let queueEmpty = playbackQueue.isEmpty
         lock.unlock()
+        pumpQueue.sync {} // fence: no pump body is mid-flight while the graph is torn down
         if mode == .duplex { engine?.inputNode.removeTap(onBus: 0) }
         player?.stop()
         engine?.stop()
@@ -140,19 +146,23 @@ final class AudioEngine {
         if playbackQueue.count > 4096 { playbackQueue.removeFirst() }
         framesEnqueued += pcm.count / MemoryLayout<Int16>.size
         lock.unlock()
-        if running { pumpPlayback() }
+        pumpPlayback() // pump self-guards on running under the lock
     }
 
     /// Keep a few buffers scheduled ahead; the rest stays as Data in the queue so a graph
     /// switch or flush loses at most the in-flight fraction, never the whole stream.
+    /// Serialized on pumpQueue — see the property comment for the races this prevents.
     private func pumpPlayback() {
-        guard running, let player, let playFormat, let converter = playbackConverter else { return }
-        var scheduled = false
+        pumpQueue.async { [weak self] in self?.pumpNow() }
+    }
+
+    private func pumpNow() {
         while true {
             lock.lock()
-            guard inFlight < 3, !playbackQueue.isEmpty else {
+            guard running, let player, let playFormat, let converter = playbackConverter,
+                  inFlight < 3, !playbackQueue.isEmpty else {
                 lock.unlock()
-                break
+                return
             }
             let pcm = playbackQueue.removeFirst()
             inFlight += 1
@@ -171,6 +181,14 @@ final class AudioEngine {
                 for i in 0..<Int(outBuf.frameLength) { peak = max(peak, abs(ch[i])) }
                 onPlaybackLevel?(peak)
             }
+
+            // Re-check right before scheduling: a flush or graph teardown that landed
+            // during the convert must drop this buffer, never schedule it stale.
+            lock.lock()
+            let stillLive = gen == generation && running
+            lock.unlock()
+            if !stillLive { continue }
+
             player.scheduleBuffer(outBuf, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 guard let self else { return }
                 self.lock.lock()
@@ -196,9 +214,6 @@ final class AudioEngine {
                     self.pumpPlayback()
                 }
             }
-            scheduled = true
-        }
-        if scheduled {
             setDraining(true)
             if !player.isPlaying { player.play() }
         }
@@ -238,6 +253,9 @@ final class AudioEngine {
         framesEnqueued = 0
         framesPlayed = 0
         lock.unlock()
+        // Fence: an in-flight pump sees the bumped generation and drops its buffer, and
+        // can't be mid-convert while the converter is reset below.
+        pumpQueue.sync {}
         player?.stop()
         playbackConverter?.reset()
         if running, let player, let engine, engine.isRunning {
@@ -306,10 +324,14 @@ final class AudioEngine {
         engine.prepare()
         do {
             try engine.start()
+            // Under the lock: the pump reads running + graph refs together and must
+            // never observe running == true with half-assigned refs.
+            lock.lock()
             self.engine = engine
             self.player = player
             self.mode = target
             running = true
+            lock.unlock()
             lastStartFailure = nil
             NSLog("[audio] engine started (%@) — in %@, out %.0f Hz",
                   target == .duplex ? "duplex" : "playback-only", inDescription, hwRate)
