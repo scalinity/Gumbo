@@ -9,6 +9,8 @@ import { TaskManager } from './tasks/manager.ts';
 import { Scheduler } from './schedule/scheduler.ts';
 import { applyImageContext, ImageEditContext } from './images/context.ts';
 import { acceptImageEditRequest } from './images/edit.ts';
+import { applyFileContext, FileEditContext } from './files/context.ts';
+import { acceptFileEditRequest } from './files/edit.ts';
 import { Orchestrator } from './realtime/session.ts';
 
 const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY'].filter((k) => !process.env[k]);
@@ -50,7 +52,9 @@ const scheduler = new Scheduler(store, hub);
 // M5.5: the shell image viewer's live state (open image + brush selection) — what voice
 // edits resolve "this image" and "the highlighted area" against.
 const imageContext = new ImageEditContext();
-const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext);
+// The shell file viewer's open document — what an edit_file voice edit targets (2026-07-16).
+const fileContext = new FileEditContext();
+const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, fileContext);
 scheduler.onFire = (row) =>
   orchestrator.speakProactively(
     // Cold TTS speaks the raw text verbatim; the LIVE instruction echo is defanged
@@ -175,6 +179,21 @@ hub.onMessage((msg, role) => {
     // completion (or failure) is spoken through the same proactive announce path, and
     // acceptImageEditRequest guarantees the viewer's busy state always gets an exit event.
     acceptImageEditRequest(msg, store, (cold, live) => orchestrator.speakProactively(cold, live));
+  } else if (msg.type === 'file_context' && role === 'shell') {
+    // The file viewer's open document — a bad payload clears it (fail toward "no target").
+    applyFileContext(fileContext, msg, (detail) => {
+      store.addEvent(null, 'session.error', { message: `file_context: ${detail}` });
+    });
+  } else if (msg.type === 'file_edit_request' && role === 'shell') {
+    // Typed edit from the file viewer's composer — re-presents the edited doc + speaks the
+    // outcome through the same announce path; acceptFileEditRequest guarantees the viewer's
+    // busy state always gets an exit event (file.edited | file.edit_failed).
+    acceptFileEditRequest(
+      msg,
+      store,
+      (doc) => orchestrator.presentFileToShell(doc),
+      (cold, live) => orchestrator.speakProactively(cold, live),
+    );
   }
 });
 
@@ -184,6 +203,7 @@ hub.onClose((role) => {
   if (role === 'shell' && !hub.hasRole('shell')) {
     orchestrator.handlePlaybackState(false);
     imageContext.set(null);
+    fileContext.set(null);
   }
 });
 

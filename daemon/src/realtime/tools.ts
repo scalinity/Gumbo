@@ -1,15 +1,17 @@
 import { tool } from '@openai/agents/realtime';
 import { z } from 'zod';
-import { appendFileSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { basename, isAbsolute, join, resolve, sep } from 'node:path';
-import { homedir } from 'node:os';
-import { config, secretFilePaths } from '../config.ts';
+import { appendFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { config } from '../config.ts';
 import { webQuickLookup } from '../search/tavily.ts';
 import { xLookup } from '../search/grok.ts';
 import { runImageGeneration } from '../images/generate.ts';
 import { runImageEdit } from '../images/edit.ts';
 import { safeImageFile } from '../images/files.ts';
 import type { ImageEditContext } from '../images/context.ts';
+import { readForPresentation, type PresentedFile } from '../files/present.ts';
+import { runFileEdit } from '../files/edit.ts';
+import type { FileEditContext } from '../files/context.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
@@ -38,14 +40,12 @@ export interface OrchestratorToolDeps {
   scheduler: Scheduler;
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
   imageContext: ImageEditContext;
+  /** The shell file viewer's open document (edit_file resolves "this document" from here). */
+  fileContext: FileEditContext;
   /** Push a file onto the user's screen (shell document card → Gumbo's renderer).
    *  Returns false when no shell is connected — nothing would be shown. */
-  presentFile: (payload: { title: string; file: string; path: string; content: string }) => boolean;
+  presentFile: (payload: PresentedFile) => boolean;
 }
-
-// present_file size cap: content rides the WS message inline; agent-written docs are tens
-// of KB, so this is a runaway guard, not a working budget.
-const PRESENT_FILE_MAX_CHARS = 300_000;
 
 export function createOrchestratorTools(manager: TaskManager, store: Store, deps: OrchestratorToolDeps) {
   const spawnSubagent = tool({
@@ -371,41 +371,39 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       title: z.string().nullable().describe('Short display title for the card; null → the filename'),
     }),
     execute: async ({ path, title }) => {
-      const expanded = path.startsWith('~') ? join(homedir(), path.slice(1)) : path;
-      if (!isAbsolute(expanded)) return `Pass an absolute path — got "${path}".`;
-      const real = resolve(expanded);
-      if (secretFilePaths.some((s) => { const sec = resolve(s); return real === sec || real.startsWith(sec + sep); })) {
-        return 'That file is under a protected path and cannot be shown.';
-      }
-      let content: string;
-      try {
-        // resolve() above doesn't follow symlinks but the reads below do — re-check the
-        // real target so a link can't smuggle a protected file past the string check.
-        // (The string check stays first: it must refuse protected paths that don't exist,
-        // where realpathSync would throw into the generic could-not-read message.)
-        const realResolved = realpathSync(real);
-        if (secretFilePaths.some((s) => { const sec = resolve(s); return realResolved === sec || realResolved.startsWith(sec + sep); })) {
-          return 'That file is under a protected path and cannot be shown.';
-        }
-        if (statSync(realResolved).size > PRESENT_FILE_MAX_CHARS * 4) {
-          return 'That file is too large to present on screen — summarize it for the user instead.';
-        }
-        content = readFileSync(realResolved, 'utf8');
-      } catch {
-        return `Could not read ${real} — check the path (it must exist on this Mac).`;
-      }
-      if (content.includes('\u0000')) return 'That looks like a binary file — only text files can be presented.';
-      const name = basename(real);
-      const shown = deps.presentFile({
-        title: title?.trim() || name,
-        file: name,
-        path: real,
-        content: content.slice(0, PRESENT_FILE_MAX_CHARS),
-      });
-      store.addEvent(null, 'file.presented', { path: real, shown });
+      const read = readForPresentation(path, title);
+      if ('error' in read) return read.error;
+      const shown = deps.presentFile(read);
+      store.addEvent(null, 'file.presented', { path: read.path, shown });
       return shown
-        ? 'It is on the user\'s screen now — the document card in the corner opens the full view. Tell him it\'s up.'
+        ? 'It is on the user\'s screen now — the document card in the corner opens the full view (he can also prompt edits from there). Tell him it\'s up.'
         : 'No shell is connected, so nothing can be shown on screen — tell the user, and offer to read it aloud instead.';
+    },
+  });
+
+  // Editable file viewer (2026-07-16): the user prompts a change to the document he has open
+  // and the agent rewrites it in place (lightweight LLM round-trip, no coding session). The
+  // filename never passes through the voice model — resolved from the viewer's file_context.
+  const editFileTool = tool({
+    name: 'edit_file',
+    description:
+      'Edit the document the user currently has open in the file viewer — apply a plain-language ' +
+      'change (fix wording, correct a fact, add or remove a section, reformat). Use when he asks ' +
+      'to change, fix, tweak, or rewrite the document he is looking at. Returns immediately; the ' +
+      'updated version refreshes on screen. Only works on documents in his Gumbo workspace — for ' +
+      'repo or code files use spawn_claude_session instead.',
+    parameters: z.object({
+      prompt: z.string().describe("The edit instruction, faithful to the user's words"),
+    }),
+    execute: async ({ prompt }) => {
+      const open = deps.fileContext.get();
+      if (!open) {
+        return 'No document is open in the viewer — ask the user to open the document card first, then say the change.';
+      }
+      runFileEdit({ path: open, prompt, store, present: deps.presentFile, announce: deps.announce }).catch((err: unknown) => {
+        store.addEvent(null, 'session.error', { message: `file edit announce: ${String(err)}` });
+      });
+      return "Editing the document in the background — tell the user it's on the way; the updated version will refresh on his screen. You'll be told when it lands.";
     },
   });
 
@@ -452,6 +450,6 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   return [
     spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, xLookupTool,
     generateImage, editImageTool, setReminder, listReminders, cancelReminder,
-    listTasks, getTaskStatus, cancelTask, readReport, saveNote, presentFileTool,
+    listTasks, getTaskStatus, cancelTask, readReport, saveNote, presentFileTool, editFileTool,
   ];
 }

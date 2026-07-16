@@ -32,7 +32,13 @@ export type InboundMessage =
   | { type: 'image_context'; file: string | null; strokes?: Array<{ points: Array<[number, number]>; radius: number }> }
   // shell (M5.5): a typed edit request from the viewer panel (voice edits ride the
   // realtime session + edit_image tool instead).
-  | { type: 'image_edit_request'; file: string; prompt: string; strokes?: Array<{ points: Array<[number, number]>; radius: number }> };
+  | { type: 'image_edit_request'; file: string; prompt: string; strokes?: Array<{ points: Array<[number, number]>; radius: number }> }
+  // shell (2026-07-16): the file viewer's open document — what an edit_file voice edit
+  // resolves "this document" against. path null = viewer closed.
+  | { type: 'file_context'; path: string | null }
+  // shell (2026-07-16): a typed edit request from the file viewer's composer (voice edits
+  // ride the realtime session + edit_file tool instead).
+  | { type: 'file_edit_request'; path: string; prompt: string };
 
 // Statuses a bubble can show; 'running' and 'needs_input' are the live ones (M4).
 export type BubbleStatus = 'running' | 'needs_input' | 'done' | 'failed' | 'cancelled';

@@ -4,20 +4,68 @@ import WebKit
 
 /// Gumbo's own file renderer: a presented file opens here — markdown prettified, code
 /// and plain text in clean monospace — instead of bouncing the user out to TextEdit or an
-/// IDE. Deliberately minimal: a WKWebView over locally generated HTML (no network, no
-/// scripts), one panel reused across files, anchored toward the top-right like the
-/// image viewer.
+/// IDE. Editable: a composer at the bottom lets the user PROMPT the agent to change the
+/// document (typed here, or spoken via ⌃⌥ — the viewer arms a `file_context` so a voice
+/// edit_file needs no path). Each edit rewrites in place and refreshes here. Still a
+/// WKWebView over locally generated HTML (no network, no scripts), one panel reused.
 final class FileViewerController {
+    /// WS sender, wired to WSClient by GumboController (file_context / file_edit_request).
+    var onSend: (([String: Any]) -> Void)?
+
     private var panel: NSPanel?
     private let model = FileViewerModel()
 
     func open(_ doc: PresentedFile) {
         model.doc = doc
+        model.busy = false
+        model.notice = nil
+        sendContext()
         showPanel()
     }
 
     func close() {
+        model.doc = nil
+        onSend?(["type": "file_context", "path": NSNull()])
         panel?.orderOut(nil)
+    }
+
+    /// file_present from the daemon: the present_file tool, the auto-present of a finished
+    /// deliverable, or the refresh after an edit. If it's the document we have open (same
+    /// path), swap the content in place and leave the busy state; otherwise ignore (the
+    /// document card handles first-time opens).
+    func handlePresented(_ doc: PresentedFile) {
+        guard model.doc?.path == doc.path else { return }
+        model.doc = doc
+        model.busy = false
+        model.notice = nil
+    }
+
+    /// file.edit_failed from the event fan-out: leave the busy state with an honest notice.
+    func handleEditFailed(path: String) {
+        guard model.doc?.path == path else { return }
+        model.busy = false
+        model.notice = "Edit failed — try again"
+    }
+
+    /// WS (re)connected: the daemon's in-memory file_context died with it — re-arm so a
+    /// voice edit keeps targeting the open document (mirrors the image viewer).
+    func resendContext() {
+        guard model.doc != nil else { return }
+        sendContext()
+    }
+
+    private func sendContext() {
+        onSend?(["type": "file_context", "path": model.doc?.path ?? NSNull()])
+    }
+
+    private func submitEdit() {
+        guard let doc = model.doc else { return }
+        let prompt = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        model.draft = ""
+        model.busy = true
+        model.notice = nil
+        onSend?(["type": "file_edit_request", "path": doc.path, "prompt": prompt])
     }
 
     private func showPanel() {
@@ -36,9 +84,12 @@ final class FileViewerController {
             panel.hidesOnDeactivate = false
             panel.isReleasedWhenClosed = false
             panel.animationBehavior = .none
-            panel.becomesKeyOnlyIfNeeded = true
+            panel.becomesKeyOnlyIfNeeded = true // key arrives when the composer is clicked
             panel.contentView = FirstMouseHostingView(
-                rootView: FileViewerView(model: model, onClose: { [weak self] in self?.close() }))
+                rootView: FileViewerView(
+                    model: model,
+                    onSubmitEdit: { [weak self] in self?.submitEdit() },
+                    onClose: { [weak self] in self?.close() }))
             self.panel = panel
         }
         position()
@@ -59,21 +110,37 @@ final class FileViewerController {
 
 final class FileViewerModel: ObservableObject {
     @Published var doc: PresentedFile?
+    @Published var draft = "" // the composer's in-progress edit prompt
+    @Published var busy = false // an edit is running; the doc will refresh on completion
+    @Published var notice: String? // e.g. "Edit failed — try again"
 }
 
 private struct FileViewerView: View {
     @ObservedObject var model: FileViewerModel
+    let onSubmitEdit: () -> Void
     let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(Tokens.line).frame(height: 1)
-            if let doc = model.doc {
-                FileWebView(html: MarkdownHTML.page(for: doc))
-            } else {
-                Spacer()
+            ZStack {
+                if let doc = model.doc {
+                    FileWebView(html: MarkdownHTML.page(for: doc))
+                } else {
+                    Spacer()
+                }
+                if model.busy {
+                    // Dim + spinner while the agent rewrites the document.
+                    Color.black.opacity(0.35)
+                    VStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Editing…").font(.system(size: 11)).foregroundStyle(.white.opacity(0.8))
+                    }
+                }
             }
+            Rectangle().fill(Tokens.line).frame(height: 1)
+            composer
         }
         .background(Tokens.roux)
         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -107,6 +174,36 @@ private struct FileViewerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .background(Tokens.surface)
+    }
+
+    /// Prompt-to-edit composer — the user types (or speaks via ⌃⌥) a change; the agent
+    /// rewrites the document and it refreshes above.
+    private var composer: some View {
+        HStack(spacing: 8) {
+            TextField("Ask for an edit — “fix fact 5”, “add a summary”…", text: $model.draft)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.92))
+                .disabled(model.busy)
+                .onSubmit(onSubmitEdit)
+            if let notice = model.notice {
+                Text(notice)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Tokens.alarm.opacity(0.9))
+                    .lineLimit(1)
+            }
+            Button(action: onSubmitEdit) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(model.draft.trimmingCharacters(in: .whitespaces).isEmpty || model.busy ? Tokens.faint : Tokens.ember)
+            }
+            .buttonStyle(.plain)
+            .disabled(model.draft.trimmingCharacters(in: .whitespaces).isEmpty || model.busy)
+            .pointingCursor()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
         .background(Tokens.surface)
     }
 }

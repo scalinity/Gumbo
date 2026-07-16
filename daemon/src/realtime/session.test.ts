@@ -32,7 +32,7 @@ function harness(shellConnected: boolean) {
     hasRole: (role: string) => role === 'shell' && shellConnected,
     sendBinary: (frame: Uint8Array) => frames.push(Buffer.from(frame)),
   };
-  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never);
+  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never, {} as never);
   return { store, events, frames, orchestrator };
 }
 
@@ -84,7 +84,7 @@ function vadHarness(over: { responding?: boolean; shellDraining?: boolean }) {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-vad-')), 'gumbo.db'));
   const sent: Array<{ type: string }> = [];
   const hub = { broadcast: (m: { type: string }) => sent.push(m), hasRole: () => true, sendBinary: () => {} };
-  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never);
+  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never, {} as never);
   let interrupts = 0;
   Object.assign(orchestrator, {
     armed: true,
@@ -152,7 +152,7 @@ test('local VAD: speech while Gumbo is NOT talking sets the commit gate but neve
 function commitHarness(over: { hadSpeech?: boolean; localHadSpeech?: boolean; armedBytes?: number }) {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-commit-')), 'gumbo.db'));
   const hub = { broadcast: () => {}, hasRole: () => true, sendBinary: () => {} };
-  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never);
+  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never, {} as never);
   const events: string[] = [];
   let responses = 0;
   const transport = {
@@ -208,7 +208,7 @@ test('finishTurn: a window with no speech at all clears and stays silent', () =>
 test('a release that beats the connect stashes the window bytes for the deferred commit', () => {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-commit-')), 'gumbo.db'));
   const hub = { broadcast: () => {}, hasRole: () => true, sendBinary: () => {} };
-  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never);
+  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never, {} as never);
   // Mid-connect: no session yet, ensureSession's promise pending — the shape the
   // pendingRelease fork keys on. The commit decision itself runs after connect resolves
   // (needs a real RealtimeSession) and stays covered by the smokes.
@@ -242,7 +242,7 @@ test('continuityContext is empty with nothing to carry, and never throws on a br
   const broken = new Orchestrator(
     { recentTranscripts: () => { throw new Error('db locked'); }, listTasks: () => [] } as never,
     { broadcast: () => {}, hasRole: () => false, sendBinary: () => {} } as never,
-    {} as never, {} as never, {} as never,
+    {} as never, {} as never, {} as never, {} as never,
   );
   assert.equal((broken as unknown as { continuityContext(): string }).continuityContext(), '', 'continuity is best-effort, never a blocker');
 });

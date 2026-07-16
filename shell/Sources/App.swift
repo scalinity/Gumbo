@@ -123,10 +123,15 @@ final class GumboController {
         // renderer, never a system text editor.
         imageBubbles.onStackBottomChange = { [weak self] y in self?.fileBubbles.setStackBottom(y) }
         fileBubbles.onOpen = { [weak self] doc in self?.fileViewer.open(doc) }
+        // The file viewer arms a file_context + sends typed edit requests over the WS.
+        fileViewer.onSend = { [weak self] json in self?.ws.sendJSON(json) }
         imageViewer.onSend = { [weak self] json in self?.ws.sendJSON(json) }
-        // Daemon restarts lose the in-memory image_context while the viewer sits open —
-        // re-arm it on every (re)connect so voice edits keep working (review 🟡).
-        ws.onConnect = { [weak self] in self?.imageViewer.resendContext() }
+        // Daemon restarts lose the in-memory image_context / file_context while a viewer
+        // sits open — re-arm both on every (re)connect so voice edits keep working (review 🟡).
+        ws.onConnect = { [weak self] in
+            self?.imageViewer.resendContext()
+            self?.fileViewer.resendContext()
+        }
         // M4: notch confirms answer supervisor escalations (deny happens daemon-side on timeout).
         confirm.onRespond = { [weak self] id, approved in
             self?.ws.sendJSON(["type": "confirm_response", "id": id, "approved": approved])
@@ -260,12 +265,16 @@ final class GumboController {
                 }
             case "file_present":
                 // The voice agent put a file on screen — document card now, renderer on click.
+                // Also refresh the open viewer in place (this is how an edit's new content
+                // arrives, and how a re-present of the same doc updates it).
                 if let file = msg["file"] as? String, let content = msg["content"] as? String {
-                    self.fileBubbles.present(PresentedFile(
+                    let doc = PresentedFile(
                         title: msg["title"] as? String ?? file,
                         file: file,
                         path: msg["path"] as? String ?? "",
-                        content: content))
+                        content: content)
+                    self.fileBubbles.present(doc)
+                    self.fileViewer.handlePresented(doc)
                 }
             case "event":
                 // Task-scoped activity for the bubble mini-panel live tail.
@@ -281,6 +290,10 @@ final class GumboController {
                             self.imageViewer.handleCreated(file: file, editedFrom: parent)
                         } else if type == "image.edit_failed", let file = payload["file"] as? String {
                             self.imageViewer.handleEditFailed(file: file)
+                        } else if type == "file.edit_failed", let path = payload["path"] as? String {
+                            // The edited doc's new content arrives via file_present (success);
+                            // failure only fans out as this event — un-busy the viewer.
+                            self.fileViewer.handleEditFailed(path: path)
                         }
                     }
                 }

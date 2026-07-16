@@ -14,7 +14,7 @@ const { createOrchestratorTools } = await import('./tools.ts');
 // Tool definitions are built eagerly; manager/store/deps are only touched inside execute
 // closures, so stubs are safe here. Tests that exercise an execute path pass real-enough
 // stubs through the overrides.
-function buildTools(overrides: { store?: unknown; imageContext?: unknown; presentFile?: unknown } = {}) {
+function buildTools(overrides: { store?: unknown; imageContext?: unknown; fileContext?: unknown; presentFile?: unknown } = {}) {
   return createOrchestratorTools(
     {} as never,
     (overrides.store ?? {}) as never,
@@ -22,6 +22,7 @@ function buildTools(overrides: { store?: unknown; imageContext?: unknown; presen
       scheduler: {} as never,
       announce: async () => {},
       imageContext: (overrides.imageContext ?? { get: () => null }) as never,
+      fileContext: (overrides.fileContext ?? { get: () => null }) as never,
       presentFile: (overrides.presentFile ?? (() => true)) as never,
     },
   );
@@ -57,7 +58,7 @@ test('M5 tools registered: generate_image, edit_image + the three reminder tools
   }
 });
 
-function toolByName(name: string, overrides: { store?: unknown; imageContext?: unknown; presentFile?: unknown } = {}) {
+function toolByName(name: string, overrides: { store?: unknown; imageContext?: unknown; fileContext?: unknown; presentFile?: unknown } = {}) {
   const t = buildTools(overrides).find((t) => (t as { name: string }).name === name);
   assert.ok(t, `${name} not found`);
   return t as unknown as { invoke: (ctx: unknown, args: string) => Promise<string> };
@@ -193,6 +194,21 @@ test('present_file with no shell connected tells the model to fall back to readi
     presentFile: () => false,
   }).invoke({}, JSON.stringify({ path, title: null }));
   assert.match(result, /No shell is connected/);
+});
+
+// edit_file (2026-07-16): the file viewer is editable. The tool resolves "the document
+// the user is viewing" from the shell's file_context — with none open it must refuse cleanly
+// (and NOT fire a background edit / model call).
+test('edit_file refuses with a next step when no document is open in the viewer', async () => {
+  const result = await toolByName('edit_file', { fileContext: { get: () => null } })
+    .invoke({}, JSON.stringify({ prompt: 'fix fact five' }));
+  assert.match(result, /No document is open/);
+});
+
+test('edit_file (+ present_file) are registered in the realtime session config', () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  assert.ok(names.includes('present_file'), 'present_file must stay registered');
+  assert.ok(names.includes('edit_file'), 'edit_file missing from the realtime registry');
 });
 
 // Observability (2026-07-16): the old 5-events digest left the voice model unable to say
