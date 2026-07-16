@@ -11,7 +11,7 @@ import { applyImageContext, ImageEditContext } from './images/context.ts';
 import { acceptImageEditRequest } from './images/edit.ts';
 import { Orchestrator } from './realtime/session.ts';
 
-const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY'].filter((k) => !process.env[k]);
+const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY'].filter((k) => !process.env[k]);
 if (missing.length) {
   console.error(`Missing ${missing.join(', ')} — put them in the repo .env`);
   process.exit(1);

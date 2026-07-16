@@ -48,7 +48,7 @@ export function timeLabel(): string {
 // needs none of them). Stripped from the subprocess env in claude-runner. Add any new
 // provider key here the moment it lands in .env. ANTHROPIC_API_KEY is included because it
 // silently outranks the claude.ai subscription login (spike finding).
-export const secretEnvKeys = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'ANTHROPIC_API_KEY'] as const;
+export const secretEnvKeys = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY', 'ANTHROPIC_API_KEY'] as const;
 
 // Secrets ON DISK a sandboxed Claude session must never touch (review 🟡 2026-07-16): the
 // env strip above covers the subprocess environment, but the same provider keys live in the
@@ -111,6 +111,31 @@ export const config = {
     quickLookupTimeoutMs: 3000,
     quickLookupMaxResults: 5,
     backgroundNumResults: 10,
+  },
+  // Grok (xAI) = live X/real-time-social lookups Exa/Tavily barely see inside X. Same
+  // provider contract as the others (shared client, typed SearchError, one audit line,
+  // keys in .env/daemon-only), routed by tool description: hot-path `x_lookup` (voice,
+  // spoken) + background `x_search` (sub-agent, persisted). Uses the Agent Tools API
+  // (POST /v1/responses + server-side web_search/x_search) — the old declarative Live
+  // Search is decommissioned (HTTP 410). Sources are X + web (catch an announcement whether
+  // it's a post OR a blog) but the tool wording is X-first so it never poaches Tavily's
+  // general-facts lane.
+  //
+  // TIERED MODELS (measured live 2026-07-16): grok-4.5 is a REASONING model — its agentic
+  // X search ran 28–45 s on the hot path (non-viable for voice; max_tool_calls doesn't bound
+  // the reasoning between calls). So the voice hot path uses grok-4.20-NON-reasoning (~2–8 s
+  // live — it skips the inner deliberation), while background research keeps grok-4.5 for
+  // depth (30–45 s is fine off the voice turn). The hot-path timeout is the real guard: on
+  // the rare slow query it fails to lookup_failed while the session speaks a filler.
+  grok: {
+    hotModel: 'grok-4.20-non-reasoning', // voice: fast, non-reasoning (live-verified: 2–11 s, typ ~2–8 s)
+    backgroundModel: 'grok-4.5', // background: the user's pick, deeper reasoning (live-verified)
+    // Headroom over the observed ~11 s tail so an occasional slow query succeeds instead of
+    // spuriously timing out; the session speaks a filler, and a real timeout still degrades to
+    // lookup_failed (offer to background it). Most lookups return in 2–8 s.
+    quickLookupTimeoutMs: 15_000,
+    backgroundTimeoutMs: 120_000,
+    sources: ['x', 'web'] as ('x' | 'web')[],
   },
   // M4 Claude Code sessions run in "auto mode" (the user's call, 2026-07-15): the pure
   // policy table gates everything; the supervisor MODEL is only invoked when Claude

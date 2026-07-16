@@ -21,6 +21,9 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 - **Web search providers (side feature, merged from `worktree-web-search-providers`):** ✅ built +
   verified — Tavily on the voice hot path (`web_quick_lookup`), Exa for background sub-agents,
   FTS5 memory persistence, JSONL search audit log. See §Web search providers below.
+- **Grok (xAI) live X search (side feature, `feat/grok-x-search`):** ✅ built + tested (180/180,
+  live smoke opt-in) — hot-path `x_lookup` + background `x_search`, X+web sources, X-first routing.
+  See §Grok below. Not yet live-demoed with the user; `/review-2` → `/address` pending before merge.
 - **M4 — Claude Code + supervisor (+ M4.1 OS sandbox):** ✅ built + review-hardened + smoked
   (see §M4) — live voice demo with the user pending.
 - **M5 — Images + Gumbo-owned scheduler:** ✅ built + smoked end-to-end on an isolated daemon
@@ -364,6 +367,71 @@ Risk #5 retired — clear to build the real notch UI on DynamicNotchKit 1.1.0.
   needed for the signed build + TCC grant-persistence check (risk #3).
 
 ---
+
+## Grok (xAI) — live X/real-time-social search, both tiers — 2026-07-16
+
+### Build
+- New `daemon/src/search/grok.ts`, a fourth provider following the codified conventions exactly:
+  shared `postJson`/`SearchError`/`auditSearchCall`, keys in `.env` (`XAI_API_KEY` → added to
+  boot validation in `index.ts` **and** `config.secretEnvKeys` so it's stripped from spawned
+  Claude sessions), daemon-only. `'grok'` added to the `Provider` union in `client.ts` (audit.ts
+  gets it for free — it imports the type).
+- **Why Grok at all:** a real capability gap, not a model preference. Exa/Tavily barely see inside
+  X — the trigger was "did the official Claude Dev X account post about the usage-limit reset?",
+  which Grok found and both incumbents missed. So Grok owns the X/real-time-social lane; it does
+  **not** replace general web search (that conflates provider-vs-model and loses Exa full-page text).
+- **Two tiers, one core.** `grokLiveSearch(query, opts)` throws + audits (the core); `xLookup(query)`
+  is the never-throws hot-path wrapper returning the SAME `{answer,sources}`/`lookup_failed` string
+  contract the voice model already knows from `web_quick_lookup`. Hot path: realtime tool `x_lookup`
+  (`retries:0`, `style:'spoken'`). Background: sub-agent tool `x_search` (`retries:2` + task signal,
+  `style:'detailed'`), persisted to `memory` as provider `'grok'` — one row, since citations are
+  URL-only (no page bodies to FTS-index), so `answer + source list` IS the record (`url` = first
+  citation, or a synthetic `grok:x-search` marker when Grok cited nothing).
+- **Routing is by description, X-first.** Sources are X+web (an announcement might be a post OR a
+  blog) but both tool descriptions lead with "what's happening on X right now" so the voice model
+  never reaches for Grok on a general fact/score/price (that stays Tavily) and the sub-agent never
+  uses it for general research (that stays Exa). `realtime/tools.test.ts` asserts `x_lookup` sits
+  beside `web_quick_lookup`.
+
+### Verified against the LIVE API 2026-07-16 (docs were wrong twice — smoke earned its keep)
+- **The declarative Live Search surface is DECOMMISSIONED.** First build used `POST /v1/chat/
+  completions` + a top-level `search_parameters` object (what Context7 docs + my pre-compaction
+  notes described). The live smoke got **HTTP 410**: *"Live search is deprecated. Please switch to
+  the Agent Tools API."* Lesson banked in CLAUDE.md: a new provider ALWAYS needs a live smoke —
+  docs lag deprecations, the wire doesn't.
+- **Rebuilt on the Agent Tools API** (`POST /v1/responses` + server-side `web_search` + `x_search`
+  tools). Still a single non-streaming POST, so it keeps riding the shared `postJson` contract.
+  Response shape (probed live, not from docs): an agentic `output[]` trace of `reasoning` +
+  `*_search_call` items, with the answer in a trailing `type:'message'` item →
+  `content[].type:'output_text'` → `.text`; citations are that part's `annotations[]` of
+  `type:'url_citation'` (`.url`; the annotation `title` is just the citation number, so titles are
+  derived from the URL — x.com/twitter.com → "X post"). The model injects inline `[[n]](url)`
+  markdown markers into the text — **stripped** in code so the voice model never reads them aloud.
+  A non-`completed` status or an empty answer → `empty_results` (ok:false), like the others.
+- **TIERED MODELS — the second live finding.** `grok-4.5` is a REASONING model; its agentic X
+  search measured **28–45 s** on the hot path (26 tool calls at one point) — non-viable for voice.
+  `max_tool_calls` does NOT help (cap=3 still ran 26 calls — it bounds calls, not the reasoning
+  between them), so it isn't sent; the per-call timeout is the real guard. the user's call: use a
+  fast NON-reasoning model for voice, keep `grok-4.5` for background. Catalog on his key (via
+  `GET /v1/language-models`) has no `grok-4.1-fast`; the versions run 4.3 → 4.5 → **4.20** (4.20 is
+  newer than 4.5). `grok-4.20-non-reasoning` measured **2–11 s** (typ ~2–8 s) on live X queries with
+  good answers + citations. So `config.grok = { hotModel:'grok-4.20-non-reasoning',
+  backgroundModel:'grok-4.5', quickLookupTimeoutMs:15_000, backgroundTimeoutMs:120_000,
+  sources:['x','web'] }`. `grokLiveSearch` takes a `model` opt; `xLookup` passes `hotModel`,
+  `x_search` passes `backgroundModel`. Hot-path timeout is 15 s (headroom over the ~11 s tail); a
+  filler covers the wait, a real timeout degrades to `lookup_failed`.
+- **Auth is `Bearer`** (not `x-api-key`). `sources:['x','web']` maps to tools `x_search` +
+  `web_search` (deduped; `news` would fold into `web_search`). System steering rides the
+  Responses-API top-level `instructions` field, two prompts (spoken vs detailed).
+- **Live smoke is opt-in.** `grok.test.ts` mirrors `tavily.test.ts`/`exa.test.ts` (hermetic, fetch
+  stubbed) + one real-API smoke gated behind `GROK_LIVE_SMOKE=1` (needs `XAI_API_KEY`) so
+  `npm test` stays offline + free. It captures the real key at import, then stubs — restoring the
+  real key only for its one call (the client reads the key at call-time, so this works), and
+  asserts the inline citation markers are stripped.
+- **Egress unaffected.** The M4.1 proxy governs only spawned Claude sessions; the daemon's own
+  outbound `daemon→api.x.ai` call is free like the other providers — no sandbox/proxy change.
+- **Deferred (explicitly not built):** the sub-agent MODEL swap to Grok (a cost A/B), and A-style
+  multi-provider (Grok+GPT) consensus fan-out. Both were considered and parked.
 
 ## Web search providers — Tavily (voice hot path) + Exa (background) — 2026-07-15
 

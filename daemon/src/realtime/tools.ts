@@ -4,6 +4,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.ts';
 import { webQuickLookup } from '../search/tavily.ts';
+import { xLookup } from '../search/grok.ts';
 import { runImageGeneration } from '../images/generate.ts';
 import { runImageEdit } from '../images/edit.ts';
 import { safeImageFile } from '../images/files.ts';
@@ -336,8 +337,27 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     execute: async ({ query, topic }) => webQuickLookup(query, topic),
   });
 
+  // Hot path, X-first: Grok's live X access, hard-capped at config.grok.quickLookupTimeoutMs,
+  // no retries. Its description is the router between this and web_quick_lookup — X/real-time-
+  // social lives here, general facts stay on Tavily. Don't cross the streams; the wording is
+  // load-bearing (realtime/tools.test.ts asserts both are registered).
+  const xLookupTool = tool({
+    name: 'x_lookup',
+    description:
+      "Use for what's happening on X (Twitter) RIGHT NOW — a post from a specific account, real-time " +
+      'social reaction, or a breaking announcement made ON X (e.g. "did the Claude Dev account post ' +
+      'about the usage-limit reset?"). Powered by Grok\'s live X access, which the general web lookup ' +
+      'lacks. For general facts, scores, prices, or "is X true today", use web_quick_lookup instead — ' +
+      'not this. Returns a spoken-ready `answer` (read it aloud nearly verbatim) plus source URLs as ' +
+      'metadata. If it returns lookup_failed, follow its instruction — never guess.',
+    parameters: z.object({
+      query: z.string().describe('What to check on X right now — a specific account, post, or breaking claim'),
+    }),
+    execute: async ({ query }) => xLookup(query),
+  });
+
   return [
-    spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup,
+    spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, xLookupTool,
     generateImage, editImageTool, setReminder, listReminders, cancelReminder,
     listTasks, getTaskStatus, cancelTask, readReport, saveNote,
   ];

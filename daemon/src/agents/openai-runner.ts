@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { config, todayLabel } from '../config.ts';
 import type { Store } from '../events/store.ts';
 import { exaSearch, exaContents, type ExaResult } from '../search/exa.ts';
+import { grokLiveSearch } from '../search/grok.ts';
 import { firecrawlScrape, firecrawlMap, firecrawlCrawl, firecrawlExtract, type FirecrawlPage } from '../scrape/firecrawl.ts';
 import { SearchError } from '../search/client.ts';
 
@@ -16,6 +17,10 @@ Use web_search whenever current or factual information matters; include the curr
 year in queries about recent events, prefer recently-published results, and cite source URLs.
 When the highlights aren't enough, follow up with fetch_page_contents on the most promising
 URLs to read them in full.
+Use x_search (Grok) for what's being said on X (Twitter) right now — posts from a specific
+account, real-time social reaction, or a breaking announcement made ON X. It has live X access
+that web_search (Exa) lacks; reach for it when X/social is the point, not for general web
+research. It returns a synthesized answer plus source URLs to fold into your report.
 For time-sensitive briefs (news, scores, "latest", "today"): search snippets are often stale
 previews — when you see an event scheduled for today or recently, run a follow-up search to
 check whether it has ALREADY CONCLUDED and report the outcome, not the preview. A report that
@@ -50,7 +55,7 @@ export function persistResults(
   taskId: string,
   query: string,
   results: Array<Pick<ExaResult, 'url' | 'title' | 'text' | 'highlights'>>,
-  provider: 'exa' | 'firecrawl' = 'exa',
+  provider: 'exa' | 'firecrawl' | 'grok' = 'exa',
 ) {
   const rows = results.map((r) => ({
     taskId,
@@ -84,7 +89,8 @@ export function describeToolFailure(name: string, err: unknown): string {
 
 // Tools close over the task so every raw result lands in searchable memory under its id,
 // and over the abort signal so cancelling the task tears down in-flight provider requests.
-function createSubagentTools(taskId: string, store: Store, signal: AbortSignal) {
+// Exported for tests (they drive individual tools' execute paths, like realtime/tools.test.ts).
+export function createSubagentTools(taskId: string, store: Store, signal: AbortSignal) {
 
   const webSearch = tool({
     name: 'web_search',
@@ -112,6 +118,44 @@ function createSubagentTools(taskId: string, store: Store, signal: AbortSignal) 
         return formatResults(results);
       } catch (err) {
         return describeToolFailure('web_search', err);
+      }
+    },
+  });
+
+  // Grok live X/social search — a SEARCH provider (unlike Firecrawl content acquisition),
+  // scoped to X + real-time-social by its description so it doesn't shadow web_search (Exa)
+  // for general research. Persists to memory as provider 'grok'.
+  const xSearch = tool({
+    name: 'x_search',
+    description:
+      'Search X (Twitter) and the live web via Grok for what is being said on X RIGHT NOW — posts from ' +
+      'a specific account, real-time social reaction, or a breaking announcement made ON X. Grok has ' +
+      'live X access that web_search lacks. Use it when X/social is the point; use web_search for ' +
+      'general web research. Returns a synthesized answer plus source URLs.',
+    parameters: z.object({ query: z.string() }),
+    async execute({ query }) {
+      try {
+        const { answer, sources } = await grokLiveSearch(query, {
+          model: config.grok.backgroundModel, // deeper reasoning tier — latency is fine off the voice turn
+          style: 'detailed',
+          timeoutMs: config.grok.backgroundTimeoutMs,
+          retries: 2,
+          signal,
+        });
+        const sourceList = sources.length ? '\n\nSources:\n' + sources.map((s) => `- ${s.url}`).join('\n') : '';
+        // One memory row: citations are URL-only (no page bodies to index), so the answer +
+        // source list IS the record. A synthetic marker url when Grok cited nothing keeps the
+        // row well-formed and searchable by query text.
+        persistResults(
+          store,
+          taskId,
+          query,
+          [{ url: sources[0]?.url ?? 'grok:x-search', title: query, text: answer + sourceList }],
+          'grok',
+        );
+        return answer + sourceList;
+      } catch (err) {
+        return describeToolFailure('x_search', err);
       }
     },
   });
@@ -272,7 +316,7 @@ function createSubagentTools(taskId: string, store: Store, signal: AbortSignal) 
     },
   });
 
-  return [webSearch, fetchPageContents, scrapePage, mapSite, crawlSite, extractStructured, codeInterpreterTool()];
+  return [webSearch, xSearch, fetchPageContents, scrapePage, mapSite, crawlSite, extractStructured, codeInterpreterTool()];
 }
 
 function itemText(item: unknown): string {

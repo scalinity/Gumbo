@@ -26,6 +26,14 @@ function buildTools(overrides: { store?: unknown; imageContext?: unknown } = {})
   );
 }
 
+// Grok's hot-path X lookup rides the realtime session as a SIBLING to web_quick_lookup —
+// routing (X/live-social vs general facts) is by description, but the tool must be present.
+test('x_lookup (Grok live X) is registered alongside web_quick_lookup', () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  assert.ok(names.includes('x_lookup'), 'x_lookup missing from the realtime registry');
+  assert.ok(names.includes('web_quick_lookup'), 'web_quick_lookup must stay for general facts');
+});
+
 test('no Firecrawl tool is registered in the realtime session config', () => {
   const tools = buildTools();
   const names = tools.map((t) => (t as { name: string }).name);
