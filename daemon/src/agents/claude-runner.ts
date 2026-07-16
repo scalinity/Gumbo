@@ -1,6 +1,6 @@
 import { query, type Query, type SDKUserMessage, type HookJSONOutput, type SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
 import { join } from 'node:path';
-import { config, secretEnvKeys } from '../config.ts';
+import { config, secretEnvKeys, secretFilePaths } from '../config.ts';
 import type { Store } from '../events/store.ts';
 import type { Supervisor, GateResult } from './supervisor.ts';
 
@@ -34,6 +34,11 @@ export function sandboxSettings(taskId: string): SandboxSettings {
     // The model can pass dangerouslyDisableSandbox on a Bash call; false makes the CLI
     // ignore it — containment stays deterministic even under prompt injection.
     allowUnsandboxedCommands: false,
+    // Read side (review 🟡): Seatbelt's default read policy is permissive, so without
+    // this the repo .env (all provider keys) and ~/.claude stay readable — the env strip
+    // covers the environment, not the disk. Deny closes the read half while the egress
+    // default-deny closes the exfil half.
+    credentials: { files: secretFilePaths.map((path) => ({ path, mode: 'deny' as const })) },
     filesystem: { allowWrite: [join(config.home.tasks, taskId)] },
     ...(allowedDomains.length > 0 ? { network: { allowedDomains: [...allowedDomains] } } : {}),
   };

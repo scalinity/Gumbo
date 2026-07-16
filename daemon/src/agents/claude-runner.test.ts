@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
 const { InputQueue, sandboxSettings, SANDBOX_MARKER } = await import('./claude-runner.ts');
-const { config } = await import('../config.ts');
+const { config, secretFilePaths } = await import('../config.ts');
 
 function content(msg: { message: { content: unknown } }): string {
   return typeof msg.message.content === 'string' ? msg.message.content : '';
@@ -41,6 +41,11 @@ test('sandboxSettings: fail-closed containment — workspace writable, escapes o
   assert.equal(s.allowUnsandboxedCommands, false, 'dangerouslyDisableSandbox must be ignored');
   assert.deepEqual(s.filesystem?.allowWrite, [join(config.home.tasks, 'task-123')]);
   assert.ok(!('network' in s), 'no allowedDomains configured → no network key → egress fully denied');
+  assert.deepEqual(
+    s.credentials?.files,
+    secretFilePaths.map((path) => ({ path, mode: 'deny' })),
+    'on-disk secrets (.env, ~/.claude) are read-denied inside the sandbox',
+  );
 });
 
 test('sandboxSettings: configured allowedDomains open egress without mutating config', () => {

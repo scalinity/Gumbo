@@ -43,6 +43,14 @@ export function todayLabel(): string {
 // silently outranks the claude.ai subscription login (spike finding).
 export const secretEnvKeys = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'ANTHROPIC_API_KEY'] as const;
 
+// Secrets ON DISK a sandboxed Claude session must never read (review 🟡 2026-07-16): the
+// env strip above covers the subprocess environment, but the same provider keys live in
+// the repo .env — and a session working on Gumbo itself has this repo as its cwd — while
+// ~/.claude holds Claude Code state (session transcripts under projects/ can embed
+// secrets). Denied via the sandbox credentials facility in claude-runner; spike-verified
+// the deny blocks sandboxed commands without breaking the CLI's own state access.
+export const secretFilePaths = [join(repoRoot, '.env'), join(homedir(), '.claude')] as const;
+
 export const config = {
   port,
   host: '127.0.0.1', // loopback only — do not bind all interfaces
