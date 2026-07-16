@@ -9,6 +9,10 @@ import SwiftUI
 /// durable home) or via the hover ✕.
 final class ImageBubbleController {
     var onOpen: ((String) -> Void)?
+    /// Reports the y just below the thumbnail stack after every layout, so the presented-
+    /// file cards (FileBubbleController) can stack beneath the images — the same chaining
+    /// BubbleController does for this layer.
+    var onStackBottomChange: ((CGFloat) -> Void)?
 
     static let thumbSize = NSSize(width: 148, height: 104)
     private static let lingerSeconds: TimeInterval = 600
@@ -127,6 +131,8 @@ final class ImageBubbleController {
                     NSRect(origin: origin(forIndex: index), size: Self.thumbSize), display: true)
             }
         }
+        let top = stackBottom ?? ((NSScreen.gumboHome?.visibleFrame.maxY ?? 0) - margin)
+        onStackBottomChange?(top - CGFloat(order.count) * (Self.thumbSize.height + gap))
     }
 }
 

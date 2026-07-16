@@ -114,10 +114,14 @@ final class NotchController {
                 model.transcriptItem = itemId
                 model.transcript = ""
                 model.revealedChars = 0
-                // Frame counters span the whole drain stream, not one response item —
-                // rebase so a second item (chained announcement) doesn't inherit the
-                // first item's mostly-played fraction and reveal itself instantly.
-                model.fractionBase = model.lastFraction
+                // A new response item paces against ITS OWN audio: snapshot the engine's
+                // absolute frame counters here — everything enqueued from now on belongs to
+                // this item, and the previous item's still-draining tail stays excluded.
+                // (The old fraction-of-the-whole-drain baseline went backwards when this
+                // item's audio grew the denominator — the reveal froze at zero until ~90%
+                // of the turn had played: the "transcript lags behind" bug, 2026-07-16.)
+                model.itemBasePlayed = model.lastPlayed
+                model.itemBaseEnqueued = model.lastEnqueued
             }
             // The line renders with lineLimit(1): a hard newline (report reads are full
             // markdown) would freeze the display at the first line forever — flatten it.
@@ -137,20 +141,35 @@ final class NotchController {
             if !paced {
                 model.revealedChars = model.transcript.count
                 // Drain over — the engine's frame counters reset with it.
-                model.fractionBase = 0
-                model.lastFraction = 0
+                model.itemBasePlayed = 0
+                model.itemBaseEnqueued = 0
+                model.lastPlayed = 0
+                model.lastEnqueued = 0
             }
         }
     }
 
-    func setPlaybackProgress(_ fraction: Double) {
+    func setPlaybackProgress(played: Int, enqueued: Int) {
         DispatchQueue.main.async { [self] in
-            model.lastFraction = min(1, max(0, fraction))
+            // Counters going backwards mean the engine's stream reset (full drain or a
+            // barge-in flush) — this item's baseline is from a dead stream, rebase to 0.
+            if enqueued < model.itemBaseEnqueued || played < model.itemBasePlayed {
+                model.itemBasePlayed = 0
+                model.itemBaseEnqueued = 0
+            }
+            model.lastPlayed = played
+            model.lastEnqueued = enqueued
             guard model.paced else { return }
-            // Map the remaining audio fraction onto this item's transcript.
-            let base = min(model.fractionBase, 0.95)
-            let adjusted = (model.lastFraction - base) / (1 - base)
-            let target = Int(Double(model.transcript.count) * min(1, max(0, adjusted)))
+            // Reveal this item's transcript in proportion to this ITEM's audio actually
+            // heard. Its audible playback begins at the ENQUEUED watermark — every frame
+            // played below it is the previous item's still-draining tail, so both sides
+            // rebase on itemBaseEnqueued. (Baselining played on itemBasePlayed counted
+            // that tail as heard and over-revealed a chained item.)
+            let itemPlayed = max(0, played - model.itemBaseEnqueued)
+            let itemTotal = enqueued - model.itemBaseEnqueued
+            guard itemTotal > 0 else { return }
+            let fraction = min(1, max(0, Double(itemPlayed) / Double(itemTotal)))
+            let target = Int(Double(model.transcript.count) * fraction)
             if target > model.revealedChars { model.revealedChars = target }
         }
     }
@@ -207,8 +226,12 @@ final class NotchModel: ObservableObject {
     @Published var paced = false // true while speaker audio is draining
     @Published var pulse: String? // task completion status while the M3 pulse is live
     var transcriptItem = ""
-    var fractionBase: Double = 0 // playback fraction when the current item began
-    var lastFraction: Double = 0
+    // Engine frame counters (absolute, per drain stream) — the current item's baseline is
+    // snapshotted when its first delta arrives, so pacing is per-item, not per-stream.
+    var itemBasePlayed = 0
+    var itemBaseEnqueued = 0
+    var lastPlayed = 0
+    var lastEnqueued = 0
     var onTap: (() -> Void)?
 
     var visibleTranscript: String {

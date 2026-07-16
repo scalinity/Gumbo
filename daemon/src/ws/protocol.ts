@@ -49,11 +49,17 @@ export type OutboundMessage =
   // scheduled reminder fires (the visual cue alongside the spoken delivery).
   | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running' | 'needs_input'> | 'reminder' }
   // shell: a supervisor escalation needs the user's yes/no; deny happens daemon-side on timeout.
-  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number }
+  // `body` is optional long-form content behind the one-liner (the full plan text for a plan
+  // approval) — the shell renders it behind a chevron as a scrollable view.
+  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number; body?: string }
   // shell: dismiss a pending confirm — its task was cancelled (daemon already resolved it deny).
   | { type: 'confirm_cancel'; id: string }
   // shell (M5): mirror a scheduled reminder into Reminders.app via EventKit (OS-durable —
   // fires even if the daemon is off). fire_at is epoch-ms like every other timestamp.
   | { type: 'create_reminder'; id: string; text: string; fire_at: number }
   // shell (M5): best-effort removal of a cancelled reminder's Reminders.app entry.
-  | { type: 'remove_reminder'; id: string; eventkit_id: string };
+  | { type: 'remove_reminder'; id: string; eventkit_id: string }
+  // shell (2026-07-16): present a file the user should see — a document card in the top-right
+  // stack; clicking it opens Gumbo's own renderer (markdown prettified). Content rides
+  // inline (size-capped daemon-side) so no new HTTP file-serving surface is exposed.
+  | { type: 'file_present'; title: string; file: string; path: string; content: string };

@@ -14,7 +14,7 @@ const { createOrchestratorTools } = await import('./tools.ts');
 // Tool definitions are built eagerly; manager/store/deps are only touched inside execute
 // closures, so stubs are safe here. Tests that exercise an execute path pass real-enough
 // stubs through the overrides.
-function buildTools(overrides: { store?: unknown; imageContext?: unknown } = {}) {
+function buildTools(overrides: { store?: unknown; imageContext?: unknown; presentFile?: unknown } = {}) {
   return createOrchestratorTools(
     {} as never,
     (overrides.store ?? {}) as never,
@@ -22,6 +22,7 @@ function buildTools(overrides: { store?: unknown; imageContext?: unknown } = {})
       scheduler: {} as never,
       announce: async () => {},
       imageContext: (overrides.imageContext ?? { get: () => null }) as never,
+      presentFile: (overrides.presentFile ?? (() => true)) as never,
     },
   );
 }
@@ -56,7 +57,7 @@ test('M5 tools registered: generate_image, edit_image + the three reminder tools
   }
 });
 
-function toolByName(name: string, overrides: { store?: unknown; imageContext?: unknown } = {}) {
+function toolByName(name: string, overrides: { store?: unknown; imageContext?: unknown; presentFile?: unknown } = {}) {
   const t = buildTools(overrides).find((t) => (t as { name: string }).name === name);
   assert.ok(t, `${name} not found`);
   return t as unknown as { invoke: (ctx: unknown, args: string) => Promise<string> };
@@ -109,6 +110,97 @@ test('edit_image uses the armed context (file + brush strokes) when file is null
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+// present_file (2026-07-16): the deliverable-on-screen path — absolute paths only, secret
+// paths refused, content pushed to the shell inline.
+test('present_file guards: relative path, protected path, missing file all refuse cleanly', async () => {
+  const noStore = { addEvent: () => ({}) };
+  const tool = (presented: unknown[] = []) =>
+    toolByName('present_file', { store: noStore, presentFile: (p: unknown) => { presented.push(p); return true; } });
+  assert.match(await tool().invoke({}, JSON.stringify({ path: 'relative/spec.md', title: null })), /absolute path/);
+  assert.match(await tool().invoke({}, JSON.stringify({ path: '~/.claude/projects/x.jsonl', title: null })), /protected path/);
+  assert.match(await tool().invoke({}, JSON.stringify({ path: '/nonexistent/definitely/missing.md', title: null })), /Could not read/);
+});
+
+test('present_file pushes a real file to the shell with title + content', async () => {
+  const { writeFileSync: write } = await import('node:fs');
+  const dir = mkdtempSync(join(tmpdir(), 'gumbo-present-'));
+  const path = join(dir, 'spec.md');
+  write(path, '# Harness Spec\n\nBody.');
+  const presented: Array<{ title: string; file: string; path: string; content: string }> = [];
+  const events: string[] = [];
+  const result = await toolByName('present_file', {
+    store: { addEvent: (_t: unknown, type: string) => events.push(type) },
+    presentFile: (p: { title: string; file: string; path: string; content: string }) => { presented.push(p); return true; },
+  }).invoke({}, JSON.stringify({ path, title: 'The Spec' }));
+  assert.match(result, /on the user's screen/);
+  assert.equal(presented.length, 1);
+  assert.equal(presented[0].title, 'The Spec');
+  assert.equal(presented[0].file, 'spec.md');
+  assert.match(presented[0].content, /# Harness Spec/);
+  assert.ok(events.includes('file.presented'), 'audited in the event log');
+});
+
+test('present_file refuses a file whose content carries a NUL byte (binary)', async () => {
+  const { writeFileSync: write } = await import('node:fs');
+  const dir = mkdtempSync(join(tmpdir(), 'gumbo-present-'));
+  const path = join(dir, 'blob.md');
+  write(path, Buffer.from([0x68, 0x69, 0x00, 0x68, 0x69])); // "hi\0hi" — text-shaped name, binary body
+  const result = await toolByName('present_file', {
+    store: { addEvent: () => ({}) },
+    presentFile: () => true,
+  }).invoke({}, JSON.stringify({ path, title: null }));
+  assert.match(result, /binary file/);
+});
+
+test('present_file refuses an oversize file via the stat cap, before reading it', async () => {
+  const { writeFileSync: write } = await import('node:fs');
+  const dir = mkdtempSync(join(tmpdir(), 'gumbo-present-'));
+  const path = join(dir, 'huge.md');
+  write(path, 'x'.repeat(300_000 * 4 + 1)); // one byte over PRESENT_FILE_MAX_CHARS * 4
+  const result = await toolByName('present_file', {
+    store: { addEvent: () => ({}) },
+    presentFile: () => true,
+  }).invoke({}, JSON.stringify({ path, title: null }));
+  assert.match(result, /too large/);
+});
+
+test('present_file with no shell connected tells the model to fall back to reading aloud', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gumbo-present-'));
+  const path = join(dir, 'a.md');
+  const { writeFileSync: write } = await import('node:fs');
+  write(path, 'x');
+  const result = await toolByName('present_file', {
+    store: { addEvent: () => ({}) },
+    presentFile: () => false,
+  }).invoke({}, JSON.stringify({ path, title: null }));
+  assert.match(result, /No shell is connected/);
+});
+
+// Observability (2026-07-16): the old 5-events digest left the voice model unable to say
+// what a paused/cancelled task was doing — brief, pause reason, and the pending plan are
+// the contract now.
+test('get_task_status surfaces the brief, the pause reason, and the pending plan', async () => {
+  const store = {
+    getTask: () => ({ id: 't1', kind: 'claude', title: 'Spec', status: 'needs_input', workspace: '', created_at: 0, updated_at: 0 }),
+    getClaudeSession: () => ({ session_id: 's', cwd: '/x', brief: 'Write the harness spec file' }),
+    getTaskBrief: () => 'Write the harness spec file',
+    // get_task_status now reads the pending plan via direct SQL (getLatestEventPayload),
+    // not the 200-event window — a chatty task can push the plan out of the slice.
+    getLatestEventPayload: (_id: string, type: string) =>
+      type === 'claude.plan' ? { plan: '# Plan\n1. investigate\n2. write the file' } : null,
+    listEvents: () => [
+      { seq: 1, ts: 1, task_id: 't1', type: 'task.created', payload: { title: 'Spec', brief: 'Write the harness spec file' } },
+      { seq: 2, ts: 2, task_id: 't1', type: 'claude.plan', payload: { plan: '# Plan\n1. investigate\n2. write the file' } },
+      { seq: 3, ts: 3, task_id: 't1', type: 'task.status', payload: { status: 'needs_input', reason: 'awaiting plan approval' } },
+    ],
+  };
+  const result = await toolByName('get_task_status', { store }).invoke({}, JSON.stringify({ task_id: 't1' }));
+  assert.match(result, /Spec — needs_input \(coding session\)/);
+  assert.match(result, /Original brief: Write the harness spec file/);
+  assert.match(result, /Paused because: awaiting plan approval/);
+  assert.match(result, /# Plan/, 'the plan text itself is readable to the voice model');
 });
 
 test('set_reminder rejects a past fire_at and hands the model a FRESH clock to re-resolve against', async () => {

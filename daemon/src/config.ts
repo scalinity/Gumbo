@@ -101,6 +101,33 @@ export const config = {
   // A ⌃⌥ tap shorter than this has no usable audio — the API rejects commits under ~100 ms.
   minPttAudioBytes: 4800, // 100 ms @ 24 kHz mono 16-bit (48 bytes/ms)
   sessionIdleMs: 60_000,
+  // Local (daemon-side) speech-energy gate on the armed mic stream (2026-07-16). Two jobs:
+  // 1. INSTANT barge-in. The SDK clears its interrupt tracking the moment audio GENERATION
+  //    completes (response.output_audio.done → #resetAudioPlaybackState), but the shell
+  //    drains the buffered audio for far longer — during that window the server-VAD
+  //    barge-in path (speech_started → interrupt()) is a silent no-op, measured live as
+  //    seconds of talking over Gumbo. The daemon detects speech energy on the armed mic
+  //    frames itself and flushes shell playback immediately; it also covers cold TTS
+  //    announcements, which have no session to interrupt at all.
+  // 2. Silence gate. A PTT window with no speech-like energy is cleared, never committed —
+  //    a silent ⌃⌥ hold used to commit an empty buffer and the model answered it with a
+  //    generic "what can I do for you?" (live bug, seen twice).
+  // Frames are post-AEC (the shell taps VPIO-processed input), so Gumbo's own speaker
+  // output does not read as speech. RMS is over pcm16 (±32767): AGC'd speech lands around
+  // 2000–4000; AEC residue and room noise sit well under 500.
+  localVad: {
+    rmsThreshold: 900,
+    minSpeechMs: 90, // sustained AND consecutive — debounces keyboard clicks and breaths
+  },
+  // Session continuity (2026-07-16): sessions are short-lived by design (idle close above,
+  // tsx-watch daemon restarts), but the CONVERSATION must not reset with them — a fresh
+  // session's instructions carry the recent dialogue + active-task snapshot, rebuilt from
+  // the event log at connect. Lookback bounds how far back the replay reaches; maxChars
+  // bounds the instruction-size cost (oldest lines drop first).
+  continuity: {
+    lookbackMs: 45 * 60_000,
+    maxChars: 4000,
+  },
   // Web search providers: Tavily answers on the voice hot path (fail fast, no retries);
   // Exa does background research (full contents, retries allowed). Keys in repo .env.
   search: {
@@ -221,9 +248,11 @@ export const config = {
   },
   // How long a finished task's bubble lingers before the daemon sends bubble_remove.
   bubbleLingerMs: 12_000,
-  // Report excerpt embedded in a live completion announcement — enough for the model to
-  // deliver the key finding without reciting the whole file (full cap: reportMaxChars).
-  announceReportMaxChars: 2_500,
+  // Report excerpt embedded in a live completion announcement. Was 2 500 — which sliced a
+  // 14 k report mid-example and the model read right up to the cut edge, heard as "the
+  // report cut off out of nowhere" (live failure 2026-07-16). Now matches reportMaxChars,
+  // and session.ts cuts at a paragraph boundary + flags the truncation to the model.
+  announceReportMaxChars: 12_000,
   reportMaxChars: 12_000,
   activityLogMaxChars: 500, // truncation for tool args / outputs in the activity log
 };

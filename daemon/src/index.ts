@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { config } from './config.ts';
-import { echoForInstructions } from './audio/announce.ts';
+import { echoForInstructions, needsInputAnnounce } from './audio/announce.ts';
 import { Store } from './events/store.ts';
 import { createHttpServer } from './http.ts';
 import { Hub } from './ws/hub.ts';
@@ -33,10 +33,15 @@ const confirms = new ConfirmBridge(hub);
 const manager = new TaskManager(
   store,
   (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal),
-  // Plan approval: a longer notch window (the user reads the full plan in the dashboard/bubble;
-  // the confirm shows a one-line summary). Deny/timeout parks the task — nothing is lost.
+  // Plan approval: a longer notch window. The one-line detail is a peek; the FULL plan
+  // rides as `body`, which the shell renders behind a chevron as a scrollable view —
+  // the user approves what he can actually read (live gap 2026-07-16: the prompt showed
+  // nothing but "{}"). Deny/timeout parks the task — nothing is lost.
   (taskId, taskTitle, plan, signal) =>
-    confirms.request(taskId, taskTitle, 'Approve Claude’s plan?', plan.replace(/\s+/g, ' ').slice(0, 140), signal, config.claude.planConfirmTimeoutMs),
+    confirms.request(
+      taskId, taskTitle, 'Approve Claude’s plan?', plan.replace(/\s+/g, ' ').slice(0, 140),
+      signal, config.claude.planConfirmTimeoutMs, plan.slice(0, 24_000),
+    ),
 );
 // M5: the Gumbo-owned scheduler. Its fire loop delivers through the M3 announce path —
 // live session injection when one is open, cold one-shot TTS otherwise (never opens a
@@ -83,10 +88,23 @@ store.onEvent((event) => {
   } else if (event.type === 'task.status') {
     // M4: needs_input ⇄ running flips mid-run (notch confirm pending, cap hit, resume).
     const task = store.getTask(event.task_id);
-    const status = (event.payload as { status?: string })?.status;
+    const payload = event.payload as { status?: string; reason?: string };
+    const status = payload?.status;
     if (!task || (status !== 'running' && status !== 'needs_input')) return;
     hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status }, 'shell');
+    if (status === 'needs_input') {
+      // Speak it — a paused task used to wait silently (live gap 2026-07-16: the plan
+      // approval sat unnoticed for 5 minutes because the voice session had idle-closed).
+      // Same delivery rules as every proactive path: live injection or cold TTS.
+      const reason = payload?.reason ?? 'it needs your input';
+      const { cold, live } = needsInputAnnounce(task.title, reason);
+      orchestrator.speakProactively(cold, live).catch((err: unknown) => {
+        store.addEvent(event.task_id, 'session.error', { message: `needs-input announce: ${String(err)}` });
+      });
+    }
   } else if (event.type === 'task.finished') {
+    // Any confirm this task still has pending is moot — deny it and dismiss the panel.
+    confirms.cancelForTask(event.task_id);
     const task = store.getTask(event.task_id);
     if (!task || task.status === 'running' || task.status === 'needs_input') return;
     hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status: task.status }, 'shell');
@@ -167,6 +185,21 @@ hub.onClose((role) => {
 hub.onBinary((frame, role) => {
   if (role === 'shell') orchestrator.handleMicFrame(frame);
 });
+
+// tsx-watch reloads SIGTERM this process constantly; close the realtime session cleanly so
+// the event log records the closure (a silent gap here masqueraded as inexplicable voice
+// amnesia, 2026-07-16) and the OpenAI socket isn't abandoned to a server-side timeout.
+// addEvent is synchronous sqlite, so the record lands before exit.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    orchestrator.shutdown();
+    // The sqlite record is already down (synchronous), but the WebSocket close frame is
+    // not — an immediate exit abandons it in the socket buffer. A short drain lets it
+    // flush so the server sees a clean close instead of a timeout.
+    const SHUTDOWN_DRAIN_MS = 150;
+    setTimeout(() => process.exit(0), SHUTDOWN_DRAIN_MS);
+  });
+}
 
 // Pending schedule rows persisted by a previous run resume here — the first sweep is one
 // poll interval in (grace for the shell to reconnect before an overdue reminder speaks).

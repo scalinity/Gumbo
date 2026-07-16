@@ -54,6 +54,8 @@ export class Store {
         type TEXT, payload TEXT
       );
       CREATE INDEX IF NOT EXISTS events_task ON events(task_id, seq);
+      -- recentTranscripts filters type IN (…) AND ts ≥ — without this it scans the PK.
+      CREATE INDEX IF NOT EXISTS events_type_ts ON events(type, ts);
       -- memory is INSERT-ONLY by design: memory_fts syncs via the AFTER INSERT trigger
       -- alone, so any future UPDATE/DELETE path must add companion triggers or the FTS
       -- index silently desyncs. No reader or retention policy yet (write-only until the
@@ -228,6 +230,42 @@ export class Store {
       .prepare(`SELECT * FROM events ${where} ORDER BY seq DESC LIMIT ?`)
       .all(...params, limit) as Array<Omit<EventRow, 'payload'> & { payload: string }>;
     return rows.reverse().map((r) => ({ ...r, payload: JSON.parse(r.payload) }));
+  }
+
+  /** Recent voice-conversation lines (oldest first) for session continuity: a new realtime
+   *  session is otherwise amnesiac after the 60 s idle close or a tsx-watch daemon restart
+   *  (live failure 2026-07-16 — "did you just forget everything I said?"). */
+  recentTranscripts(sinceMs: number, limit = 80): Array<{ ts: number; role: 'user' | 'assistant'; text: string }> {
+    const rows = this.db
+      .prepare(
+        "SELECT ts, type, payload FROM events WHERE type IN ('transcript.user','transcript.assistant') AND ts >= ? ORDER BY seq DESC LIMIT ?",
+      )
+      .all(sinceMs, limit) as Array<{ ts: number; type: string; payload: string }>;
+    return rows.reverse().map((r) => ({
+      ts: r.ts,
+      role: r.type === 'transcript.user' ? 'user' as const : 'assistant' as const,
+      text: (JSON.parse(r.payload) as { text?: string } | null)?.text ?? '',
+    }));
+  }
+
+  /** Newest event payload of one type for a task, by direct SQL — a bounded listEvents
+   *  window can miss it on a chatty task (e.g. the claude.plan behind get_task_status). */
+  getLatestEventPayload(taskId: string, type: string): unknown {
+    const row = this.db
+      .prepare('SELECT payload FROM events WHERE task_id = ? AND type = ? ORDER BY seq DESC LIMIT 1')
+      .get(taskId, type) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) : null;
+  }
+
+  /** The brief a task was created with (task.created payload) — survives cancellation and
+   *  daemon restarts, so the voice agent can always answer "what was that task doing?". */
+  getTaskBrief(taskId: string): string | null {
+    const row = this.db
+      .prepare("SELECT payload FROM events WHERE task_id = ? AND type = 'task.created' ORDER BY seq LIMIT 1")
+      .get(taskId) as { payload: string } | undefined;
+    if (!row) return null;
+    const brief = (JSON.parse(row.payload) as { brief?: string } | null)?.brief;
+    return typeof brief === 'string' && brief ? brief : null;
   }
 
   createTask(task: TaskRow) {

@@ -71,6 +71,32 @@ test('a pre-aborted signal denies without prompting', async () => {
   assert.ok(!sent.some((m) => m.type === 'confirm_request'), 'no prompt for an already-cancelled task');
 });
 
+test('cancelForTask denies + dismisses every pending confirm of that task, leaves others', async () => {
+  const { hub, sent } = fakeHub(true);
+  const bridge = new ConfirmBridge(hub, 1000);
+  const p1 = bridge.request('task-a', 'Task A', 'Run: x', 'reason');
+  const p2 = bridge.request('task-a', 'Task A', 'Approve plan?', 'summary');
+  const p3 = bridge.request('task-b', 'Task B', 'Run: y', 'reason');
+  bridge.cancelForTask('task-a');
+  assert.equal(await p1, false);
+  assert.equal(await p2, false);
+  assert.equal(sent.filter((m) => m.type === 'confirm_cancel').length, 2, "both of task-a's panels dismissed");
+  // task-b is untouched and still answerable.
+  const req3 = sent.filter((m) => m.type === 'confirm_request')[2];
+  bridge.handleResponse(req3!.id!, true);
+  assert.equal(await p3, true);
+});
+
+test('confirm_request carries the long-form body (the full plan) when provided', async () => {
+  const { hub, sent } = fakeHub(true);
+  const bridge = new ConfirmBridge(hub, 1000);
+  const p = bridge.request('t', 'Task', 'Approve Claude’s plan?', 'peek', undefined, 1000, '# The full plan\n1. step');
+  const req = sent.find((m) => m.type === 'confirm_request') as { id?: string; body?: string } | undefined;
+  assert.equal(req?.body, '# The full plan\n1. step');
+  bridge.handleResponse(req!.id!, false);
+  assert.equal(await p, false);
+});
+
 test('per-request timeoutMs overrides the default (plan approval gets a longer window)', async () => {
   const { hub, sent } = fakeHub(true);
   const bridge = new ConfirmBridge(hub, 20); // short default

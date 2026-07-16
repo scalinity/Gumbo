@@ -1666,3 +1666,104 @@ runs the user deliberately spawns. M4 registration defaults recorded in CLAUDE.m
 - Review's informational note, for posterity: crawl/extract gating is tool-description
   steering + the spawn-task approval flow, not a code-level gate — that IS the pre-M4
   design, not an oversight.
+
+### Live-session failure sweep + fixes (2026-07-16, from the "Agent coding harness spec" run)
+the user's first real M4 voice-driven Claude session surfaced a cluster of failures; every root
+cause was reconstructed from the events DB (`~/Gumbo/db/gumbo.db` — the transcripts persist,
+which is what made the forensics possible). Fixes, with the *why*:
+- **Plan approval showed `{}` (🔴).** Current CLIs call `ExitPlanMode` with EMPTY input and
+  persist the plan to `~/.claude/plans/<slug>.md` FIRST — and `protectedPathHit` hard-denied
+  that Write as "protected secret path". Two-part fix: `PROTECTED_EXEMPT` carves
+  `~/.claude/plans` out of the ~/.claude deny (and out of the edit-outside-cwd escalate —
+  otherwise every plan write pops a confirm), and the runner captures the plan-file Write's
+  content as `handlePlan`'s fallback. The Seatbelt layer already write-allows `~/.claude`
+  (minus exec surfaces), so policy was the only gate in the way.
+- **Plan now rides the confirm as `body`** (`confirm_request.body`, capped 24k) — the shell
+  renders a chevron ("Read the full plan") that grows the panel into a scrollable view.
+  Top edge stays pinned under the notch; SwiftUI frame and NSPanel frame resize together.
+- **Voice amnesia (🔴).** Sessions idle-close after 60 s and tsx-watch restarts kill them
+  silently; every reopen was a blank slate ("Did you just forget everything I said?" — live
+  quote). New sessions now carry a continuity block in instructions: recent dialogue from
+  `store.recentTranscripts` (VAD fragments stitched, 45 min lookback, 4k char cap, fenced +
+  tag-neutralized like the M3 report path) + an active-task snapshot. Also: SIGTERM/SIGINT
+  now log `session.closed` before exit — the silent gap was itself a red herring during
+  debugging (a restart at ~12:01 left no trace and looked like an API drop).
+- **Needs-input was SILENT.** The plan approval landed 3 min after the session idle-closed;
+  nobody spoke it and the prompt sat unnoticed ~5 min. `task.status → needs_input` now
+  announces through `speakProactively` (live inject or cold TTS) with the pause reason.
+- **Report readback "cut off out of nowhere".** `announceReportMaxChars` was 2 500 — the 14k
+  report was raw-sliced mid-example and the model read right up to the cliff edge. Now 12k
+  (= reportMaxChars), cut at a line boundary, and the instructions FLAG the truncation so the
+  model summarizes + offers `read_report` instead of narrating into the cut.
+- **`get_task_status` was 5 events × 200 chars** — the voice model literally could not see
+  the brief, the plan, or what the session did (it told the user "no preserved brief" about a
+  cancelled task whose brief sat in `task.created`/`claude_sessions`). Rewritten: title/
+  status/kind + original brief (`getTaskBrief` falls back to the task.created payload, so it
+  survives cancellation) + pause reason + the pending plan text + 12 recent events.
+- **Notch transcript lag (real math bug).** Pacing mapped a *fraction of the whole drain
+  stream* onto the item's text; when a tool-call turn chained a second response, its audio
+  grew the denominator, the fraction fell BELOW the captured baseline, and the clamp froze
+  the reveal until ~90 % of the turn had played. Engine now reports ABSOLUTE (played,
+  enqueued) frame counters; the notch snapshots per-item baselines and detects counter
+  resets (drain end / barge-in flush) by counts going backwards.
+- **Stale plan prompt after cancel.** The daemon restart wiped the ConfirmBridge, so nothing
+  could send `confirm_cancel`; the shell kept the prompt for the full 15-min window. Fixes
+  on both sides: the bridge tracks `taskId` per pending confirm + `cancelForTask` fires on
+  `task.finished`; AND the shell self-dismisses confirms whose task hit a terminal
+  bubble_upsert / bubble_remove — the only fix that works across daemon restarts.
+- **Orb transcript rendering.** The feed showed raw truncated JSON, a blank row (empty
+  ToolSearch result), and was missing the session's opening instruction entirely. Runner now
+  events `claude.prompt` (opener + follow-ups, 4k cap); the shell summarizes tool calls to
+  their primary argument ("Write — /path"), renders empty results as "(no output)", gives
+  message/prompt rows 700 chars/14 lines (tool rows stay compact).
+- **NEW: `present_file` + shell file renderer.** A session's deliverable is often a file
+  (the whole point of the observed run was a spec) and there was no way to see it short of
+  Finder. `present_file` (realtime tool) reads the file daemon-side (absolute paths only,
+  `secretFilePaths` refused, NUL-sniff for binary, 300k cap) and pushes content INLINE over
+  WS (`file_present`) — deliberately no new HTTP file-serving surface on the loopback port.
+  Shell: document cards stack under the image thumbs (stack-bottom chaining extended:
+  orbs → images → files), click opens `FileViewer` — a WKWebView over locally generated
+  HTML from a minimal escaped-first Swift markdown converter (headings/fences/lists/quotes/
+  inline spans; non-md renders as a code block). Links open in the default browser; no
+  scripts are ever emitted.
+- **Noted, not fixed:** `input_audio_buffer_commit_empty` on session open (pendingRelease
+  commits a silence-only buffer — harmless, logged noise; a fix needs VAD state that doesn't
+  exist yet at commit time). The stale-xcodegen gotcha struck again: `shell/Gumbo.xcodeproj`
+  was missing the M5.5 files and failed the build with "cannot find X in scope" — regenerate
+  with `xcodegen generate` before suspecting the code.
+- Suite: 196 daemon tests pass (new: plans exemption, plan-capture precedence, cancelForTask,
+  confirm body, get_task_status shape, continuity stitching, present_file guards). Shell
+  builds clean. NOTE for test runs: pass a FRESH `GUMBO_HOME` per run — a reused dir makes
+  the audit-line-count tests fail on accumulated JSONL.
+
+### Local VAD barge-in + silence gate (2026-07-16, follow-up to the live-session sweep)
+- **Root cause of "talking over Gumbo" (🔴, found in the SDK source):** the whole barge-in
+  path rides `speech_started → transport.interrupt()`, and the transport CLEARS its
+  interrupt tracking (`#currentItemId`/`_firstAudioTimestamp`) in `_afterAudioDoneEvent` —
+  i.e. the moment audio GENERATION completes (`response.output_audio.done`). Gumbo
+  generates a long reply in seconds and the shell drains it for minutes, so for ~95 % of a
+  long readback `interrupt()` hits its early-return guard and does NOTHING — no
+  `audio_interrupted`, no `playback_flush`, no truncation. The SDK's model assumes playback
+  tracks generation (a WebRTC assumption); our buffered-drain architecture breaks it. Even
+  during generation, the latency stack was graph-switch (~200–300 ms before mic frames
+  flow) + AEC convergence + server-VAD window + network roundtrip. Cold TTS announcements
+  had no barge-in at all (no session to interrupt).
+- **Fix: daemon-side speech-energy gate** (`config.localVad`, RMS ≥ 900 sustained ≥ 90 ms
+  consecutive) on the armed mic stream. Why the daemon: it alone knows the true "Gumbo is
+  audibly talking" state (`responding || shellDraining`, cold TTS included), and the frames
+  it receives are already post-AEC (the shell taps VPIO-processed input) — Gumbo's own
+  speaker output cannot self-trigger. On trigger: broadcast `playback_flush` directly
+  (independent of the SDK's cleared state), then best-effort `session.interrupt()` for
+  server-side truncation while a response IS in flight. One barge-in per armed window.
+- **Same gate fixes the silence-tap bug**: the pendingRelease path used to commit + request
+  a response on byte count alone — a silent ⌃⌥ hold made the model answer an empty buffer
+  with a generic "what can I do for you?" (and produced the `input_audio_buffer_commit_empty`
+  noise). Now: no local speech → clear, never commit. Bonus: `finishTurn` treats
+  `localHadSpeech` as speech too, so a fast utterance released before the server VAD
+  reports is committed instead of silently dropped (the old "deaf turn" cousin).
+- Accepted trade-off: with PTT held during Gumbo speech, a rare AEC-residue false positive
+  could cut Gumbo off early — but the user pressed the button intending to talk; the old
+  design's caution cost seconds of talk-over every time. Thresholds live in config.
+- Pure daemon change (no shell rebuild); suite 200 tests green. `frameRms` exported for the
+  unit tests; square-wave frames make RMS == amplitude exactly.
+

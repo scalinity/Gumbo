@@ -10,9 +10,11 @@ final class ConfirmController {
 
     private struct Request {
         let id: String
+        let taskId: String
         let taskTitle: String
         let title: String
         let detail: String
+        let body: String // long-form content (the full plan) behind the chevron
         let timeoutMs: Double
     }
 
@@ -22,9 +24,10 @@ final class ConfirmController {
     private var expireWork: DispatchWorkItem?
     private var showing = false
     private var currentId: String?
+    private var currentTaskId: String?
 
-    func present(id: String, taskTitle: String, title: String, detail: String, timeoutMs: Double) {
-        queue.append(Request(id: id, taskTitle: taskTitle, title: title, detail: detail, timeoutMs: timeoutMs))
+    func present(id: String, taskId: String, taskTitle: String, title: String, detail: String, body: String, timeoutMs: Double) {
+        queue.append(Request(id: id, taskId: taskId, taskTitle: taskTitle, title: title, detail: detail, body: body, timeoutMs: timeoutMs))
         if !showing { showNext() }
     }
 
@@ -35,20 +38,37 @@ final class ConfirmController {
         if currentId == id { answer(id, approved: nil) }
     }
 
+    /// The task itself ended (bubble removed / terminal status). A daemon RESTART loses the
+    /// bridge that would have sent confirm_cancel, so the shell also self-dismisses any
+    /// prompt whose task is gone — a plan approval outlived its cancelled session by minutes
+    /// (live failure 2026-07-16).
+    func cancelForTask(_ taskId: String) {
+        queue.removeAll { $0.taskId == taskId }
+        if currentTaskId == taskId, let id = currentId { answer(id, approved: nil) }
+    }
+
     private func showNext() {
         guard !queue.isEmpty else { return }
         let request = queue.removeFirst()
         showing = true
         currentId = request.id
+        currentTaskId = request.taskId
 
         let model = ConfirmModel(
             taskTitle: request.taskTitle,
             title: request.title,
             detail: request.detail,
+            body: request.body,
             deadline: Date().addingTimeInterval(request.timeoutMs / 1000),
             totalSeconds: request.timeoutMs / 1000)
         model.onAnswer = { [weak self] approved in
             self?.answer(request.id, approved: approved)
+        }
+        // The chevron grows the panel in place (top edge pinned under the notch); the
+        // SwiftUI frame and the NSPanel frame must move together or the content clips.
+        model.onExpandChange = { [weak self] expanded in
+            guard let self, let panel = self.panel else { return }
+            self.position(panel, size: expanded ? ConfirmView.expandedSize : ConfirmView.size)
         }
         self.model = model
 
@@ -72,6 +92,7 @@ final class ConfirmController {
         guard showing else { return }
         showing = false
         currentId = nil
+        currentTaskId = nil
         expireWork?.cancel()
         expireWork = nil
         if let approved { onRespond?(id, approved) }
@@ -114,10 +135,10 @@ final class ConfirmController {
         return panel
     }
 
-    /// Centered under the notch on the MacBook display (falls back to top-center).
-    private func position(_ panel: NSPanel) {
+    /// Centered under the notch on the MacBook display (falls back to top-center). The top
+    /// edge stays pinned; an expanded plan view grows downward.
+    private func position(_ panel: NSPanel, size: NSSize = ConfirmView.size) {
         guard let screen = NSScreen.gumboHome else { return }
-        let size = ConfirmView.size
         let top = screen.frame.maxY - max(screen.safeAreaInsets.top, 2) - 8
         panel.setFrame(
             NSRect(x: screen.frame.midX - size.width / 2, y: top - size.height,
@@ -137,14 +158,18 @@ final class ConfirmModel: ObservableObject {
     let taskTitle: String
     let title: String
     let detail: String
+    let body: String // long-form content (the full plan); empty → no chevron
     let deadline: Date
     let totalSeconds: Double
+    @Published var expanded = false
     var onAnswer: ((Bool) -> Void)?
+    var onExpandChange: ((Bool) -> Void)?
 
-    init(taskTitle: String, title: String, detail: String, deadline: Date, totalSeconds: Double) {
+    init(taskTitle: String, title: String, detail: String, body: String, deadline: Date, totalSeconds: Double) {
         self.taskTitle = taskTitle
         self.title = title
         self.detail = detail
+        self.body = body
         self.deadline = deadline
         self.totalSeconds = max(1, totalSeconds)
     }
@@ -152,8 +177,12 @@ final class ConfirmModel: ObservableObject {
 
 struct ConfirmView: View {
     static let size = NSSize(width: 380, height: 132)
+    /// Chevron-expanded: the full plan in a scrollable view (top edge stays pinned).
+    static let expandedSize = NSSize(width: 480, height: 520)
 
     @ObservedObject var model: ConfirmModel
+
+    private var panelSize: NSSize { model.expanded ? Self.expandedSize : Self.size }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -176,6 +205,38 @@ struct ConfirmView: View {
                 .foregroundStyle(.white.opacity(0.92))
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if model.expanded {
+                ScrollView {
+                    Text(model.body)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.78))
+                        .lineSpacing(2.5)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                }
+                .frame(maxHeight: .infinity)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Tokens.line, lineWidth: 1))
+            }
+            if !model.body.isEmpty {
+                Button(action: {
+                    model.expanded.toggle()
+                    model.onExpandChange?(model.expanded)
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: model.expanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 8.5, weight: .semibold))
+                        Text(model.expanded ? "Hide the plan" : "Read the full plan")
+                            .font(.system(size: 10))
+                    }
+                    .foregroundStyle(Tokens.faint)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
+            }
             HStack(spacing: 8) {
                 countdown
                 Spacer()
@@ -199,7 +260,7 @@ struct ConfirmView: View {
             }
         }
         .padding(14)
-        .frame(width: Self.size.width, height: Self.size.height)
+        .frame(width: panelSize.width, height: panelSize.height)
         .background(
             RoundedRectangle(cornerRadius: 14)
                 .fill(LinearGradient(colors: [Tokens.surface, Tokens.roux], startPoint: .top, endPoint: .bottom))

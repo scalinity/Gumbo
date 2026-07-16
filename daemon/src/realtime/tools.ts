@@ -1,8 +1,9 @@
 import { tool } from '@openai/agents/realtime';
 import { z } from 'zod';
-import { appendFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { config } from '../config.ts';
+import { appendFileSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { basename, isAbsolute, join, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { config, secretFilePaths } from '../config.ts';
 import { webQuickLookup } from '../search/tavily.ts';
 import { xLookup } from '../search/grok.ts';
 import { runImageGeneration } from '../images/generate.ts';
@@ -37,7 +38,14 @@ export interface OrchestratorToolDeps {
   scheduler: Scheduler;
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
   imageContext: ImageEditContext;
+  /** Push a file onto the user's screen (shell document card → Gumbo's renderer).
+   *  Returns false when no shell is connected — nothing would be shown. */
+  presentFile: (payload: { title: string; file: string; path: string; content: string }) => boolean;
 }
+
+// present_file size cap: content rides the WS message inline; agent-written docs are tens
+// of KB, so this is a runaway guard, not a working budget.
+const PRESENT_FILE_MAX_CHARS = 300_000;
 
 export function createOrchestratorTools(manager: TaskManager, store: Store, deps: OrchestratorToolDeps) {
   const spawnSubagent = tool({
@@ -131,16 +139,37 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
 
   const getTaskStatus = tool({
     name: 'get_task_status',
-    description: 'Get the current status and recent activity of one background task.',
+    description:
+      "Get one background task's full picture: status, why it's paused (if it is), its original " +
+      'brief, the plan awaiting approval (if any), and recent activity. Use it to answer ANY ' +
+      'question about what a task is doing, did, or was originally asked to do — it works for ' +
+      'finished and cancelled tasks too, so you can always recover the original instructions.',
     parameters: z.object({ task_id: z.string() }),
     execute: async ({ task_id }) => {
       const task = store.getTask(task_id);
       if (!task) return `No task with id ${task_id}.`;
-      const recent = store
-        .listEvents({ taskId: task_id, limit: 5 })
+      // The 5-events × 200-chars digest this replaces left the voice model blind — it could
+      // see "paused, blocked" but not the brief, the plan, or what the session had done
+      // (live failure 2026-07-16). Everything below survives cancellation and restarts.
+      const parts = [`${task.title} — ${task.status}${task.kind === 'claude' ? ' (coding session)' : ''}`];
+      const brief = store.getClaudeSession(task_id)?.brief ?? store.getTaskBrief(task_id);
+      if (brief) parts.push(`Original brief: ${brief.slice(0, 800)}`);
+      const events = store.listEvents({ taskId: task_id, limit: 200 });
+      const lastStatus = [...events].reverse().find((e) => e.type === 'task.status');
+      const statusReason = (lastStatus?.payload as { reason?: string } | null)?.reason;
+      if (task.status === 'needs_input' && statusReason) parts.push(`Paused because: ${statusReason}`);
+      if (task.status === 'needs_input') {
+        // Direct SQL, not the 200-event window above — a chatty session can push the
+        // plan event out of the slice while it's still the one awaiting approval.
+        const plan = (store.getLatestEventPayload(task_id, 'claude.plan') as { plan?: string } | null)?.plan;
+        if (plan && plan !== '{}') parts.push(`Claude's plan (awaiting the user's approval — read it to him on request):\n${plan.slice(0, 3000)}`);
+      }
+      const recent = events
+        .slice(-12)
         .map((e) => `${e.type}: ${JSON.stringify(e.payload).slice(0, 200)}`)
         .join('\n');
-      return `${task.title} — ${task.status}\nRecent activity:\n${recent}`;
+      parts.push(`Recent activity (oldest first):\n${recent}`);
+      return parts.join('\n\n');
     },
   });
 
@@ -316,6 +345,62 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     },
   });
 
+  // File presentation (2026-07-16): a coding session's deliverable is often a FILE (a
+  // spec, a doc) — the user shouldn't have to dig through Finder to see it. The daemon reads
+  // the file and pushes it to the shell, which shows a document card that opens in Gumbo's
+  // own markdown renderer. Guards: absolute path only, secret paths refused, text only,
+  // size-capped.
+  const presentFileTool = tool({
+    name: 'present_file',
+    description:
+      'Show the user a file on his screen — a document card appears in the corner and opens in a ' +
+      'clean reader (markdown rendered nicely). Use whenever a task produced a file (a spec, ' +
+      'plan, report, doc, or code) and the user should see it — offer it instead of telling him ' +
+      'to go find the file himself. Pass the absolute path exactly as it appears in the task ' +
+      'report or activity.',
+    parameters: z.object({
+      path: z.string().describe('Absolute path of the file to show'),
+      title: z.string().nullable().describe('Short display title for the card; null → the filename'),
+    }),
+    execute: async ({ path, title }) => {
+      const expanded = path.startsWith('~') ? join(homedir(), path.slice(1)) : path;
+      if (!isAbsolute(expanded)) return `Pass an absolute path — got "${path}".`;
+      const real = resolve(expanded);
+      if (secretFilePaths.some((s) => { const sec = resolve(s); return real === sec || real.startsWith(sec + sep); })) {
+        return 'That file is under a protected path and cannot be shown.';
+      }
+      let content: string;
+      try {
+        // resolve() above doesn't follow symlinks but the reads below do — re-check the
+        // real target so a link can't smuggle a protected file past the string check.
+        // (The string check stays first: it must refuse protected paths that don't exist,
+        // where realpathSync would throw into the generic could-not-read message.)
+        const realResolved = realpathSync(real);
+        if (secretFilePaths.some((s) => { const sec = resolve(s); return realResolved === sec || realResolved.startsWith(sec + sep); })) {
+          return 'That file is under a protected path and cannot be shown.';
+        }
+        if (statSync(realResolved).size > PRESENT_FILE_MAX_CHARS * 4) {
+          return 'That file is too large to present on screen — summarize it for the user instead.';
+        }
+        content = readFileSync(realResolved, 'utf8');
+      } catch {
+        return `Could not read ${real} — check the path (it must exist on this Mac).`;
+      }
+      if (content.includes('\u0000')) return 'That looks like a binary file — only text files can be presented.';
+      const name = basename(real);
+      const shown = deps.presentFile({
+        title: title?.trim() || name,
+        file: name,
+        path: real,
+        content: content.slice(0, PRESENT_FILE_MAX_CHARS),
+      });
+      store.addEvent(null, 'file.presented', { path: real, shown });
+      return shown
+        ? 'It is on the user\'s screen now — the document card in the corner opens the full view. Tell him it\'s up.'
+        : 'No shell is connected, so nothing can be shown on screen — tell the user, and offer to read it aloud instead.';
+    },
+  });
+
   // Hot path: Tavily, hard-capped at config.search.quickLookupTimeoutMs, no retries. The
   // description below IS the router between this and spawn_subagent — its wording is part
   // of the spec; don't loosen it.
@@ -359,6 +444,6 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   return [
     spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, xLookupTool,
     generateImage, editImageTool, setReminder, listReminders, cancelReminder,
-    listTasks, getTaskStatus, cancelTask, readReport, saveNote,
+    listTasks, getTaskStatus, cancelTask, readReport, saveNote, presentFileTool,
   ];
 }
