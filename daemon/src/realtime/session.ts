@@ -389,7 +389,14 @@ export class Orchestrator {
       return;
     }
     this.resetIdleTimer();
-    const announceInstructions = `Briefly tell the user that the background task "${task.title}" just finished with status "${task.status}". One or two sentences; offer to share details. Do not mention any task id.`;
+    // Delivery-first: the announcement IS the answer. The old "task finished — want the
+    // details?" script forced the user to re-confirm a question he'd already asked (live
+    // finding: the score sat on disk 25 s while Gumbo asked permission to say it).
+    // The report is embedded inline so delivery never depends on a follow-up tool call.
+    const report = task.status === 'done' ? this.manager.readReport(task.id) : null;
+    const announceInstructions = report
+      ? `The background task "${task.title}" just completed; its report is between the <report> tags below. Deliver the outcome to the user now, conversationally. Lead with the direct answer or key finding in one to three sentences — if the user asked a question this task was spawned to answer, answer that question first, plainly. Do not say a task "finished", do not mention statuses or task ids, and do not ask whether he wants the results — give them. Afterwards you may briefly offer more detail if the report holds meaningfully more.\n<report>\n${report.slice(0, 2500)}\n</report>`
+      : `The background task "${task.title}" ${task.status === 'failed' ? 'failed' : `was ${task.status}`}. Tell the user briefly and offer to retry or dig into what happened. Do not mention any task id.`;
     const transport = this.session.transport as TransportLike;
     if (typeof transport.requestResponse === 'function') {
       transport.requestResponse({ instructions: announceInstructions });

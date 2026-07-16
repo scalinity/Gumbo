@@ -506,3 +506,24 @@ v2 is a per-pixel **Metal shader** (`Orb.metal`, SwiftUI `colorEffect` stitchabl
   hourly `truncatingRemainder`); Xcode 27 ships the Metal compiler as a **downloadable
   component** (`xcodebuild -downloadComponent MetalToolchain`, ~840 MB — was missing);
   Reduce Motion freezes flow + breath.
+
+### Flow review from the user's World Cup session (2026-07-15, late night)
+
+Transcript forensics (event store) found two failure modes, both fixed:
+
+- **Announce-then-ask-permission (3× in one session; worst case: the user asked "what was
+  the score?", the answer landed on disk at 21:59:53, and Gumbo replied "the background
+  task finished with status done — want the score?" → 25 s + a re-confirm for an
+  already-asked question).** Root cause: the live announce instructions *scripted* that
+  behavior ("say it finished... offer to share details"). Now delivery-first: the report
+  (≤2.5 k chars) is embedded inline in the announce instructions and the model is told to
+  lead with the direct answer — answering the user's pending question first if the task was
+  spawned for one — and never to ask permission or say "finished/status". Inline embed
+  also means delivery can't depend on the out-of-band response being able to call tools.
+- **Stale "upcoming" reporting on time-sensitive briefs:** the World Cup report described
+  a match as happening "today" (preview framing) when it had already ended — while the
+  follow-up task found the final score in 9 s with the same Exa tool. Sub-agents are now
+  instructed: for news/scores/"today" briefs, snippets are often stale previews — run a
+  follow-up search to check whether scheduled events have ALREADY CONCLUDED and report
+  outcomes, stating explicitly what couldn't be confirmed. (Kept instruction-level; no
+  Exa API changes — the tool demonstrably finds fresh results when asked.)

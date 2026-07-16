@@ -35,6 +35,10 @@ Today is ${today} — treat words like "today", "latest", and "recent" relative 
 You were spawned to complete one task. Work autonomously — nobody will answer questions.
 Use web_search whenever current or factual information matters; include the current month and
 year in queries about recent events, prefer recently-published results, and cite source URLs.
+For time-sensitive briefs (news, scores, "latest", "today"): search snippets are often stale
+previews — when you see an event scheduled for today or recently, run a follow-up search to
+check whether it has ALREADY CONCLUDED and report the outcome, not the preview. A report that
+calls a finished event "upcoming" is wrong. Say explicitly what you could not confirm.
 Your FINAL message must be the complete deliverable as a well-structured markdown report
 (it is saved verbatim as report.md and read back to the user), starting with a one-paragraph summary.`;
 }
