@@ -56,17 +56,29 @@ async function synthesize(hub: Hub, text: string): Promise<void> {
     const detail = await res.text().catch(() => '');
     throw new Error(`tts ${res.status}: ${detail.slice(0, 200)}`);
   }
-  // Forward chunks as they arrive (announcement starts before synthesis finishes). An
-  // HTTP chunk can split a 16-bit sample; carry the odd byte so no frame boundary can
-  // byte-shift the remainder of the stream into noise.
+  // Forward chunks as they arrive (announcement starts before synthesis finishes).
   let carry: Buffer | null = null;
   for await (const chunk of res.body) {
-    let buf: Buffer = carry ? Buffer.concat([carry, Buffer.from(chunk)]) : Buffer.from(chunk);
-    carry = null;
-    if (buf.byteLength % 2 === 1) {
-      carry = buf.subarray(buf.byteLength - 1);
-      buf = buf.subarray(0, buf.byteLength - 1);
+    const aligned = alignPcm16(Buffer.from(chunk), carry);
+    carry = aligned.carry;
+    if (aligned.frame.byteLength > 0) {
+      hub.sendBinary(Buffer.concat([TTS_HEADER, aligned.frame]), 'shell');
     }
-    if (buf.byteLength > 0) hub.sendBinary(Buffer.concat([TTS_HEADER, buf]), 'shell');
   }
+}
+
+/**
+ * Split a byte stream into pcm16-sample-aligned frames: an HTTP chunk can split a 16-bit
+ * sample, and an odd-length frame would byte-shift the remainder of the stream into
+ * noise. Returns the even-length frame to send now and the carried odd byte (copied —
+ * incoming chunk memory may be pooled) to prepend to the next chunk. Pure; unit-tested.
+ */
+export function alignPcm16(chunk: Buffer, carry: Buffer | null): { frame: Buffer; carry: Buffer | null } {
+  let frame = carry ? Buffer.concat([carry, chunk]) : chunk;
+  let nextCarry: Buffer | null = null;
+  if (frame.byteLength % 2 === 1) {
+    nextCarry = Buffer.from(frame.subarray(frame.byteLength - 1));
+    frame = frame.subarray(0, frame.byteLength - 1);
+  }
+  return { frame, carry: nextCarry };
 }
