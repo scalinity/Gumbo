@@ -700,7 +700,8 @@ commits (9addb00…2f8959a), each built/tested, pushed to origin. Highlights:
   existing callers didn't move. `FIRECRAWL_API_KEY` joined boot validation + `.env`.
 - Persistence reuses the memory table verbatim: `persistResults` grew a `provider` param
   (default `'exa'`), so every scraped/crawled page lands FTS5-indexed with source URL +
-  retrieval timestamp. Extract output is persisted as one row of pretty-printed JSON.
+  retrieval timestamp. Extract output is persisted as one pretty-printed-JSON row **per
+  source URL** (≤10) so every memory record carries its own provenance.
 
 ### Verified against docs.firecrawl.dev + firecrawl.dev/pricing (2026-07-15)
 - Endpoints: `POST /v2/scrape` (sync), `POST /v2/map` (sync), `POST /v2/crawl` → job id,

@@ -258,11 +258,12 @@ function createSubagentTools(taskId: string, store: Store, signal: AbortSignal) 
       try {
         const data = await firecrawlExtract(urls, { schema: parsedSchema, prompt, signal });
         const json = JSON.stringify(data, null, 2);
+        // One memory row per source URL (max 10) so every record carries its own provenance.
         persistResults(
           store,
           taskId,
           `extract: ${urls.join(' ')}`,
-          [{ title: 'structured extraction', url: urls[0], text: json }],
+          urls.map((u) => ({ title: 'structured extraction', url: u, text: json })),
           'firecrawl',
         );
         return json;
