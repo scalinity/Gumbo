@@ -171,16 +171,15 @@ function createSubagentTools(taskId: string, store: Store, signal: AbortSignal) 
     description:
       "List the URLs of a website you already know (Firecrawl /map) — cheap, fast site-structure " +
       'discovery. Prefer map_site followed by scrape_page on the few URLs that matter over ' +
-      'crawl_site, which costs credits per page. Optionally order the list by a search term. This ' +
+      'crawl_site, which costs credits per page. This ' +
       'lists ONE known site’s pages; it does not search the web.',
     parameters: z.object({
       url: z.string(),
-      search: z.string().nullable().describe('Optional term to order results by relevance, e.g. "changelog"'),
       limit: z.number().int().min(1).max(5000).default(500),
     }),
-    async execute({ url, search, limit }) {
+    async execute({ url, limit }) {
       try {
-        const links = await firecrawlMap(url, { search, limit, signal });
+        const links = await firecrawlMap(url, { limit, signal });
         return links.map((l) => (l.title ? `${l.url} — ${l.title}` : l.url)).join('\n');
       } catch (err) {
         return describeToolFailure('map_site', err);

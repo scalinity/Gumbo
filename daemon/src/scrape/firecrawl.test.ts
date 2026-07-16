@@ -135,13 +135,13 @@ test('5xx retried max twice, then http error', async () => {
 
 // ---------- map ----------
 
-test('map serialization: /v2/map, bounded default limit, search passthrough', async () => {
+test('map serialization: /v2/map, bounded default limit, limit override', async () => {
   const calls = mockRoutes(() => ({ success: true, links: [{ url: 'https://a.test/docs', title: 'Docs' }] }));
   await firecrawlMap('https://a.test');
-  await firecrawlMap('https://a.test', { search: 'changelog', limit: 42 });
+  await firecrawlMap('https://a.test', { limit: 42 });
   assert.equal(calls[0].url, 'https://api.firecrawl.dev/v2/map');
   assert.deepEqual(JSON.parse(String(calls[0].init.body)), { url: 'https://a.test', limit: 500 });
-  assert.deepEqual(JSON.parse(String(calls[1].init.body)), { url: 'https://a.test', limit: 42, search: 'changelog' });
+  assert.deepEqual(JSON.parse(String(calls[1].init.body)), { url: 'https://a.test', limit: 42 });
 });
 
 test('map parses links and audits with link count', async () => {

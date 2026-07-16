@@ -127,7 +127,7 @@ export async function firecrawlScrape(
 /** Map a site's URL structure (sync) — the cheap pre-crawl discovery step. */
 export async function firecrawlMap(
   url: string,
-  opts: { search?: string | null; limit?: number | null; signal?: AbortSignal } = {},
+  opts: { limit?: number | null; signal?: AbortSignal } = {},
 ): Promise<FirecrawlLink[]> {
   try {
     const raw = await auditedCall<{ success?: boolean; links?: Array<{ url?: string; title?: string }> }>('/map', url, {
@@ -137,7 +137,6 @@ export async function firecrawlMap(
       body: {
         url,
         limit: opts.limit ?? config.firecrawl.mapDefaultLimit,
-        ...(opts.search ? { search: opts.search } : {}),
       },
       timeoutMs: config.firecrawl.mapTimeoutMs,
       retries: 2,
