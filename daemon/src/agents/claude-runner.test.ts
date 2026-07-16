@@ -80,8 +80,12 @@ test('buildSandboxProfile: confines writes to cwd + workspace, denies secret rea
   // M4.1 network default-deny: deny all direct egress, re-allow ONLY loopback to the proxy.
   assert.ok(p.includes('(deny network*)'), 'all direct network denied');
   assert.ok(p.includes('(allow network-outbound (remote ip "localhost:49152"))'), 'loopback to the proxy port re-allowed');
-  assert.ok(p.includes('(allow network-bind (local ip "localhost:*"))'), 'local bind allowed');
-  assert.ok(p.includes('(allow network-outbound (remote unix-socket))'), 'unix-socket egress allowed (local IPC)');
+  // review 🔴: DNS must be forced through the proxy — deny the mDNSResponder mach ports so
+  // getaddrinfo can't bypass the proxy (the DNS-label exfil channel). And the blanket
+  // unix-socket egress allow is dropped (local-network-bridge exposure).
+  assert.ok(p.includes('(deny mach-lookup (global-name "com.apple.mDNSResponder"))'), 'mDNSResponder mach-lookup denied (no DNS bypass)');
+  assert.ok(p.includes('(deny mach-lookup (global-name "com.apple.mDNSResponder.dnsproxy"))'), 'mDNSResponder dnsproxy denied');
+  assert.ok(!p.includes('(allow network-outbound (remote unix-socket))'), 'blanket unix-socket egress allow dropped');
   // last-match-wins: deny-network must come AFTER (allow default), and the loopback re-allow
   // AFTER the deny — otherwise the proxy would be unreachable and every request would fail.
   assert.ok(p.indexOf('(allow default)') < p.indexOf('(deny network*)'), 'deny-network overrides allow-default');

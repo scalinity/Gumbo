@@ -164,13 +164,21 @@ export function buildSandboxProfile(cwd: string, taskId: string, proxyPort: numb
     ...claudeExecSurfaces.map((p) => `(deny file-write* (subpath ${q(p)}))`), // after the allows — last-match-wins
     ...readDenied.map((p) => `(deny file-read* (subpath ${q(p)}))`),
     // Network default-deny, then re-allow ONLY loopback to the egress proxy (last-match-wins,
-    // so these override `(allow default)`). No DNS rule needed — the confined process only
-    // connects to 127.0.0.1:<proxyPort>; the unsandboxed proxy resolves the real host upstream.
-    // unix-socket egress is allowed for local IPC (not real network).
+    // so these override `(allow default)`). The confined process only connects to
+    // 127.0.0.1:<proxyPort> (a numeric literal — Node skips getaddrinfo for it) and sends
+    // hostname CONNECTs the proxy resolves upstream, so it needs no local name resolution.
     '(deny network*)',
     `(allow network-outbound (remote ip "localhost:${proxyPort}"))`,
     '(allow network-bind (local ip "localhost:*"))',
-    '(allow network-outbound (remote unix-socket))',
+    // review 🔴: `(deny network*)` only blocks the process's OWN sockets. getaddrinfo/dns.lookup
+    // resolve via mDNSResponder — a separate daemon reached over mach IPC that `(allow default)`
+    // still permits — so DNS queries bypass the proxy entirely (verified: a DNS-label exfil of the
+    // Keychain token worked before this deny). Deny the resolver's mach ports so ALL name
+    // resolution is forced through the proxy. The blanket unix-socket egress allow is also dropped
+    // (it exposed local network bridges like /var/run/docker.sock); verified the CLI still
+    // auths/infers/MCPs through the proxy without it.
+    '(deny mach-lookup (global-name "com.apple.mDNSResponder"))',
+    '(deny mach-lookup (global-name "com.apple.mDNSResponder.dnsproxy"))',
     '', // trailing newline
   ].join('\n');
 }
