@@ -1,16 +1,30 @@
 import { Agent, run, tool, codeInterpreterTool } from '@openai/agents';
 import { z } from 'zod';
-import { config } from '../config.ts';
+import { config, todayLabel } from '../config.ts';
 import type { Store } from '../events/store.ts';
 import { exaSearch, exaContents, type ExaResult } from '../search/exa.ts';
 import { SearchError } from '../search/client.ts';
 
-const INSTRUCTIONS = `You are a background sub-agent working for Gumbo, a personal voice assistant.
+// Rebuilt per run so the date is always current — without it the model assumes its
+// training-data "today" and returns stale results for time-sensitive briefs.
+function instructions(): string {
+  return `You are a background sub-agent working for Gumbo, a personal voice assistant.
+Today is ${todayLabel()} — treat words like "today", "latest", and "recent" relative to that date.
 You were spawned to complete one task. Work autonomously — nobody will answer questions.
-Use web_search whenever current or factual information matters; when the highlights aren't enough,
-follow up with fetch_page_contents on the most promising URLs to read them in full. Cite source URLs.
+Use web_search whenever current or factual information matters; include the current month and
+year in queries about recent events, prefer recently-published results, and cite source URLs.
+When the highlights aren't enough, follow up with fetch_page_contents on the most promising
+URLs to read them in full.
+For time-sensitive briefs (news, scores, "latest", "today"): search snippets are often stale
+previews — when you see an event scheduled for today or recently, run a follow-up search to
+check whether it has ALREADY CONCLUDED and report the outcome, not the preview. A report that
+calls a finished event "upcoming" is wrong. Say explicitly what you could not confirm.
+Scope searches with web_search's max_age_days: 1 when the brief says "today", 2–7 for "this
+week" — this excludes stale sources at the API level. Loosen it only if a tight search comes
+back empty, and say so if you had to.
 Your FINAL message must be the complete deliverable as a well-structured markdown report
 (it is saved verbatim as report.md and read back to the user), starting with a one-paragraph summary.`;
+}
 
 function formatResults(results: ExaResult[]): string {
   return results
@@ -74,10 +88,19 @@ function createSubagentTools(taskId: string, store: Store, signal: AbortSignal) 
     parameters: z.object({
       query: z.string(),
       tier: z.enum(['fast', 'auto', 'deep']).default('auto'),
+      max_age_days: z
+        .number()
+        .int()
+        .min(1)
+        .max(365)
+        .nullable()
+        .describe(
+          'Hard recency filter: only pages published within the last N days. Use 1 for "today" briefs, 2–7 for "this week". Pass null for evergreen topics.',
+        ),
     }),
-    async execute({ query, tier }) {
+    async execute({ query, tier, max_age_days }) {
       try {
-        const results = await exaSearch(query, { tier, signal });
+        const results = await exaSearch(query, { tier, signal, maxAgeDays: max_age_days });
         persistResults(store, taskId, query, results);
         return formatResults(results);
       } catch (err) {
@@ -125,7 +148,7 @@ export async function runSubagent(opts: {
   const { taskId, brief, store, signal } = opts;
   const agent = new Agent({
     name: `subagent-${taskId}`,
-    instructions: INSTRUCTIONS,
+    instructions: instructions(),
     model: config.models.subagent,
     tools: createSubagentTools(taskId, store, signal),
   });

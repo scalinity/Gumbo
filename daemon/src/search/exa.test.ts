@@ -64,6 +64,24 @@ test('tier "deep" is passed through for research-class tasks', async () => {
   assert.equal(JSON.parse(String(calls[0].init.body)).type, 'deep');
 });
 
+test('maxAgeDays maps to a hard startPublishedDate cutoff (now − N days, ISO 8601)', async () => {
+  const calls = capture();
+  const before = Date.now();
+  await exaSearch('q', { maxAgeDays: 7 });
+  const body = JSON.parse(String(calls[0].init.body));
+  const cutoff = Date.parse(body.startPublishedDate);
+  assert.ok(Number.isFinite(cutoff), 'startPublishedDate is a parseable ISO timestamp');
+  assert.ok(Math.abs(cutoff - (before - 7 * 86_400_000)) < 5_000, 'cutoff ≈ now − 7 days');
+});
+
+test('omitted or null maxAgeDays sends no recency filter', async () => {
+  const calls = capture();
+  await exaSearch('q');
+  await exaSearch('q2', { maxAgeDays: null });
+  assert.ok(!String(calls[0].init.body).includes('startPublishedDate'));
+  assert.ok(!String(calls[1].init.body).includes('startPublishedDate'));
+});
+
 test('contents serialization: urls + full text, unclamped', async () => {
   const calls = capture();
   await exaContents(['https://example.com/a', 'https://example.com/b']);

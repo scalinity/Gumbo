@@ -35,6 +35,15 @@ async function bootstrap() {
   useStore.getState().bootstrap(tasks, events);
 }
 
+// Shell deep-link (M3): a bubble click lands on that task's view. Module-scope hook,
+// called by the Swift shell via evaluateJavaScript — same no-useEffect discipline.
+declare global {
+  interface Window {
+    __gumboSelectTask?: (id: string) => void;
+  }
+}
+window.__gumboSelectTask = (id: string) => useStore.getState().selectTask(id);
+
 export function sendDebugText(text: string) {
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'debug_text', text }));

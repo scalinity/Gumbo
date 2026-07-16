@@ -33,7 +33,7 @@ const FULL_CONTENTS = { text: true, highlights: true };
 /** Background Exa /search with full contents. `deep` is for explicitly research-class tasks. */
 export async function exaSearch(
   query: string,
-  opts: { tier?: ExaTier; numResults?: number; signal?: AbortSignal } = {},
+  opts: { tier?: ExaTier; numResults?: number; signal?: AbortSignal; maxAgeDays?: number | null } = {},
 ): Promise<ExaResult[]> {
   const tier = opts.tier ?? 'auto';
   let raw: ExaResponse;
@@ -47,6 +47,11 @@ export async function exaSearch(
         type: tier,
         numResults: opts.numResults ?? config.search.backgroundNumResults,
         contents: FULL_CONTENTS,
+        // Maps to Exa's startPublishedDate — a hard API-level cutoff, not a prompt hint.
+        // Verified live (M3 pass): with 1 day, every result's publishedDate fell inside 24 h.
+        ...(opts.maxAgeDays != null && {
+          startPublishedDate: new Date(Date.now() - opts.maxAgeDays * 86_400_000).toISOString(),
+        }),
       },
       // deep runs multi-step searches server-side; give it real room.
       timeoutMs: tier === 'deep' ? 180_000 : 60_000,

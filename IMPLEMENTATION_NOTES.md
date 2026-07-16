@@ -16,10 +16,12 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 - **M2 — Swift shell + voice:** ✅ complete — live-validated with the user (voice round-trips
   through the signed shell). Two follow-ups to observe in daily use: voice-exercised barge-in
   and the TCC rebuild-persistence check.
-- **M3–M6:** not started. See SPEC §9.
-- **Web search providers (side feature, branch `worktree-web-search-providers`):** ✅ built +
+- **M3 — Completion presence:** ✅ complete — live-validated with the user, review+address pass
+  done, merged to main (see §M3 below).
+- **Web search providers (side feature, merged from `worktree-web-search-providers`):** ✅ built +
   verified — Tavily on the voice hot path (`web_quick_lookup`), Exa for background sub-agents,
-  FTS5 memory persistence, JSONL search audit log. See section at the bottom.
+  FTS5 memory persistence, JSONL search audit log. See §Web search providers below.
+- **M4–M6:** not started. See SPEC §9.
 
 ---
 
@@ -399,3 +401,284 @@ Two Opus reviewers (debugger + code-auditor) reviewed the changeset: 0 critical,
 - **GOTCHA (test runner):** `node --test <pattern>` exits **0** when the pattern matches zero
   files — a wrong glob or cwd silently "passes". Bit us once mid-review (ran from repo root
   instead of `daemon/`); there's no non-hacky guard, so just check the reported test count.
+---
+## M3 — Completion presence (built; live demo pending)
+
+### Build — daemon cold TTS + bubble/pulse wiring, shell bubbles + pulse (2026-07-15)
+
+**Daemon:**
+- `config.ts`: `models.tts: 'gpt-4o-mini-tts'` + `bubbleLingerMs: 12_000`. **Verified against
+  the live API before building:** `/v1/audio/speech` accepts the **`marin`** voice on this
+  model (announcements match the realtime session's voice) with `response_format: 'pcm'` →
+  **24 kHz mono pcm16 — the shell's exact wire format, zero transcoding** (a one-line test
+  sentence returned 194,400 bytes ≈ 4.05 s at 48,000 B/s, confirming the rate).
+- `audio/announce.ts`: plain template text per terminal status (no LLM call) +
+  `speakAnnouncement` — streams HTTP chunks out as `0x02` frames *as they arrive* (playback
+  starts before synthesis finishes). Two deliberate details: a **carry byte** keeps every
+  frame sample-aligned (an HTTP chunk can split a 16-bit sample; an odd frame would
+  byte-shift the rest of the stream into static), and announcements are **serialized through
+  a promise queue** (two tasks finishing together must not interleave frames into the
+  shell's single player). The queue swallows its own rejections so one failed TTS can't
+  wedge all future announcements.
+- `realtime/session.ts` cold branch: still persists `announce.pending` (dashboard record),
+  then speaks cold **only if a shell is connected** (`hub.hasRole('shell')` — no listener,
+  no synthesis spend). Never opens a realtime session to announce (locked decision).
+- `index.ts`: a second `store.onEvent` listener maps the task lifecycle to shell messages —
+  `task.created` → `bubble_upsert` (running); `task.finished` → `bubble_upsert` (terminal) +
+  `notch_pulse`, then `bubble_remove` after the linger. Registered **after** the restart
+  reaper runs, so tasks reaped on boot don't pulse a shell that isn't even connected yet.
+  `hub.onHello` re-sends running bubbles to a (re)connecting shell — shell relaunches and
+  tsx-watch daemon restarts are routine, so bubbles must be re-syncable, not fire-and-forget.
+- `ws/hub.ts`: `onHello(handler)` + `hasRole(role)`. `ws/protocol.ts`: `bubble_upsert` /
+  `bubble_remove` / `notch_pulse` shapes (`BubbleStatus` = running|done|failed|cancelled).
+
+**Shell:**
+- `Bubbles/BubbleController.swift` (new): one borderless **non-activating** `NSPanel` per
+  task (`.statusBar` level, joins all Spaces, never activates the app on click), stacked
+  upper-right inside `visibleFrame`, newest on top, animated restack. Visuals reuse the
+  dashboard's exact tokens (`--bg`/`--line`/`--ember`/`--bay`/`--alarm`/`--faint`); the
+  running dot breathes on the dashboard's 1.6 s pulse cadence. Click → dashboard at that
+  task's view. A **30 s local failsafe** removes terminal bubbles even if the daemon dies
+  during its 12 s linger window (otherwise a zombie bubble would sit there forever).
+- `NotchController.pulse(status:)`: 2.6 s transient — bay/alarm/faint ripple + "Task
+  finished/failed/cancelled" title. It only decorates the **idle** notch: if a live session
+  is displaying (e.g. the shell is playing the announcement, so `playbackDraining` holds
+  'speaking'), the session display wins — 'speaking' is the more truthful presence. The
+  hide-debounce now also refuses to hide mid-pulse.
+- `DashboardWindow.show(taskId:)`: deep-links via `window.__gumboSelectTask(id)` — a
+  module-scope hook added in `dashboard/src/ws.ts` (no `useEffect`; the store's existing
+  `selectTask` already renders the task-filtered feed + report panel). Retries 5×/0.6 s
+  because the hook isn't installed until the page finishes loading on first open. Task id
+  is sanitized (alphanumeric + hyphen) before JS interpolation.
+- `App.swift`: `0x02` frames take the **exact `0x01` playback path** — `start(reason:
+  .playback)` + `playChunk`; the M2 `pendingPlayback` queue already covers the cold engine
+  start, so nothing in AudioEngine changed.
+
+**Verified (smokes, 2026-07-15):**
+- *Cold path* (real daemon modules on a test port, fake shell WS client): calling
+  `announceTaskFinished` with no session persisted exactly one `announce.pending`, produced
+  **zero `session.opened`**, zero `session.error`, and delivered **81 `0x02` frames, every
+  one sample-aligned** — 3.45 s of pcm, peak 18,102 (healthy speech), 2.5 s end-to-end.
+- *Lifecycle* (the real `src/index.ts`, real spawned sub-agent via `debug_text`):
+  `bubble_upsert` running on spawn → dropped + reconnected the fake shell mid-task and the
+  running bubble was **re-sent on hello** → `bubble_upsert` done + `notch_pulse` on finish →
+  `bubble_remove` arrived after the 12 s linger; the live-path announcement flowed as `0x01`
+  audio (session was open — M1/M2 path intact).
+- Shell builds clean and **signs with the real Apple Development cert** (identity valid in
+  keychain; no WWDR re-import needed this time).
+
+**Still to observe live with the user (SPEC M3 demo — SPEC stays unmarked until then):**
+voice-spawn a task → walk away → session idle-closes → bubble flips bay + notch pulses +
+**cold** spoken announcement (verify via events: no `session.opened` around it); plus the
+two M2 carry-overs on this rebuild — TCC grants (mic + Accessibility) must NOT re-prompt,
+and voice barge-in should stop playback <200 ms.
+
+**Known edge (accepted for M3):** pressing ⌃⌥ *during* a cold announcement can briefly
+overlap realtime reply audio with the TTS tail in the shared player; barge-in's
+`playback_flush` clears both. Fixing it properly means separate playback channels — deferred.
+
+### Follow-up — mic-free playback graph (2026-07-15, from the user's live report)
+
+the user saw the **orange mic indicator whenever the app ran**. Cause: the M2 engine was a
+single always-VPIO graph — macOS lights the indicator when the *input unit is open*, not
+when frames stream, so pure playback (replies, announcements) and the 75 s idle linger all
+kept it lit even though mic frames only ever flow while ⌃⌥ is held. Fix, per the user's ask:
+
+- `AudioEngine` now has **two graph modes**: `playbackOnly` (player graph only, `inputNode`
+  never touched → **no mic indicator**; also plays without mic permission) for `.playback`
+  starts, and `duplex` (VPIO + tap, the full M2 graph) for `.ptt`. All the M2 ordering
+  gotchas (-10875 / -10851 / ch0 extraction) unchanged inside the duplex branch.
+- Playback became **queue-based** (≤3 buffers scheduled ahead, rest stays as pcm `Data`):
+  a ⌃⌥ press during mic-free playback swaps the graph **live** and the unscheduled queue
+  survives the switch — press-and-stay-silent still hears the rest of an announcement.
+  Only the in-flight fraction (≲⅓ s) is lost at the swap. This queue also subsumes the old
+  `pendingPlayback` pre-start buffer.
+- Engine idle-stop **75 s → 8 s** (long linger existed only because stopping was the sole
+  way to drop the indicator; now playback restarts are mic-free anyway).
+
+**Trade-offs (flagged to the user):** the indicator legitimately stays on from press until
+~8 s after the reply finishes draining — rebuilding the graph at press instead would add
+~150 ms+ to barge-in and risk the <200 ms bar; and ⌃⌥ during a mic-free announcement can
+clip a beat of that audio at the graph swap. Verified: builds + signs clean; relaunched
+live. To observe: no dot at idle / during cold announcements; dot appears on press, clears
+~8 s after the reply.
+
+### Fixes from the user's first real M3 run (2026-07-15, evening)
+
+the user ran a real "latest AI news today" task: cold announcement spoke ✅, **voice barge-in
+verified live ✅** (M2 follow-up #2 closed). Three defects + one TCC finding, all fixed:
+
+- **Bubbles weren't clickable.** The panel is borderless + non-activating, so it never
+  becomes key → **every click is a "first mouse" and NSView discards those by default** —
+  the SwiftUI tap gesture never fired. Fix: `FirstMouseHostingView` (NSHostingView subclass,
+  `acceptsFirstMouse → true`). Click opens the dashboard filtered to that task (SPEC M3
+  behavior; the §1 "expand its activity" mini-panel-on-the-bubble remains a possible later
+  enhancement).
+- **Models thought "today" was March 31st.** Nothing injected the current date, so both the
+  orchestrator and sub-agents fell back to training-data time — a "latest news" brief
+  returned stale results and Gumbo answered the date question wrong. Fix: both instruction
+  sets are now built per-session/per-run with today's date (orchestrator sessions are
+  short-lived, so session-creation time is fresh enough); sub-agents are told to put the
+  current month/year into recency-sensitive searches and prefer recently-published results.
+- **Task ids were read aloud.** The live announce instructions literally included
+  `(id ${task.id})`, and the voice model echoes `spawn_subagent`'s "Started background task
+  91e71759…" verbatim. Fix: id removed from announce instructions ("do not mention any task
+  id"), a hard "NEVER say a task id out loud — refer to tasks by title" rule in the
+  orchestrator instructions, and the spawn tool result marks its id as internal.
+- **TCC (risk #3, root-caused): Accessibility re-prompted on every launch.** The app's
+  designated requirement is correct and stable (`identifier + anchor + cert leaf`, no
+  cdhash — verified with `codesign -d -r-`), so rebuilds *should* keep the grant. The stale
+  **ad-hoc-era TCC row** was the culprit: ad-hoc requirements are cdhash-based (per-build),
+  and re-toggling that old row in System Settings after the cert change kept the obsolete
+  requirement → untrusted at every launch. Fixed with `tccutil reset Accessibility
+  ai.scalinity.Gumbo` + one fresh grant against the real-cert build. **The next rebuild is
+  the persistence proof.** (Mic never re-prompted — its row was created fresh post-cert,
+  which corroborates the diagnosis.)
+
+### M3.1 — playback-truthful state, read-along transcript, coal orbs + mini panel (2026-07-15, late)
+
+the user's second real run surfaced two bugs (dashboard flipped to *idle* mid-report-read;
+notch transcript froze at "Here are the highlights, the user.") and two design asks (bubble
+should expand **in place** into a mini observability panel, not open the dashboard; and
+become a breathing orb). Diagnosed from the **event store, not guesswork** — the sqlite log
+had the whole turn (also confirmed there: the date fix works — the 7 PM sub-agent searched
+"July 15 2026" vs the 6:49 run's "March 31, 2026" — and announcements no longer speak ids).
+
+- **Notch transcript freeze, root cause:** the persisted reply is markdown with hard
+  newlines; the notch line renders with `lineLimit(1)`, and SwiftUI shows only the text
+  before the first `\n` — head truncation never gets to act. Deltas were flowing fine.
+  Fix: flatten `\n` on append.
+- **Read-along pacing:** generation runs several× faster than speech, so even unfrozen,
+  the line would show the report's *end* within seconds. AudioEngine now reports playback
+  progress (wire-frames played ÷ enqueued, per drain-stream) and the notch reveals
+  `transcript.prefix(fraction)` — the line now tracks what the user is actually *hearing*.
+  Unpaced (no active playback) → reveal immediately.
+- **Dashboard idle-while-speaking + mid-read session close:** daemon state tracked
+  *generation* (`turn_done`), which ended at 19:01:49 while audio played for minutes (the
+  session even idle-closed at 19:02:49 mid-read). Shell now sends `playback_state
+  {draining}`; the daemon holds `speaking` (incl. for cold announcements — truthful
+  presence with no session), never idle-closes while draining, and clears the flag if the
+  shell disconnects (`hub.onClose`). Dashboard needed no changes.
+- **`session.error` was logging `"[object Object]"`** (three in tonight's log) — SDK errors
+  are nested objects; now JSON-stringified. Next real error will actually say something.
+- **Playback queue cap 512 → 4096:** the M3 pump refactor routed *all* audio through the
+  capped queue; 512 × ~200 ms ≈ 100 s — a long report read would have silently dropped
+  chunks mid-read. Caught by review, not observed live (tonight's read fit).
+- **Coal orbs (design):** bubbles are now breathing orbs grounded in Gumbo's own idiom —
+  a **live coal** (the thing that simmers the pot): molten seams drifting under a darker
+  crust, heat bloom, detuned double-sine breath (never reads as a loop). Done = cooled
+  bay sea-glass (breath decays, one cooling ripple at the flip); failed = ash-red; reduce-
+  motion honored. Panel is transparent/shadowless — the bloom is the halo.
+- **Mini observability panel:** clicking the orb expands the same panel in place (332×408,
+  top-right anchored, like the notch) — header coal + title + status, live activity feed
+  (tool calls ▸, results ◂, agent messages ●), autoscroll. History backfills over the
+  existing `/api/events?task_id=` HTTP API; live tail comes from the store's event
+  fan-out, which now broadcasts to the shell too. `bubble_remove` / the 30 s failsafe are
+  **deferred while expanded** — never yank a panel the user is reading. Full dashboard is
+  the ⤴ link in the header (deep-link path reused). One expanded at a time.
+
+### Orb v2 — Metal plasma redesign (2026-07-15, night)
+
+the user's verdict on the coal orbs: "orange balls that are slightly static." Fair — the
+v1 motion was tuned too timid (9–17 s seam orbits, ±3.5 % breath) and the `.plusLighter`
+seams flattened in compositing. **v1 preserved at git tag `coal-orb-v1`** (restore:
+`git show coal-orb-v1:shell/Sources/Bubbles/BubbleController.swift`).
+
+v2 is a per-pixel **Metal shader** (`Orb.metal`, SwiftUI `colorEffect` stitchable):
+- Interior = differential swirl + **domain-warped** trig octaves (the warp is what kills
+  the coherent "pinwheel" arms — first render had them; verified by offscreen renders
+  through the real compiled app bundle via `ShaderLibrary.bundle` + `ImageRenderer`).
+  Energy ramps deep → base → hot → white-hot flecks, smootherstep contrast curve.
+- Fresnel rim, soft specular, luminous bloom that swells with the breath; geometric
+  breath is a view-level `scaleEffect` (±4 %, clearly visible now). Flow speed and
+  luminosity scale with `aliveness` (running 1.0 burns; done 0.15 drifts calmly — never
+  frozen, frozen reads dead; failed smolders dim).
+- One crisp accent over the organic core: a **comet-tail arc** orbiting (~6.5 s/lap)
+  while running → still hairline ring on done → dashed on failed.
+- Palettes pushed wide for contrast (e.g. running: #FFCF9E → ember → #8A2E12).
+- Gotchas: shader time must be **wrapped** (float32 mangles epoch-scale timestamps —
+  hourly `truncatingRemainder`); Xcode 27 ships the Metal compiler as a **downloadable
+  component** (`xcodebuild -downloadComponent MetalToolchain`, ~840 MB — was missing);
+  Reduce Motion freezes flow + breath.
+
+### Flow review from the user's World Cup session (2026-07-15, late night)
+
+Transcript forensics (event store) found two failure modes, both fixed:
+
+- **Announce-then-ask-permission (3× in one session; worst case: the user asked "what was
+  the score?", the answer landed on disk at 21:59:53, and Gumbo replied "the background
+  task finished with status done — want the score?" → 25 s + a re-confirm for an
+  already-asked question).** Root cause: the live announce instructions *scripted* that
+  behavior ("say it finished... offer to share details"). Now delivery-first: the report
+  (≤2.5 k chars) is embedded inline in the announce instructions and the model is told to
+  lead with the direct answer — answering the user's pending question first if the task was
+  spawned for one — and never to ask permission or say "finished/status". Inline embed
+  also means delivery can't depend on the out-of-band response being able to call tools.
+- **Stale "upcoming" reporting on time-sensitive briefs:** the World Cup report described
+  a match as happening "today" (preview framing) when it had already ended — while the
+  follow-up task found the final score in 9 s with the same Exa tool. Sub-agents are now
+  instructed: for news/scores/"today" briefs, snippets are often stale previews — run a
+  follow-up search to check whether scheduled events have ALREADY CONCLUDED and report
+  outcomes, stating explicitly what couldn't be confirmed. (Kept instruction-level; no
+  Exa API changes — the tool demonstrably finds fresh results when asked.)
+
+### Hard recency filter for time-scoped briefs (2026-07-15, late night)
+
+the user: "today's news" must mean *today*, not stale week-old sources. Recency was only a
+prompt hint ("prefer recent results") — nothing constrained the API. `web_search` now
+takes `max_age_days` (nullable; the model sets it per query) mapped to Exa's
+`startPublishedDate` — a **hard API-level cutoff**. Verified live before wiring: with a
+1-day window, every returned result's publishedDate fell inside 24 h. Sub-agent
+instructions: 1 for "today", 2–7 for "this week", null for evergreen; loosen only if a
+tight search returns nothing, and say so. **Merge note:** the parallel
+`worktree-web-search-providers` branch replaces exa-js with a raw Exa 2.0 client and
+already conflicts in this file — whoever resolves must port `max_age_days` →
+`startPublishedDate` onto the new client (same underlying API param; trivial carry-over).
+
+### Risk #3 CLOSED — TCC persistence verified (2026-07-15, late night)
+
+After the stale ad-hoc-era Accessibility row was purged (`tccutil reset`) and one fresh
+grant was made against the real-cert build, the user confirmed **no Accessibility re-prompt
+across multiple rebuild+relaunch cycles** the same evening (orb v2, notch click-catcher,
+dashboard fixes — each a new binary). Mic grant was already stable. Stable signing
+identity + clean TCC rows = grants persist. Nothing left to watch here.
+
+### Review + address pass (2-agent /review-2 → /address, 2026-07-15 night)
+
+DB1 (debugger, Fable) + CA1 (auditor, Opus) reviewed the full M3 diff vs main. Unified
+verdict was ❌ (2 introduced criticals) → all findings addressed in 13 conventional
+commits (9addb00…2f8959a), each built/tested, pushed to origin. Highlights:
+
+- **🔴 pumpPlayback cross-thread races (DB1)** — the M3 queue-pump refactor let the main
+  thread and buffer-completion threads run the pump concurrently: chunks could schedule
+  out of order, a stale buffer could play *after* a barge-in flush, and a ⌃⌥ graph switch
+  mid-playback could schedule onto a dead player and wedge `inFlight` forever (silent
+  no-audio until the next flush). **This was a regression I introduced in the mic-mode
+  refactor** — the M2 code never re-pumped from completions, so no such race existed;
+  timing-dependent, so the smokes couldn't catch it. Fix: one serial pump queue,
+  generation re-checked under the lock immediately before `scheduleBuffer`, engine refs
+  read/written under the lock, and `pumpQueue.sync {}` fences in flush/stop before the
+  player/converter are touched.
+- **🔴 reaper-orphaned bubbles (DB1)** — daemon restart mid-task: the boot reaper flips
+  the task to `failed` before any listener exists, hello re-sync only re-sends *running*
+  tasks, and the shell failsafe is cancelled while a bubble shows running → a stale ember
+  orb claimed a dead task was running forever. Reaped ids now get `bubble_remove` on hello.
+- **🟡s:** cold announce now *awaits* an in-flight connect (two-voices braid); TTS fetch
+  gets `AbortSignal.timeout(30s)` (hung request wedged the serialized queue); the
+  `onFinished` floating promise is caught (unhandled rejection killed the daemon);
+  report-into-instructions injection surface hardened (data-only framing + `</report>`
+  neutralization — report text is web-sourced and untrusted); bubble status is now a
+  typed `OrbState` with an explicit `.unknown` that renders ALIVE (six string switches
+  each defaulted M4-future statuses to the dead/cancelled look); `alignPcm16` extracted
+  pure + 7 node:test cases (`npx tsx --test daemon/test/announce.test.ts`) — the
+  extraction also guarantees the carry byte is copied out of pooled chunk memory.
+- **🔵s all taken:** shared `todayLabel()`; `DesignTokens.swift` single palette source
+  (bay had already drifted between files); history fetch sanitized/logged/retried;
+  deep-link survives cold vite starts (fired from didFinish); pointing-cursor push/pop
+  balanced on disappear; read-along pacing rebased per transcript item; bubbles + click
+  catcher anchored to the notch display (NSScreen.main follows focus); playback queue
+  head-cursor (removeFirst was O(n²) over a long read); Reduce Motion renders a static
+  orb frame and settled orbs drop to 15 fps; named constants for the failsafe and the
+  announce excerpt cap; cold-announce copy documented as announce-only by design.
+
+**M3 merged to main after this pass. SPEC §9 M3 marked ✅ DONE.**

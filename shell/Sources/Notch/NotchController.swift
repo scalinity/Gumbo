@@ -18,6 +18,74 @@ final class NotchController {
     private var notch: DynamicNotch<NotchContentView, EmptyView, EmptyView>?
     private var visible = false
     private var hideWork: DispatchWorkItem?
+    private var pulseWork: DispatchWorkItem?
+    private var clickCatcher: NSPanel?
+    private var screenObserver: NSObjectProtocol?
+
+    /// The expanded panel's tap gesture only exists while the panel is showing — the bare
+    /// hardware notch is a dead black rect. This keeps an invisible, non-activating panel
+    /// over the notch permanently, so clicking it opens the dashboard anytime.
+    func installClickCatcher() {
+        positionClickCatcher()
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.positionClickCatcher()
+        }
+    }
+
+    private func positionClickCatcher() {
+        guard let screen = NSScreen.gumboHome,
+              let left = screen.auxiliaryTopLeftArea,
+              let right = screen.auxiliaryTopRightArea,
+              screen.safeAreaInsets.top > 0 else {
+            clickCatcher?.orderOut(nil) // no hardware notch on this display
+            return
+        }
+        let height = screen.safeAreaInsets.top
+        let frame = NSRect(x: left.maxX, y: screen.frame.maxY - height,
+                           width: right.minX - left.maxX, height: height)
+        if clickCatcher == nil {
+            let panel = NSPanel(contentRect: frame,
+                                styleMask: [.borderless, .nonactivatingPanel],
+                                backing: .buffered, defer: false)
+            panel.level = .statusBar
+            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = false
+            panel.isMovable = false
+            panel.hidesOnDeactivate = false
+            panel.isReleasedWhenClosed = false
+            let view = NotchClickCatcherView()
+            view.onClick = { [weak self] in self?.model.onTap?() }
+            panel.contentView = view
+            clickCatcher = panel
+        }
+        clickCatcher?.setFrame(frame, display: true)
+        clickCatcher?.orderFrontRegardless()
+    }
+
+    /// M3 completion pulse: briefly surface the notch with a status-colored flourish when
+    /// a background task finishes. Purely transient — session state resumes afterwards.
+    func pulse(status: String) {
+        DispatchQueue.main.async { [self] in
+            model.pulse = status
+            hideWork?.cancel()
+            hideWork = nil
+            show()
+            pulseWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.model.pulse = nil
+                self.pulseWork = nil
+                if self.model.state == .idle { self.scheduleHide() }
+            }
+            pulseWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.6, execute: work)
+        }
+    }
 
     func setState(_ state: NotchState) {
         DispatchQueue.main.async { [self] in
@@ -45,8 +113,45 @@ final class NotchController {
             if itemId != model.transcriptItem {
                 model.transcriptItem = itemId
                 model.transcript = ""
+                model.revealedChars = 0
+                // Frame counters span the whole drain stream, not one response item —
+                // rebase so a second item (chained announcement) doesn't inherit the
+                // first item's mostly-played fraction and reveal itself instantly.
+                model.fractionBase = model.lastFraction
             }
+            // The line renders with lineLimit(1): a hard newline (report reads are full
+            // markdown) would freeze the display at the first line forever — flatten it.
             model.transcript += delta
+                .replacingOccurrences(of: "\r", with: "")
+                .replacingOccurrences(of: "\n", with: " ")
+            if !model.paced { model.revealedChars = model.transcript.count }
+        }
+    }
+
+    /// While audio is draining, the transcript reveals in proportion to what's actually
+    /// been HEARD (generation runs several× faster than speech — without pacing, a long
+    /// report read shows its final words within seconds and freezes there).
+    func setPacing(_ paced: Bool) {
+        DispatchQueue.main.async { [self] in
+            model.paced = paced
+            if !paced {
+                model.revealedChars = model.transcript.count
+                // Drain over — the engine's frame counters reset with it.
+                model.fractionBase = 0
+                model.lastFraction = 0
+            }
+        }
+    }
+
+    func setPlaybackProgress(_ fraction: Double) {
+        DispatchQueue.main.async { [self] in
+            model.lastFraction = min(1, max(0, fraction))
+            guard model.paced else { return }
+            // Map the remaining audio fraction onto this item's transcript.
+            let base = min(model.fractionBase, 0.95)
+            let adjusted = (model.lastFraction - base) / (1 - base)
+            let target = Int(Double(model.transcript.count) * min(1, max(0, adjusted)))
+            if target > model.revealedChars { model.revealedChars = target }
         }
     }
 
@@ -66,7 +171,7 @@ final class NotchController {
     private func scheduleHide() {
         guard visible, hideWork == nil else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.model.state == .idle, let notch = self.notch else { return }
+            guard let self, self.model.state == .idle, self.model.pulse == nil, let notch = self.notch else { return }
             self.visible = false
             self.hideWork = nil
             Task { await notch.hide() }
@@ -76,30 +181,66 @@ final class NotchController {
     }
 }
 
+/// Nearly invisible fill keeps the window hit-testable (a fully transparent window goes
+/// click-through); 2% black is imperceptible on the pure-black hardware notch. Accepts
+/// first mouse — the panel never becomes key, so every click is a "first mouse".
+private final class NotchClickCatcherView: NSView {
+    var onClick: (() -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.black.withAlphaComponent(0.02).setFill()
+        dirtyRect.fill()
+    }
+}
+
 final class NotchModel: ObservableObject {
     @Published var state: NotchState = .idle
     @Published var level: Float = 0
-    @Published var transcript = ""
+    @Published var transcript = "" // full text (newline-flattened)
+    @Published var revealedChars = 0 // how much has been *heard* (playback pacing)
+    @Published var paced = false // true while speaker audio is draining
+    @Published var pulse: String? // task completion status while the M3 pulse is live
     var transcriptItem = ""
+    var fractionBase: Double = 0 // playback fraction when the current item began
+    var lastFraction: Double = 0
     var onTap: (() -> Void)?
+
+    var visibleTranscript: String {
+        paced ? String(transcript.prefix(revealedChars)) : transcript
+    }
 }
 
-private let ember = Color(red: 1.0, green: 0.478, blue: 0.282) // dashboard's ember accent
-private let bay = Color(red: 0.608, green: 0.706, blue: 0.475) // bay green (input/done)
+// Design tokens — single source in DesignTokens.swift; file-local aliases for brevity.
+private let ember = Tokens.ember
+private let bay = Tokens.bay
+private let alarm = Tokens.alarm
+private let faint = Tokens.faint
 
 struct NotchContentView: View {
     @ObservedObject var model: NotchModel
 
+    // The completion pulse decorates the idle notch; a live session display wins —
+    // during a spoken announcement 'speaking' is the more truthful presence.
+    private var activePulse: String? {
+        model.state == .idle ? model.pulse : nil
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            SimmerBars(state: model.state, level: model.level)
+            SimmerBars(state: model.state, level: model.level, pulse: activePulse)
                 .frame(width: 34, height: 22)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.92))
-                if !model.transcript.isEmpty {
-                    Text(model.transcript)
+                if !model.visibleTranscript.isEmpty {
+                    Text(model.visibleTranscript)
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.55))
                         .lineLimit(1)
@@ -115,6 +256,12 @@ struct NotchContentView: View {
     }
 
     private var title: String {
+        switch activePulse {
+        case "done": return "Task finished"
+        case "failed": return "Task failed"
+        case "cancelled": return "Task cancelled"
+        default: break
+        }
         switch model.state {
         case .idle: return "Gumbo"
         case .listening: return "Listening…"
@@ -128,6 +275,7 @@ struct NotchContentView: View {
 struct SimmerBars: View {
     let state: NotchState
     let level: Float
+    var pulse: String? = nil // completion pulse: overrides color + motion while set
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
@@ -143,6 +291,12 @@ struct SimmerBars: View {
     }
 
     private var color: Color {
+        switch pulse {
+        case "done": return bay
+        case "failed": return alarm
+        case "cancelled": return faint
+        default: break
+        }
         switch state {
         case .listening: return bay
         case .speaking, .thinking: return ember
@@ -152,6 +306,11 @@ struct SimmerBars: View {
 
     private func barHeight(index: Int, time: TimeInterval) -> CGFloat {
         let base: CGFloat = 4
+        if pulse != nil {
+            // celebratory ripple — quicker than 'thinking', reads as an arrival
+            let phase = sin(time * 6.2 + Double(index) * 1.3) * 0.5 + 0.5
+            return base + CGFloat(phase) * 10
+        }
         switch state {
         case .idle:
             return base

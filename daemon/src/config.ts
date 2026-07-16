@@ -29,6 +29,14 @@ export const home = {
   served: ['tasks', 'images', 'notes'] as const,
 };
 
+/** Today's date for model instructions — built fresh per session/run so long-lived
+ *  daemons never drift; without it models assume their training-data "today". */
+export function todayLabel(): string {
+  return new Date().toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  });
+}
+
 export const config = {
   port,
   host: '127.0.0.1', // loopback only — do not bind all interfaces
@@ -39,6 +47,10 @@ export const config = {
   models: {
     realtime: 'gpt-realtime-2.1',
     subagent: 'gpt-5.6-terra',
+    // M3 cold announcements. Verified live (2026-07-15): /v1/audio/speech accepts the
+    // 'marin' voice on this model with response_format 'pcm' → 24 kHz mono pcm16, the
+    // exact shell wire format — same voice as the realtime session, zero transcoding.
+    tts: 'gpt-4o-mini-tts',
   },
   // M2: the orchestrator speaks. Typed dashboard input still works — replies are spoken
   // and the transcript still streams to the dashboard via output_audio_transcript deltas.
@@ -70,6 +82,11 @@ export const config = {
     quickLookupMaxResults: 5,
     backgroundNumResults: 10,
   },
+  // How long a finished task's bubble lingers before the daemon sends bubble_remove.
+  bubbleLingerMs: 12_000,
+  // Report excerpt embedded in a live completion announcement — enough for the model to
+  // deliver the key finding without reciting the whole file (full cap: reportMaxChars).
+  announceReportMaxChars: 2_500,
   reportMaxChars: 12_000,
   activityLogMaxChars: 500, // truncation for tool args / outputs in the activity log
 };

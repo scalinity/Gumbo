@@ -16,11 +16,21 @@ export type InboundMessage =
   | { type: 'debug_text'; text: string }
   | { type: 'task_action'; task_id: string; action: 'cancel' }
   | { type: 'ptt_press' } // shell: ⌃⌥ went down — mic frames follow
-  | { type: 'ptt_release' }; // shell: ⌃⌥ lifted — commit the turn
+  | { type: 'ptt_release' } // shell: ⌃⌥ lifted — commit the turn
+  // shell: speaker queue state. Generation finishes long before audible playback, so the
+  // daemon needs this to keep session_state 'speaking' (and the session alive) until
+  // the user actually stops hearing Gumbo.
+  | { type: 'playback_state'; draining: boolean };
+
+// Terminal statuses a bubble can show; 'running' is the only live one until M4.
+export type BubbleStatus = 'running' | 'done' | 'failed' | 'cancelled';
 
 // daemon → client
 export type OutboundMessage =
   | { type: 'event'; event: EventRow }
   | { type: 'session_state'; state: 'idle' | 'listening' | 'thinking' | 'speaking' }
   | { type: 'assistant_delta'; item_id: string; delta: string }
-  | { type: 'playback_flush' }; // barge-in: drop queued speaker audio immediately
+  | { type: 'playback_flush' } // barge-in: drop queued speaker audio immediately
+  | { type: 'bubble_upsert'; task_id: string; title: string; status: BubbleStatus } // shell: one panel per task
+  | { type: 'bubble_remove'; task_id: string } // shell: fade the panel out (sent after the done-linger)
+  | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running'> }; // shell: brief completion pulse

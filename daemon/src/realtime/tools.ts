@@ -28,7 +28,9 @@ export function createOrchestratorTools(manager: TaskManager, store: Store) {
     }),
     execute: async ({ title, brief }) => {
       const task = manager.spawnSubagent(title, brief);
-      return `Started background task ${task.id} ("${title}"). You will be told when it finishes — no need to wait.`;
+      // The voice model tends to echo tool results verbatim — keep the id clearly
+      // marked as internal so it isn't read aloud.
+      return `Started "${title}" in the background (internal task_id ${task.id} — never say it aloud). You will be told when it finishes — no need to wait.`;
     },
   });
 
