@@ -151,6 +151,29 @@ test('gateTool: the user approval allows the action', async () => {
   assert.equal(result.behavior, 'allow');
 });
 
+test('escalateHost: overlapping confirms flip blocked only on the 0<->1 edges', async () => {
+  const blocked: boolean[] = [];
+  let release!: (v: boolean) => void;
+  const gate = new Promise<boolean>((r) => (release = r));
+  const sup = new Supervisor({
+    taskId: 't1',
+    title: 'T',
+    brief: 'b',
+    cwd: CWD,
+    store: { addEvent: () => {} },
+    escalate: () => gate, // both escalations await the same deferred confirm
+    setBlocked: (b) => void blocked.push(b),
+  });
+  const p1 = sup.escalateHost('a.example');
+  const p2 = sup.escalateHost('b.example');
+  // Two confirms pending → setBlocked(true) fired exactly once (not twice).
+  assert.deepEqual(blocked, [true]);
+  release(false);
+  assert.deepEqual(await Promise.all([p1, p2]), [false, false], 'both denied');
+  // Both resolved → setBlocked(false) fired exactly once, on the last unblock.
+  assert.deepEqual(blocked, [true, false]);
+});
+
 test('intervention cap interrupts without a model call', async () => {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
   // Cap of 0: the first question trips the cap before any model call happens.

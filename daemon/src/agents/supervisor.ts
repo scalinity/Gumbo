@@ -234,12 +234,27 @@ export class Supervisor {
   private interventions = 0;
   private lines: string[] = [];
   private opts: SupervisorOptions;
+  // Concurrent confirms can be pending at once — several egress escalations (per-socket, e.g.
+  // parallel `npm install` connects) plus a hook escalation. Reference-count them so the task
+  // status flips only on the 0↔1 edges; otherwise the first confirm to resolve flips the task
+  // back to 'running' while another is still waiting (review 🟡).
+  private blockedDepth = 0;
   /** Set when the intervention cap ended the session — the runner flips to needs_input. */
   capHit = false;
 
   // No parameter properties: daemon tests run node --test in strip-only mode.
   constructor(opts: SupervisorOptions) {
     this.opts = opts;
+  }
+
+  /** Depth-counted blocked flag: opts.setBlocked fires only when the pending-confirm count
+   *  crosses 0↔1, so overlapping confirms don't thrash the task status. */
+  private setBlocked(blocked: boolean) {
+    if (blocked) {
+      if (this.blockedDepth++ === 0) this.opts.setBlocked(true);
+    } else if (this.blockedDepth > 0 && --this.blockedDepth === 0) {
+      this.opts.setBlocked(false);
+    }
   }
 
   private decide(payload: Record<string, unknown>, line: string) {
@@ -276,7 +291,7 @@ export class Supervisor {
    * bridge as the policy escalations, so a headless timeout denies (fail-closed).
    */
   async escalateHost(host: string, signal?: AbortSignal): Promise<boolean> {
-    this.opts.setBlocked(true);
+    this.setBlocked(true);
     let approved = false;
     try {
       approved = await this.opts.escalate(
@@ -284,7 +299,7 @@ export class Supervisor {
         signal,
       );
     } finally {
-      this.opts.setBlocked(false);
+      this.setBlocked(false);
     }
     this.decide(
       { kind: 'egress', host, decision: approved ? 'allow' : 'deny', source: 'the user' },
@@ -305,12 +320,12 @@ export class Supervisor {
       this.decide({ kind: 'gate', tool: toolName, decision: 'deny', source: 'policy', reason: policy.reason, action }, `deny (policy: ${policy.reason}): ${action}`);
       return { behavior: 'deny', message: `Blocked: ${action} touches a protected secret path. Do not retry — it is not needed for the task.` };
     }
-    this.opts.setBlocked(true);
+    this.setBlocked(true);
     let approved = false;
     try {
       approved = await this.opts.escalate({ title: action, detail: policy.reason }, signal);
     } finally {
-      this.opts.setBlocked(false);
+      this.setBlocked(false);
     }
     this.decide(
       { kind: 'gate', tool: toolName, decision: approved ? 'allow' : 'deny', source: 'the user', reason: policy.reason, action },

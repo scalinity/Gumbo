@@ -151,8 +151,11 @@ export class TaskManager {
       store: this.store,
       escalate: (req, signal) => this.escalate(task.id, task.title, req, signal),
       setBlocked: (blocked) => {
-        // Transient: the run itself continues the moment the user answers the confirm.
-        if (this.finished.has(task.id)) return;
+        // Transient: the run itself continues the moment the user answers the confirm. Skip if the
+        // session is no longer live (finished, or parked with its runner already dropped): an
+        // egress confirm can resolve AFTER the task parked needs_input, and flipping it back to
+        // 'running' would un-park it (and defeat undoSession's needs_input guard) (review 🟡).
+        if (this.finished.has(task.id) || !this.claudeRunners.has(task.id)) return;
         this.setTaskStatus(task.id, blocked ? 'needs_input' : 'running', blocked ? 'awaiting notch confirm' : 'confirm answered');
       },
     });
