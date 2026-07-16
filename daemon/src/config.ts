@@ -93,6 +93,10 @@ export const config = {
     maxInterventions: 5,
     // Notch confirm: deny on timeout so a missed prompt can't hang a session forever.
     confirmTimeoutMs: 60_000,
+    // The PreToolUse hook legitimately blocks while an escalation confirm is pending, so its
+    // own timeout must comfortably outlast confirmTimeoutMs — otherwise the CLI could kill the
+    // hook mid-confirm and the escalate-class action could slip. Seconds at the SDK boundary.
+    hookTimeoutMs: 120_000,
     maxTurns: 100, // runaway backstop, not a working budget
     // Plan-before-execute (the user, 2026-07-16): a fresh session first runs read-only in
     // plan mode, surfaces its plan for approval, and only then edits. Follow-ups (resumes)

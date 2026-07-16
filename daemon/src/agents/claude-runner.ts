@@ -175,7 +175,9 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         enableFileCheckpointing: true,
         canUseTool: (toolName, input, { signal }) => this.gate(toolName, input, signal),
         hooks: {
-          PreToolUse: [{ hooks: [(hookInput) => this.preToolUse(hookInput)] }],
+          // Explicit timeout (seconds) that outlasts an escalation confirm, so the CLI
+          // can't kill the hook mid-confirm and let an escalate-class action slip.
+          PreToolUse: [{ hooks: [(hookInput) => this.preToolUse(hookInput)], timeout: Math.ceil(config.claude.hookTimeoutMs / 1000) }],
         },
         env: { ...process.env, ANTHROPIC_API_KEY: undefined },
       },
@@ -269,15 +271,28 @@ export class ClaudeRunner implements ClaudeSessionRunner {
     const toolName = pre.tool_name ?? '';
     // Plan approval is handled atomically by canUseTool (it can switch mode; a hook can't).
     if (toolName === 'ExitPlanMode') return {};
-    const gate = await this.opts.supervisor.gateForHook(toolName, (pre.tool_input ?? {}) as Record<string, unknown>, this.abort.signal);
-    if (gate.decision === 'defer') return {};
-    if (gate.decision === 'allow') {
-      return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } };
+    try {
+      const gate = await this.opts.supervisor.gateForHook(toolName, (pre.tool_input ?? {}) as Record<string, unknown>, this.abort.signal);
+      if (gate.decision === 'defer') return {};
+      if (gate.decision === 'allow') {
+        return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } };
+      }
+      // Deny (declined escalation, supervisor answer, or the intervention cap). The cap asks
+      // to interrupt the run — scheduled post-return so the control request isn't reentrant.
+      if (gate.interrupt) setImmediate(() => void this.query?.interrupt().catch(() => {}));
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: gate.reason ?? 'Denied.' } };
+    } catch (err) {
+      // The hook IS the execution-phase security boundary — FAIL CLOSED. A supervisor or
+      // sqlite error must never silently degrade an escalate-class action to the auto
+      // classifier. Abort (task cancelled) is the one case that should propagate.
+      if (this.abort.signal.aborted) throw err;
+      try {
+        this.opts.store.addEvent(this.opts.taskId, 'supervisor.decision', { kind: 'gate', tool: toolName, decision: 'deny', source: 'error', reason: String(err) });
+      } catch {
+        // best-effort audit — the deny below is what actually protects the boundary
+      }
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `Gate error — denied for safety. ${String(err)}` } };
     }
-    // Deny (declined escalation, supervisor answer, or the intervention cap). The cap asks
-    // to interrupt the run — scheduled post-return so the control request isn't reentrant.
-    if (gate.interrupt) setImmediate(() => void this.query?.interrupt().catch(() => {}));
-    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: gate.reason ?? 'Denied.' } };
   }
 
   private async handlePlan(input: Record<string, unknown>, signal?: AbortSignal): Promise<GateResult> {
