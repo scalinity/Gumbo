@@ -21,27 +21,48 @@ function formatResults(results: ExaResult[]): string {
     .join('\n\n---\n\n');
 }
 
+// Persistence is deferred and best-effort: FTS tokenization of full page bodies (up to
+// ~200 KB each) is synchronous sqlite work on the same loop that carries realtime audio,
+// so rows are indexed one per event-loop turn — and an indexing failure logs and moves on
+// rather than discarding a successful search or failing the task.
+export function persistResults(
+  store: Pick<Store, 'saveSearchResult'>,
+  taskId: string,
+  query: string,
+  results: ExaResult[],
+) {
+  const rows = results.map((r) => ({
+    taskId,
+    provider: 'exa',
+    query,
+    url: r.url,
+    title: r.title ?? undefined,
+    body: r.text ?? (r.highlights ?? []).join('\n'),
+  }));
+  const next = () => {
+    const row = rows.shift();
+    if (!row) return;
+    try {
+      store.saveSearchResult(row);
+    } catch (err) {
+      console.error(`task ${taskId}: memory persist failed (continuing):`, err);
+    }
+    setImmediate(next);
+  };
+  setImmediate(next);
+}
+
+// Provider failures come back to the model as text so it can adapt mid-task instead of
+// dying; anything else (cancellation, programming errors) propagates and fails the run.
+export function describeToolFailure(name: string, err: unknown): string {
+  if (err instanceof SearchError) {
+    return `${name} failed (${err.kind}): ${err.message}. Adjust the query/urls or continue without it.`;
+  }
+  throw err;
+}
+
 // Tools close over the task so every raw result lands in searchable memory under its id.
 function createSubagentTools(taskId: string, store: Store) {
-  const persist = (query: string, results: ExaResult[]) => {
-    for (const r of results) {
-      store.saveSearchResult({
-        taskId,
-        provider: 'exa',
-        query,
-        url: r.url,
-        title: r.title ?? undefined,
-        body: r.text ?? (r.highlights ?? []).join('\n'),
-      });
-    }
-  };
-  // Provider failures come back to the model as text so it can adapt mid-task instead of dying.
-  const describeFailure = (name: string, err: unknown) => {
-    if (err instanceof SearchError) {
-      return `${name} failed (${err.kind}): ${err.message}. Adjust the query/urls or continue without it.`;
-    }
-    throw err;
-  };
 
   const webSearch = tool({
     name: 'web_search',
@@ -56,10 +77,10 @@ function createSubagentTools(taskId: string, store: Store) {
     async execute({ query, tier }) {
       try {
         const results = await exaSearch(query, { tier });
-        persist(query, results);
+        persistResults(store, taskId, query, results);
         return formatResults(results);
       } catch (err) {
-        return describeFailure('web_search', err);
+        return describeToolFailure('web_search', err);
       }
     },
   });
@@ -73,10 +94,10 @@ function createSubagentTools(taskId: string, store: Store) {
     async execute({ urls }) {
       try {
         const results = await exaContents(urls);
-        persist(`contents: ${urls.join(' ')}`, results);
+        persistResults(store, taskId, `contents: ${urls.join(' ')}`, results);
         return formatResults(results);
       } catch (err) {
-        return describeFailure('fetch_page_contents', err);
+        return describeToolFailure('fetch_page_contents', err);
       }
     },
   });
