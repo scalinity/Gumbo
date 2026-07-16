@@ -114,6 +114,10 @@ final class NotchController {
                 model.transcriptItem = itemId
                 model.transcript = ""
                 model.revealedChars = 0
+                // Frame counters span the whole drain stream, not one response item —
+                // rebase so a second item (chained announcement) doesn't inherit the
+                // first item's mostly-played fraction and reveal itself instantly.
+                model.fractionBase = model.lastFraction
             }
             // The line renders with lineLimit(1): a hard newline (report reads are full
             // markdown) would freeze the display at the first line forever — flatten it.
@@ -130,14 +134,23 @@ final class NotchController {
     func setPacing(_ paced: Bool) {
         DispatchQueue.main.async { [self] in
             model.paced = paced
-            if !paced { model.revealedChars = model.transcript.count }
+            if !paced {
+                model.revealedChars = model.transcript.count
+                // Drain over — the engine's frame counters reset with it.
+                model.fractionBase = 0
+                model.lastFraction = 0
+            }
         }
     }
 
     func setPlaybackProgress(_ fraction: Double) {
         DispatchQueue.main.async { [self] in
+            model.lastFraction = min(1, max(0, fraction))
             guard model.paced else { return }
-            let target = Int(Double(model.transcript.count) * min(1, max(0, fraction)))
+            // Map the remaining audio fraction onto this item's transcript.
+            let base = min(model.fractionBase, 0.95)
+            let adjusted = (model.lastFraction - base) / (1 - base)
+            let target = Int(Double(model.transcript.count) * min(1, max(0, adjusted)))
             if target > model.revealedChars { model.revealedChars = target }
         }
     }
@@ -194,6 +207,8 @@ final class NotchModel: ObservableObject {
     @Published var paced = false // true while speaker audio is draining
     @Published var pulse: String? // task completion status while the M3 pulse is live
     var transcriptItem = ""
+    var fractionBase: Double = 0 // playback fraction when the current item began
+    var lastFraction: Double = 0
     var onTap: (() -> Void)?
 
     var visibleTranscript: String {
