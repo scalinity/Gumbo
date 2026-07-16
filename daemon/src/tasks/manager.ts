@@ -29,11 +29,18 @@ export class TaskManager {
       (report) => {
         try {
           writeFileSync(join(workspace, 'report.md'), report);
-          this.store.saveTaskOutput(id, title, report); // searchable memory alongside the raw results
-          this.finish(id, 'done', { report_path: `tasks/${id}/report.md` });
         } catch (err) {
           this.finish(id, 'failed', { error: `report write failed: ${String(err)}` });
+          return;
         }
+        // Memory indexing is best-effort: once report.md is on disk the task succeeded,
+        // and a sqlite hiccup here must never flip it to 'failed'.
+        try {
+          this.store.saveTaskOutput(id, title, report);
+        } catch (err) {
+          console.error(`task ${id}: memory index failed (task still done):`, err);
+        }
+        this.finish(id, 'done', { report_path: `tasks/${id}/report.md` });
       },
       (err: unknown) => {
         this.finish(id, abort.signal.aborted ? 'cancelled' : 'failed', { error: String(err) });
