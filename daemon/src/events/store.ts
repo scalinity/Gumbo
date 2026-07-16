@@ -75,11 +75,14 @@ export class Store {
       );
       -- M5: Gumbo-owned scheduler. Rows persist across restarts by design — the boot
       -- reaper only reconciles the tasks table and must never touch this one (a pending
-      -- reminder outliving the daemon is the whole point).
+      -- reminder outliving the daemon is the whole point). NOT NULLs match the row
+      -- interface (review 🔵): a null fire_at would silently never match the due query.
+      -- (CREATE IF NOT EXISTS doesn't retrofit constraints onto pre-existing dev DBs —
+      -- fine here: all writers are typed, this hardens fresh DBs.)
       CREATE TABLE IF NOT EXISTS schedule (
-        id TEXT PRIMARY KEY, fire_at INT, kind TEXT, text TEXT,
-        status TEXT CHECK(status IN ('pending','fired','cancelled')),
-        eventkit_id TEXT, created_at INT
+        id TEXT PRIMARY KEY, fire_at INT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending','fired','cancelled')),
+        eventkit_id TEXT, created_at INT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS schedule_due ON schedule(status, fire_at);
     `);
@@ -176,6 +179,22 @@ export class Store {
       .run(Date.now());
     for (const { id } of rows) this.addEvent(id, 'task.finished', { status: 'failed', error: 'interrupted by daemon restart' });
     return rows.map((r) => r.id);
+  }
+
+  /** Synchronous transaction (node:sqlite is sync, so fn must be too). Rolls back on
+   *  throw. Used where two writes must land together — e.g. the scheduler's
+   *  mark-fired + reminder.fired event, so a crash can't consume a fire without its
+   *  audit trace (review 🔵). */
+  transaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = fn();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   onEvent(listener: EventListener) {

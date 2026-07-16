@@ -56,9 +56,12 @@ export class Scheduler {
     for (const row of this.store.duePendingSchedules(Date.now())) {
       // Mark fired BEFORE delivering (at-most-once): if delivery crashes, one spoken
       // reminder is lost — EventKit still notified at the OS level. Marking after would
-      // re-fire a throwing row every poll, forever.
-      this.store.updateScheduleStatus(row.id, 'fired');
-      this.store.addEvent(null, 'reminder.fired', { id: row.id, kind: row.kind, text: row.text, fire_at: row.fire_at });
+      // re-fire a throwing row every poll, forever. Mark + event share a transaction so
+      // a crash between them can't consume a fire without its audit trace (review 🔵).
+      this.store.transaction(() => {
+        this.store.updateScheduleStatus(row.id, 'fired');
+        this.store.addEvent(null, 'reminder.fired', { id: row.id, kind: row.kind, text: row.text, fire_at: row.fire_at });
+      });
       Promise.resolve()
         .then(() => this.onFire({ ...row, status: 'fired' }))
         .catch((err: unknown) => {

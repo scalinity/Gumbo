@@ -186,7 +186,7 @@ test('resyncEventKit repairs the mirror on shell hello: re-create missing twins,
   assert.deepEqual(hub.sent.filter((s) => s.msg.type === 'create_reminder').map((s) => s.msg.id), [orphanPending.id]);
 });
 
-test('listSchedules orders upcoming (soonest first) before past (newest first)', () => {
+test('listSchedules orders upcoming (soonest first) before past (newest first) and honors limit', () => {
   const { scheduler, store } = setup();
   const now = Date.now();
   const soon = scheduler.setReminder('soon', now + 10_000);
@@ -195,4 +195,5 @@ test('listSchedules orders upcoming (soonest first) before past (newest first)',
   scheduler.sweepNow();
   const order = store.listSchedules().map((r) => r.id);
   assert.deepEqual(order, [soon.id, later.id, firedRow.id]);
+  assert.deepEqual(store.listSchedules(2).map((r) => r.id), [soon.id, later.id], 'limit truncates from the tail');
 });
