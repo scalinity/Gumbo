@@ -59,10 +59,17 @@ final class AudioEngine {
     // Cap sized for multi-minute report reads: 4096 × ~200 ms chunks ≫ any real reply
     // (the old 512 could overflow → dropped chunks → skipped audio mid-read).
     private var playbackQueue: [Data] = []
+    // Head cursor instead of removeFirst(): draining a multi-minute read would otherwise
+    // shift the whole array per scheduled buffer (O(n²) over the stream). Compacted
+    // periodically so consumed chunks don't pin memory.
+    private var queueHead = 0
     // Wire-format (24 kHz) frame counters for the current playback stream; reset when
     // the stream fully drains or is flushed.
     private var framesEnqueued = 0
     private var framesPlayed = 0
+
+    /// Callers must hold `lock`.
+    private var queueIsEmpty: Bool { queueHead >= playbackQueue.count }
 
     // MARK: lifecycle
 
@@ -109,10 +116,11 @@ final class AudioEngine {
         inFlight = 0
         if !keepQueue {
             playbackQueue = []
+            queueHead = 0
             framesEnqueued = 0
             framesPlayed = 0
         }
-        let queueEmpty = playbackQueue.isEmpty
+        let queueEmpty = queueIsEmpty
         lock.unlock()
         pumpQueue.sync {} // fence: no pump body is mid-flight while the graph is torn down
         if mode == .duplex { engine?.inputNode.removeTap(onBus: 0) }
@@ -143,7 +151,11 @@ final class AudioEngine {
     func playChunk(_ pcm: Data) {
         lock.lock()
         playbackQueue.append(pcm)
-        if playbackQueue.count > 4096 { playbackQueue.removeFirst() }
+        if playbackQueue.count - queueHead > 4096 { queueHead += 1 } // drop-oldest cap
+        if queueHead > 1024 { // compact consumed prefix
+            playbackQueue.removeFirst(queueHead)
+            queueHead = 0
+        }
         framesEnqueued += pcm.count / MemoryLayout<Int16>.size
         lock.unlock()
         pumpPlayback() // pump self-guards on running under the lock
@@ -160,11 +172,12 @@ final class AudioEngine {
         while true {
             lock.lock()
             guard running, let player, let playFormat, let converter = playbackConverter,
-                  inFlight < 3, !playbackQueue.isEmpty else {
+                  inFlight < 3, !queueIsEmpty else {
                 lock.unlock()
                 return
             }
-            let pcm = playbackQueue.removeFirst()
+            let pcm = playbackQueue[queueHead]
+            queueHead += 1
             inFlight += 1
             let gen = generation
             let wireFrames = pcm.count / MemoryLayout<Int16>.size
@@ -201,7 +214,7 @@ final class AudioEngine {
                         progress = Double(self.framesPlayed) / Double(self.framesEnqueued)
                     }
                 }
-                let drained = live && self.inFlight == 0 && self.playbackQueue.isEmpty
+                let drained = live && self.inFlight == 0 && self.queueIsEmpty
                 if drained { // stream over — next playback stream starts its own ratio
                     self.framesEnqueued = 0
                     self.framesPlayed = 0
@@ -250,6 +263,7 @@ final class AudioEngine {
         generation += 1
         inFlight = 0
         playbackQueue = []
+        queueHead = 0
         framesEnqueued = 0
         framesPlayed = 0
         lock.unlock()
