@@ -135,11 +135,25 @@ final class BubbleController {
 
     /// On expand, backfill the feed over the daemon's HTTP API; live events keep it
     /// current afterwards. Merging is seq-deduped, so overlap with the live tail is fine.
-    private func fetchHistory(for taskId: String) {
-        guard let url = URL(string: "http://127.0.0.1:8737/api/events?task_id=\(taskId)&limit=40") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self, let data,
-                  let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+    /// Same id allow-list as DashboardWindow.selectTask (defense-in-depth; ids are hex
+    /// today), and failures log + retry once — a silent miss leaves "Starting up…"
+    /// forever on a done task, masked only while the live tail still flows.
+    private func fetchHistory(for taskId: String, attempt: Int = 1) {
+        guard taskId.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }),
+              let url = URL(string: "http://127.0.0.1:8737/api/events?task_id=\(taskId)&limit=40") else { return }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
+            guard let self else { return }
+            guard let data, error == nil,
+                  let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                NSLog("[bubbles] history fetch failed for %@ (attempt %d): %@",
+                      taskId, attempt, error?.localizedDescription ?? "bad response")
+                if attempt == 1 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                        self.fetchHistory(for: taskId, attempt: 2)
+                    }
+                }
+                return
+            }
             DispatchQueue.main.async {
                 guard let bubble = self.bubbles[taskId] else { return }
                 for raw in rows {
@@ -609,10 +623,34 @@ private struct BubbleEventRow: View {
     }
 }
 
+/// Balanced cursor push/pop: if the hovered view is removed mid-hover (orb ↔ panel swap,
+/// bubble fade-out), onHover(false) never fires and a bare push would strand the
+/// pointing-hand cursor system-wide. State-tracked, popped on disappear.
+private struct PointingCursor: ViewModifier {
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                if inside && !hovering {
+                    hovering = true
+                    NSCursor.pointingHand.push()
+                } else if !inside && hovering {
+                    hovering = false
+                    NSCursor.pop()
+                }
+            }
+            .onDisappear {
+                if hovering {
+                    hovering = false
+                    NSCursor.pop()
+                }
+            }
+    }
+}
+
 private extension View {
     func pointingCursor() -> some View {
-        onHover { inside in
-            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-        }
+        modifier(PointingCursor())
     }
 }

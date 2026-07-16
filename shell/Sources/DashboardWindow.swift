@@ -8,6 +8,9 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
     private var webView: WKWebView?
     private var loadFailed = false
     private var retryTimer: Timer?
+    // Deep-link that arrived before the page finished loading — fired from didFinish,
+    // so a cold vite start can't eat the click (the retry loop alone gave up in ~3 s).
+    private var pendingTaskId: String?
 
     func show(taskId: String? = nil) {
         if window == nil { build() }
@@ -18,7 +21,10 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
         // like it never opened. Force the ordering regardless of activation.
         window?.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
-        if let taskId { selectTask(taskId, attempts: 5) }
+        if let taskId {
+            pendingTaskId = taskId
+            selectTask(taskId, attempts: 5)
+        }
     }
 
     /// Deep-link a bubble click into the loaded React app via the module-scope hook that
@@ -28,9 +34,12 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
         guard taskId.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) else { return }
         let js = "window.__gumboSelectTask ? (window.__gumboSelectTask('\(taskId)'), true) : false"
         webView?.evaluateJavaScript(js) { [weak self] result, _ in
-            if (result as? Bool) != true, attempts > 1 {
+            guard let self else { return }
+            if (result as? Bool) == true {
+                if self.pendingTaskId == taskId { self.pendingTaskId = nil }
+            } else if attempts > 1 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    self?.selectTask(taskId, attempts: attempts - 1)
+                    self.selectTask(taskId, attempts: attempts - 1)
                 }
             }
         }
@@ -82,5 +91,8 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
         loadFailed = false
         retryTimer?.invalidate()
         retryTimer = nil
+        if let taskId = pendingTaskId {
+            selectTask(taskId, attempts: 5) // page is up — land the deep-link that missed
+        }
     }
 }
