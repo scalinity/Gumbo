@@ -29,6 +29,7 @@ export class TaskManager {
       (report) => {
         try {
           writeFileSync(join(workspace, 'report.md'), report);
+          this.store.saveTaskOutput(id, title, report); // searchable memory alongside the raw results
           this.finish(id, 'done', { report_path: `tasks/${id}/report.md` });
         } catch (err) {
           this.finish(id, 'failed', { error: `report write failed: ${String(err)}` });

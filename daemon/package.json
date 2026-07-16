@@ -3,11 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "test": "node --test 'src/search/*.test.ts'"
   },
   "dependencies": {
     "@openai/agents": "^0.13.3",
-    "exa-js": "^1.8.0",
     "ws": "^8.18.0",
     "zod": "^4.0.0"
   },

@@ -1,34 +1,88 @@
 import { Agent, run, tool, codeInterpreterTool } from '@openai/agents';
 import { z } from 'zod';
-import { Exa } from 'exa-js';
 import { config } from '../config.ts';
 import type { Store } from '../events/store.ts';
-
-let exa: Exa | null = null;
-
-const webSearch = tool({
-  name: 'web_search',
-  description: 'Search the live web. Returns titles, URLs, and page text for the top results.',
-  parameters: z.object({ query: z.string() }),
-  async execute({ query }) {
-    exa ??= new Exa(process.env.EXA_API_KEY);
-    const { results } = await exa.searchAndContents(query, {
-      type: 'auto',
-      numResults: 5,
-      text: { maxCharacters: 2000 },
-    });
-    return results
-      .map((r: { title?: string | null; url: string; publishedDate?: string; text?: string }) =>
-        `## ${r.title ?? 'untitled'}\n${r.url}\n${r.publishedDate ?? ''}\n${r.text ?? ''}`)
-      .join('\n\n');
-  },
-});
+import { exaSearch, exaContents, type ExaResult } from '../search/exa.ts';
+import { SearchError } from '../search/client.ts';
 
 const INSTRUCTIONS = `You are a background sub-agent working for Gumbo, a personal voice assistant.
 You were spawned to complete one task. Work autonomously — nobody will answer questions.
-Use web_search whenever current or factual information matters; cite source URLs.
+Use web_search whenever current or factual information matters; when the highlights aren't enough,
+follow up with fetch_page_contents on the most promising URLs to read them in full. Cite source URLs.
 Your FINAL message must be the complete deliverable as a well-structured markdown report
 (it is saved verbatim as report.md and read back to the user), starting with a one-paragraph summary.`;
+
+function formatResults(results: ExaResult[]): string {
+  return results
+    .map((r) => {
+      const highlights = (r.highlights ?? []).map((h) => `> ${h}`).join('\n');
+      return `## ${r.title ?? 'untitled'}\n${r.url}\n${r.publishedDate ?? ''}\n${highlights}\n\n${r.text ?? ''}`;
+    })
+    .join('\n\n---\n\n');
+}
+
+// Tools close over the task so every raw result lands in searchable memory under its id.
+function createSubagentTools(taskId: string, store: Store) {
+  const persist = (query: string, results: ExaResult[]) => {
+    for (const r of results) {
+      store.saveSearchResult({
+        taskId,
+        provider: 'exa',
+        query,
+        url: r.url,
+        title: r.title ?? undefined,
+        body: r.text ?? (r.highlights ?? []).join('\n'),
+      });
+    }
+  };
+  // Provider failures come back to the model as text so it can adapt mid-task instead of dying.
+  const describeFailure = (name: string, err: unknown) => {
+    if (err instanceof SearchError) {
+      return `${name} failed (${err.kind}): ${err.message}. Adjust the query/urls or continue without it.`;
+    }
+    throw err;
+  };
+
+  const webSearch = tool({
+    name: 'web_search',
+    description:
+      'Search the live web (Exa). Returns titles, URLs, highlights, and FULL page text for the top ' +
+      'results. Use tier "deep" only when the brief is explicitly research-class (thorough, ' +
+      'multi-source investigation); otherwise leave it "auto".',
+    parameters: z.object({
+      query: z.string(),
+      tier: z.enum(['fast', 'auto', 'deep']).default('auto'),
+    }),
+    async execute({ query, tier }) {
+      try {
+        const results = await exaSearch(query, { tier });
+        persist(query, results);
+        return formatResults(results);
+      } catch (err) {
+        return describeFailure('web_search', err);
+      }
+    },
+  });
+
+  const fetchPageContents = tool({
+    name: 'fetch_page_contents',
+    description:
+      'Fetch the full text of specific pages by URL (Exa /contents). Use after web_search when the ' +
+      'most promising results deserve a complete read, not just highlights.',
+    parameters: z.object({ urls: z.array(z.string()).min(1).max(10) }),
+    async execute({ urls }) {
+      try {
+        const results = await exaContents(urls);
+        persist(`contents: ${urls.join(' ')}`, results);
+        return formatResults(results);
+      } catch (err) {
+        return describeFailure('fetch_page_contents', err);
+      }
+    },
+  });
+
+  return [webSearch, fetchPageContents, codeInterpreterTool()];
+}
 
 function itemText(item: unknown): string {
   const raw = (item as { rawItem?: { content?: unknown } }).rawItem;
@@ -51,7 +105,7 @@ export async function runSubagent(opts: {
     name: `subagent-${taskId}`,
     instructions: INSTRUCTIONS,
     model: config.models.subagent,
-    tools: [webSearch, codeInterpreterTool()],
+    tools: createSubagentTools(taskId, store),
   });
 
   // Pass the signal so the SDK aborts the underlying model/tool request promptly on cancel;

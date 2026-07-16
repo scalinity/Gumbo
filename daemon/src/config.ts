@@ -9,7 +9,7 @@ try {
   // .env optional when vars are already in the environment
 }
 
-const port = 8737;
+const port = Number(process.env.GUMBO_PORT ?? 8737); // override for isolated test instances
 const dashboardPort = 5173;
 const agentHome = process.env.GUMBO_HOME ?? join(homedir(), 'Gumbo');
 
@@ -21,6 +21,7 @@ export const home = {
   images: join(agentHome, 'images'), // generated images (M5)
   notes: join(agentHome, 'notes'), // agent-curated notes / knowledge (self-organization)
   db: join(agentHome, 'db'), // sqlite — deliberately outside the /files-served subtree
+  logs: join(agentHome, 'logs'), // append-only JSONL audit trails — private, never served
   /** Subtrees exposed read-only via GET /files/<name>/… */
   served: ['tasks', 'images', 'notes'] as const,
 };
@@ -55,6 +56,17 @@ export const config = {
   // A ⌃⌥ tap shorter than this has no usable audio — the API rejects commits under ~100 ms.
   minPttAudioBytes: 4800, // 100 ms @ 24 kHz mono 16-bit (48 bytes/ms)
   sessionIdleMs: 60_000,
+  // Web search providers: Tavily answers on the voice hot path (fail fast, no retries);
+  // Exa does background research (full contents, retries allowed). Keys in repo .env.
+  search: {
+    tavilyDepth: 'fast' as 'basic' | 'advanced' | 'fast' | 'ultra-fast',
+    // Hard cap — a voice turn is waiting on this. Spec asked for 2000, but measured Tavily
+    // fast-depth latency with answer synthesis is 1.9–2.8 s on fresh queries (2026-07-15),
+    // so 2000 timed out on roughly half of real lookups. Tighten if Tavily's fast lane improves.
+    quickLookupTimeoutMs: 3000,
+    quickLookupMaxResults: 5,
+    backgroundNumResults: 10,
+  },
   reportMaxChars: 12_000,
   activityLogMaxChars: 500, // truncation for tool args / outputs in the activity log
 };

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.ts';
+import { webQuickLookup } from '../search/tavily.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
 
@@ -96,5 +97,25 @@ export function createOrchestratorTools(manager: TaskManager, store: Store) {
     },
   });
 
-  return [spawnSubagent, listTasks, getTaskStatus, cancelTask, readReport, saveNote];
+  // Hot path: Tavily, ≤2 s, no retries. The description below IS the router between this
+  // and spawn_subagent — its wording is part of the spec; don't loosen it.
+  const quickLookup = tool({
+    name: 'web_quick_lookup',
+    description:
+      "Use ONLY for quick factual lookups about the current world — scores, prices, weather, news " +
+      "one-liners, 'is X true today'. For anything open-ended, multi-part, or research-like, do NOT " +
+      'use this tool; delegate to the background task queue (spawn_subagent) instead. Returns a ' +
+      'spoken-ready `answer` (read it aloud nearly verbatim) plus source titles/URLs as metadata. ' +
+      'If it returns lookup_failed, follow its instruction — never guess.',
+    parameters: z.object({
+      query: z.string().describe('One specific, factual question about the current world'),
+      topic: z
+        .enum(['general', 'news'])
+        .default('general')
+        .describe("'news' for scores, headlines, breaking or very recent events; 'general' otherwise"),
+    }),
+    execute: async ({ query, topic }) => webQuickLookup(query, topic),
+  });
+
+  return [spawnSubagent, quickLookup, listTasks, getTaskStatus, cancelTask, readReport, saveNote];
 }

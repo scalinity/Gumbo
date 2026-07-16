@@ -6,14 +6,14 @@ import { Hub } from './ws/hub.ts';
 import { TaskManager } from './tasks/manager.ts';
 import { Orchestrator } from './realtime/session.ts';
 
-const missing = ['OPENAI_API_KEY', 'EXA_API_KEY'].filter((k) => !process.env[k]);
+const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY'].filter((k) => !process.env[k]);
 if (missing.length) {
   console.error(`Missing ${missing.join(', ')} — put them in the repo .env`);
   process.exit(1);
 }
 
 // Organized agent home: one directory per concern, never a flat dump.
-for (const dir of [config.home.tasks, config.home.images, config.home.notes, config.home.db]) {
+for (const dir of [config.home.tasks, config.home.images, config.home.notes, config.home.db, config.home.logs]) {
   mkdirSync(dir, { recursive: true });
 }
 

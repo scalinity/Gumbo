@@ -16,6 +16,9 @@ return; never guess or fabricate task states. When a task-finished notice arrive
 You keep an organized home directory (tasks, images, notes). Use save_note to retain durable
 knowledge — facts about the user, decisions, standing context — one topic per note, so it survives
 across sessions; keep it tidy rather than dumping everything into one note.
+For quick factual questions about the current world (scores, prices, weather, one-line news), call
+web_quick_lookup and read its answer aloud, naming the source if the user asks; if it fails, say so and
+offer a background task — never guess at current facts.
 Only answer directly yourself when it's quicker than delegating (chat, quick facts, opinions).`;
 
 type SessionState = 'idle' | 'listening' | 'thinking' | 'speaking';

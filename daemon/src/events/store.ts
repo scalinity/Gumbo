@@ -41,7 +41,37 @@ export class Store {
         type TEXT, payload TEXT
       );
       CREATE INDEX IF NOT EXISTS events_task ON events(task_id, seq);
+      CREATE TABLE IF NOT EXISTS memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ts INT, task_id TEXT,
+        kind TEXT CHECK(kind IN ('search_result','task_output')),
+        provider TEXT, query TEXT, url TEXT, title TEXT, body TEXT
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(title, body, content='memory', content_rowid='id');
+      CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memory BEGIN
+        INSERT INTO memory_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+      END;
     `);
+  }
+
+  /** Raw web-search results persisted verbatim (FTS5-indexed, rows never mutated). */
+  saveSearchResult(row: {
+    taskId: string | null;
+    provider: string;
+    query: string;
+    url?: string;
+    title?: string;
+    body: string;
+  }) {
+    this.db
+      .prepare("INSERT INTO memory (ts, task_id, kind, provider, query, url, title, body) VALUES (?, ?, 'search_result', ?, ?, ?, ?, ?)")
+      .run(Date.now(), row.taskId, row.provider, row.query, row.url ?? null, row.title ?? null, row.body);
+  }
+
+  /** A finished task's synthesized output (the report), FTS5-indexed alongside its raw sources. */
+  saveTaskOutput(taskId: string, title: string, body: string) {
+    this.db
+      .prepare("INSERT INTO memory (ts, task_id, kind, title, body) VALUES (?, ?, 'task_output', ?, ?)")
+      .run(Date.now(), taskId, title, body);
   }
 
   /**

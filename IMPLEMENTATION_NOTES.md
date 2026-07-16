@@ -17,6 +17,9 @@ and anything that would surprise the next person. Keep it honest (note what's ve
   through the signed shell). Two follow-ups to observe in daily use: voice-exercised barge-in
   and the TCC rebuild-persistence check.
 - **M3–M6:** not started. See SPEC §9.
+- **Web search providers (side feature, branch `worktree-web-search-providers`):** ✅ built +
+  verified — Tavily on the voice hot path (`web_quick_lookup`), Exa for background sub-agents,
+  FTS5 memory persistence, JSONL search audit log. See section at the bottom.
 
 ---
 
@@ -25,7 +28,7 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 - Node **v26.3.1**, npm 11.16 (Homebrew). Node 26 gives us built-ins we rely on: `node:sqlite`
   (`DatabaseSync`), `process.loadEnvFile`, and a global `WebSocket`.
 - This Mac runs a **macOS 27.0 beta** — spike DynamicNotchKit + TCC behavior early (M2 risk).
-- `.env` at repo root holds `OPENAI_API_KEY` and `EXA_API_KEY`.
+- `.env` at repo root holds `OPENAI_API_KEY`, `EXA_API_KEY`, and `TAVILY_API_KEY`.
 - **No git repo** yet — fixes are applied without commits (matches the user's "don't commit unless
   asked" rule). Initialize git when the user asks.
 - **Sandbox note:** automated/sandboxed dev runs can't write to `~/Gumbo`; use
@@ -303,3 +306,71 @@ Risk #5 retired — clear to build the real notch UI on DynamicNotchKit 1.1.0.
   DashboardWindow (WKWebView → localhost:5173).
 - **Loose end:** Apple Development cert still not in keychain (`security find-identity` = 0);
   needed for the signed build + TCC grant-persistence check (risk #3).
+
+---
+
+## Web search providers — Tavily (voice hot path) + Exa (background) — 2026-07-15
+
+### Build
+- New `daemon/src/search/` module: `client.ts` (shared `postJson` + typed `SearchError`),
+  `tavily.ts`, `exa.ts`, `audit.ts`. Both providers are **raw `fetch` clients** — `exa-js`
+  removed (its 1.x request shapes predate Exa 2.0, and owning serialization gives us uniform
+  retry/timeout/typed-error behavior + testability). Conventions codified in the new root
+  **`CLAUDE.md`** — follow it for any future provider.
+- **Hot path:** realtime tool `web_quick_lookup` (registered in `realtime/tools.ts`) → Tavily
+  `/search`, `search_depth` from `config.search.tavilyDepth` (default `fast`), `include_answer:
+  true`, `max_results` 5, `retries: 0`. Success returns `{answer, sources}` (answer-first,
+  spoken nearly verbatim); any failure returns a structured `lookup_failed` shape that
+  instructs the model to offer backgrounding instead of guessing. The tool description is the
+  router between this and `spawn_subagent` — its wording is part of the spec; don't loosen it.
+  A `topic` param (`general`/`news`) routes scores/headlines to Tavily's fresher news lane.
+- **Background:** sub-agent tools (per-task closures in `agents/openai-runner.ts`) —
+  `web_search` (Exa `/search`, tier `fast`/`auto`/`deep`, model picks `deep` only for
+  research-class briefs) and `fetch_page_contents` (Exa `/contents` follow-up on promising
+  URLs). Full contents `{text: true, highlights: true}` — **deliberately no `maxCharacters`
+  anywhere** (the old M1 tool clamped at 2 000 chars; verified bodies up to 190 k chars now
+  persist). Raw results + the finished report land in a new sqlite `memory` table with an
+  FTS5 index (`memory_fts`, insert-trigger synced); every outbound call (both providers,
+  success *and* failure) appends a JSONL line to `~/Gumbo/logs/search-audit.jsonl`.
+- Plumbing: `TAVILY_API_KEY` added to boot validation (already in `.env`); new `home.logs`
+  dir; `GUMBO_PORT` env override so test instances don't collide with a live daemon; daemon
+  `npm test` script (`node --test`, 24 unit tests: retry/backoff, typed errors, request
+  serialization for both providers, hot-path fail-fast, quick-lookup success/failure contracts).
+
+### Schema surprises / gotchas (verified against live docs + API, 2026-07-15)
+- Tavily `search_depth` now has **four** values: `basic | advanced | fast | ultra-fast`
+  (hyphen, not underscore). `fast`/`ultra-fast` cost 1 credit; `safe_search` unsupported there.
+- Exa 2.0 `type` has **six** values, not three: `instant | fast | auto | deep-lite | deep |
+  deep-reasoning`. We expose `fast/auto/deep`. Exa docs moved: `docs.exa.ai` 307-redirects to
+  `exa.ai/docs`. `text: true` = full page text, no default cap (`maxCharacters` only if set;
+  there's also a `verbosity` knob, default `compact`, untouched).
+- **Tavily had a live incident during verification:** for ~5 min every depth returned an empty
+  envelope (`results: [], answer: null`) with `response_time` pinned at ~2.0 — and those empty
+  responses got **cached per (query, params) key**, so identical retries kept serving the stale
+  empty answer (~50 ms) while a different `topic` (= different cache key) worked. If a specific
+  query mysteriously returns no answer, rephrase or switch topic. The failure contract handled
+  the incident correctly live: the model told the user the lookup failed and offered a background
+  task — zero guessing.
+- **Spec deviation, deliberate:** hot-path timeout is **3 000 ms**, not the spec'd 2 000.
+  Measured fresh-query latency with answer synthesis: 1.9–2.8 s (plus the incident window
+  above) — a 2 s cap timed out on ~half of real lookups. Fail-fast mechanism unchanged; single
+  config constant (`quickLookupTimeoutMs`) to tighten later.
+- The task brief assumed a Rust back office, an existing FTS5 memory, a JSONL audit convention,
+  and a permission engine. Reality: the back office is this Node daemon; the FTS5 table and the
+  JSONL audit log were **created** by this work (minimal, inside existing layers); the
+  permission engine is M4 — when it lands, register both providers (hot-path auto-allowed,
+  background research under task approval).
+
+### Verified (how)
+- 24/24 unit tests green (`npm test -w daemon`).
+- Smoke 1 (isolated daemon on `GUMBO_PORT=8747`, scratchpad `GUMBO_HOME`): "what's the score of
+  the France Spain match" → single voice turn, model chose `web_quick_lookup` with
+  `topic: "news"` on its own, Tavily answered in budget with 5 sources (audit line
+  `resultCount: 5, ok: true`), answer relayed nearly verbatim.
+- Smoke 2: "research the current state of solid-state battery manufacturing and give me a
+  brief" → `spawn_subagent` → 4 Exa `auto` searches → `report.md` (13 KB) → `task.finished` →
+  spoken completion announcement. Memory table: 100 `search_result` rows (max body 190 k chars
+  — unclamped confirmed) + `task_output` rows; FTS5 `MATCH` query returns ranked hits; 10 Exa
+  audit lines.
+- Failure path live (during the Tavily incident): timeout → structured failure → model offered
+  backgrounding, then actually ran it via Exa. Exactly the designed routing.
