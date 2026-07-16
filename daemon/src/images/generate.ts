@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.ts';
+import { echoForInstructions } from '../audio/announce.ts';
 import type { Store } from '../events/store.ts';
 
 export type ImageShape = 'square' | 'landscape' | 'portrait';
@@ -78,7 +79,7 @@ export async function runImageGeneration(opts: {
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
 }): Promise<void> {
   const { prompt, shape, store, announce } = opts;
-  const short = prompt.length > 90 ? `${prompt.slice(0, 87)}…` : prompt;
+  const short = echoForInstructions(prompt); // quoted inside live instructions — defanged (review 🔵)
   try {
     const file = await generateImage(prompt, shape);
     store.addEvent(null, 'image.created', { file, prompt });

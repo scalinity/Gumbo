@@ -25,6 +25,18 @@ export function announcementText(task: TaskRow): string {
   }
 }
 
+/** Flatten + defang text echoed into LIVE response instructions (review 🔵, the M3
+ *  <report>-neutralization precedent): these strings are quoted inside instruction
+ *  prose, so quotes, angle brackets, backticks, and newlines are stripped — the echo
+ *  stays data and can't read as new instruction structure. Everything echoed today is
+ *  the user-authored (edit prompts, reminder text), so this guards self-injection and
+ *  consistency, not an attacker. Cold TTS text is deliberately NOT run through this —
+ *  it's spoken verbatim, not interpreted. */
+export function echoForInstructions(text: string, max = 90): string {
+  const flat = text.replace(/[\n\r"<>`]/g, ' ').replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
 // Announcements are serialized: two tasks finishing together must not interleave their
 // 0x02 frames into one garbled stream at the shell's single player.
 let queue: Promise<void> = Promise.resolve();

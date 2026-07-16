@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { config } from './config.ts';
+import { echoForInstructions } from './audio/announce.ts';
 import { Store } from './events/store.ts';
 import { createHttpServer } from './http.ts';
 import { Hub } from './ws/hub.ts';
@@ -47,8 +48,10 @@ const imageContext = new ImageEditContext();
 const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext);
 scheduler.onFire = (row) =>
   orchestrator.speakProactively(
+    // Cold TTS speaks the raw text verbatim; the LIVE instruction echo is defanged
+    // (review 🔵 — the M3 neutralization precedent applied to short echoes).
     `the user, reminder: ${row.text}.`,
-    `A reminder the user set has just come due: "${row.text}". Deliver it to him now — brief and direct, one sentence. Do not mention ids or the scheduler.`,
+    `A reminder the user set has just come due: "${echoForInstructions(row.text, 200)}". Deliver it to him now — brief and direct, one sentence. Do not mention ids or the scheduler.`,
   );
 manager.onFinished = (task) => {
   // Floating promise: an unexpected sync throw (dead transport, store failure) would

@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.ts';
+import { echoForInstructions } from '../audio/announce.ts';
 import type { Store } from '../events/store.ts';
 import { imagesFetch, saveImageResponse } from './generate.ts';
 import { safeImageFile } from './files.ts';
@@ -83,7 +84,7 @@ export async function runImageEdit(opts: {
   // ack and stalling the event loop that carries live voice audio (review 🟡).
   await new Promise((resolve) => setImmediate(resolve));
   const { file, prompt, strokes, store, announce } = opts;
-  const short = prompt.length > 90 ? `${prompt.slice(0, 87)}…` : prompt;
+  const short = echoForInstructions(prompt); // quoted inside live instructions — defanged (review 🔵)
   const scoped = strokes && strokes.length > 0;
   try {
     const out = await editImage(file, prompt, strokes);
