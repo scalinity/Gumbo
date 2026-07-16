@@ -84,14 +84,17 @@ test('edit_image uses the armed context (file + brush strokes) when file is null
   }
 });
 
-test('set_reminder rejects a past fire_at without touching the scheduler', async () => {
+test('set_reminder rejects a past fire_at and hands the model a FRESH clock to re-resolve against', async () => {
   // deps.scheduler is an empty stub — a call into it would throw, so a clean refusal
   // string also proves no row was attempted.
   const result = await toolByName('set_reminder').invoke({}, JSON.stringify({ text: 'x', fire_at: '2020-01-01T09:00:00' }));
   assert.match(result, /in the past/);
+  assert.match(result, /it is now/, 'the session clock goes stale — the rejection must carry the current time (review 🟡)');
 });
 
-test('set_reminder rejects unparseable date-times', async () => {
-  const result = await toolByName('set_reminder').invoke({}, JSON.stringify({ text: 'x', fire_at: 'five oclock' }));
-  assert.match(result, /Could not parse/);
+test('set_reminder rejects non-local ISO shapes that Date.parse would read as UTC', async () => {
+  for (const bad of ['five oclock', '2026-07-17', '2026-07-16T17:00:00Z', '2026-07-16T17:00:00+02:00', '2026-07-16T17:00-0700']) {
+    const result = await toolByName('set_reminder').invoke({}, JSON.stringify({ text: 'x', fire_at: bad }));
+    assert.match(result, /must be a LOCAL date-time/, `must reject "${bad}"`);
+  }
 });

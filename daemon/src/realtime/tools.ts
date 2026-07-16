@@ -263,6 +263,12 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         .describe('Absolute LOCAL date-time, ISO 8601 with no timezone suffix, e.g. 2026-07-16T17:00:00'),
     }),
     execute: async ({ text, fire_at }) => {
+      // Shape guard BEFORE parsing (review 🔵, corroborated): Date.parse treats
+      // date-only strings and Z/offset forms as UTC — hours silently off with only
+      // future-ness validated. Require a local date-time, reject everything else.
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(fire_at) || /(z|[+-]\d{2}:?\d{2})$/i.test(fire_at)) {
+        return `fire_at must be a LOCAL date-time like 2026-07-16T17:00:00 — no date-only strings, no timezone suffix. Got "${fire_at}"; re-resolve and call again.`;
+      }
       // Date.parse of a no-offset ISO date-time is local time (ES2015+) — exactly the
       // contract the parameter asks for.
       const fireAtMs = Date.parse(fire_at);
@@ -270,7 +276,10 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         return `Could not parse "${fire_at}" — pass an ISO local date-time like 2026-07-16T17:00:00.`;
       }
       if (fireAtMs <= Date.now()) {
-        return `${fireAtLabel(fireAtMs)} is in the past — reminders must be in the future. Re-resolve the time and try again.`;
+        // Include the CURRENT time (review 🟡): the session's instructions carry the
+        // clock from connect time, which goes stale in a long session — this is the
+        // model's only fresh reference to re-resolve "in 10 minutes" against.
+        return `${fireAtLabel(fireAtMs)} is in the past — it is now ${fireAtLabel(Date.now())}. Re-resolve the time against that and call again.`;
       }
       const row = deps.scheduler.setReminder(text, fireAtMs);
       return `Reminder set for ${fireAtLabel(row.fire_at)} (internal id ${row.id} — never say it aloud).`;
