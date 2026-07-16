@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -46,6 +46,15 @@ test('sandboxSettings: fail-closed containment — workspace writable, escapes o
     secretFilePaths.map((path) => ({ path, mode: 'deny' })),
     'on-disk secrets (.env, ~/.claude) are read-denied inside the sandbox',
   );
+});
+
+test('sandboxSettings: an existing workspace is canonicalized (symlink-safe allowWrite)', () => {
+  const taskId = 'realpath-task';
+  const workspace = join(config.home.tasks, taskId);
+  mkdirSync(workspace, { recursive: true });
+  // GUMBO_HOME is a mkdtemp under the OS temp dir, itself reached via a symlink on macOS
+  // (/var → /private/var), so realpath differs from the literal join — the fix must apply it.
+  assert.deepEqual(sandboxSettings(taskId).filesystem?.allowWrite, [realpathSync(workspace)]);
 });
 
 test('sandboxSettings: configured allowedDomains open egress without mutating config', () => {

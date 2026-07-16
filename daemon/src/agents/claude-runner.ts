@@ -1,4 +1,5 @@
 import { query, type Query, type SDKUserMessage, type HookJSONOutput, type SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
+import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { config, secretEnvKeys, secretFilePaths } from '../config.ts';
 import type { Store } from '../events/store.ts';
@@ -28,6 +29,13 @@ export const CLAUDE_SANDBOX_ERROR = "this Mac can't run the OS sandbox (Seatbelt
  *  for unit tests. */
 export function sandboxSettings(taskId: string): SandboxSettings {
   const { enabled, failIfUnavailable, allowedDomains } = config.claude.sandbox;
+  // Canonicalize the workspace like the manager canonicalizes cwd (review 🔵): under a
+  // symlinked GUMBO_HOME (e.g. /tmp → /private/tmp on macOS) Seatbelt matches the real
+  // path, so a literal allowWrite entry would miss the workspace and EPERM its writes.
+  // Guard existsSync — the manager mkdirs the workspace before the runner starts, but the
+  // unit test calls this for a taskId that doesn't exist.
+  const workspace = join(config.home.tasks, taskId);
+  const allowWrite = existsSync(workspace) ? realpathSync(workspace) : workspace;
   return {
     enabled,
     failIfUnavailable,
@@ -40,7 +48,7 @@ export function sandboxSettings(taskId: string): SandboxSettings {
     // own Read/Grep tools, which run unsandboxed (verified 2026-07-16); those are hard-
     // denied in the supervisor policy (protectedPathHit). Two layers, one for each path.
     credentials: { files: secretFilePaths.map((path) => ({ path, mode: 'deny' as const })) },
-    filesystem: { allowWrite: [join(config.home.tasks, taskId)] },
+    filesystem: { allowWrite: [allowWrite] },
     ...(allowedDomains.length > 0 ? { network: { allowedDomains: [...allowedDomains] } } : {}),
   };
 }
