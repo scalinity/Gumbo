@@ -135,10 +135,14 @@ export interface SupervisorOptions {
 export class Supervisor {
   private interventions = 0;
   private lines: string[] = [];
+  private opts: SupervisorOptions;
   /** Set when the intervention cap ended the session — the runner flips to needs_input. */
   capHit = false;
 
-  constructor(private opts: SupervisorOptions) {}
+  // No parameter properties: daemon tests run node --test in strip-only mode.
+  constructor(opts: SupervisorOptions) {
+    this.opts = opts;
+  }
 
   private decide(payload: Record<string, unknown>, line: string) {
     this.opts.store.addEvent(this.opts.taskId, 'supervisor.decision', payload);

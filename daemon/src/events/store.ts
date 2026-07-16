@@ -54,7 +54,25 @@ export class Store {
       CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memory BEGIN
         INSERT INTO memory_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
       END;
+      -- M4: Claude Code session ids persist so a session survives the daemon (tsx-watch
+      -- restarts are constant) — send_to_session revives a dead task by resuming its
+      -- session id in its original cwd with its original brief.
+      CREATE TABLE IF NOT EXISTS claude_sessions (
+        task_id TEXT PRIMARY KEY, session_id TEXT, cwd TEXT, brief TEXT, updated_at INT
+      );
     `);
+  }
+
+  saveClaudeSession(taskId: string, row: { sessionId: string; cwd: string; brief: string }) {
+    this.db
+      .prepare('INSERT OR REPLACE INTO claude_sessions (task_id, session_id, cwd, brief, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(taskId, row.sessionId, row.cwd, row.brief, Date.now());
+  }
+
+  getClaudeSession(taskId: string): { session_id: string; cwd: string; brief: string } | undefined {
+    return this.db.prepare('SELECT session_id, cwd, brief FROM claude_sessions WHERE task_id = ?').get(taskId) as
+      | { session_id: string; cwd: string; brief: string }
+      | undefined;
   }
 
   /** Raw web-search results persisted verbatim (FTS5-indexed, rows never mutated). */

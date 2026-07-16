@@ -3,6 +3,7 @@ import { config } from './config.ts';
 import { Store } from './events/store.ts';
 import { createHttpServer } from './http.ts';
 import { Hub } from './ws/hub.ts';
+import { ConfirmBridge } from './ws/confirm.ts';
 import { TaskManager } from './tasks/manager.ts';
 import { Orchestrator } from './realtime/session.ts';
 
@@ -23,7 +24,9 @@ if (reaped.length) console.log(`reaped ${reaped.length} task(s) left running by 
 
 const server = createHttpServer(store);
 const hub = new Hub(server);
-const manager = new TaskManager(store);
+// M4: supervisor escalations resolve through the notch (deny on timeout / no shell).
+const confirms = new ConfirmBridge(hub);
+const manager = new TaskManager(store, (taskId, taskTitle, req) => confirms.request(taskId, taskTitle, req.title, req.detail));
 const orchestrator = new Orchestrator(store, hub, manager);
 manager.onFinished = (task) => {
   // Floating promise: an unexpected sync throw (dead transport, store failure) would
@@ -46,6 +49,12 @@ store.onEvent((event) => {
   if (event.type === 'task.created') {
     const payload = event.payload as { title?: string };
     hub.broadcast({ type: 'bubble_upsert', task_id: event.task_id, title: payload?.title ?? event.task_id, status: 'running' }, 'shell');
+  } else if (event.type === 'task.status') {
+    // M4: needs_input ⇄ running flips mid-run (notch confirm pending, cap hit, resume).
+    const task = store.getTask(event.task_id);
+    const status = (event.payload as { status?: string })?.status;
+    if (!task || (status !== 'running' && status !== 'needs_input')) return;
+    hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status }, 'shell');
   } else if (event.type === 'task.finished') {
     const task = store.getTask(event.task_id);
     if (!task || task.status === 'running' || task.status === 'needs_input') return;
@@ -73,8 +82,8 @@ hub.onHello((role) => {
     hub.broadcast({ type: 'bubble_remove', task_id: id }, 'shell');
   }
   for (const task of store.listTasks()) {
-    if (task.status !== 'running') continue;
-    hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status: 'running' }, 'shell');
+    if (task.status !== 'running' && task.status !== 'needs_input') continue;
+    hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status: task.status }, 'shell');
   }
 });
 
@@ -91,6 +100,8 @@ hub.onMessage((msg, role) => {
     orchestrator.handlePttRelease();
   } else if (msg.type === 'playback_state' && role === 'shell') {
     orchestrator.handlePlaybackState(msg.draining === true);
+  } else if (msg.type === 'confirm_response' && role === 'shell' && typeof msg.id === 'string') {
+    confirms.handleResponse(msg.id, msg.approved === true);
   }
 });
 

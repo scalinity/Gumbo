@@ -34,6 +34,58 @@ export function createOrchestratorTools(manager: TaskManager, store: Store) {
     },
   });
 
+  // M4: real code/file/shell work = a full Claude Code session, supervised. The
+  // description routes between this and spawn_subagent (research/writing) — like
+  // web_quick_lookup, its wording is part of the spec.
+  const spawnClaudeSession = tool({
+    name: 'spawn_claude_session',
+    description:
+      'Start a supervised Claude Code session as a background task for real code, file, or shell work ' +
+      'on this Mac — writing or changing code, running commands, working in a repo. NOT for research ' +
+      'or writing prose (use spawn_subagent). Returns immediately; a supervisor answers its questions ' +
+      'and dangerous actions ask the user via the notch. The brief must be detailed and self-contained.',
+    parameters: z.object({
+      title: z.string().describe('Short human-readable task title, a few words'),
+      brief: z.string().describe('Detailed, self-contained instructions for the coding session'),
+      project_dir: z
+        .string()
+        .nullable()
+        .describe(
+          'Absolute path of the project directory to work in, ONLY if the user named one (or a note holds it). Pass null to work in a fresh private workspace — never guess a path.',
+        ),
+    }),
+    execute: async ({ title, brief, project_dir }) => {
+      try {
+        const task = manager.spawnClaudeSession(title, brief, project_dir);
+        return `Started Claude Code session "${title}" in the background (internal task_id ${task.id} — never say it aloud). You will be told when it finishes — no need to wait.`;
+      } catch (err) {
+        return `Could not start the session: ${String(err)}. Ask the user to clarify the project location.`;
+      }
+    },
+  });
+
+  const sendToSession = tool({
+    name: 'send_to_session',
+    description:
+      'Send a follow-up instruction, answer, or course-correction into a Claude Code session — use it ' +
+      'when a session is paused needing input, when the user wants to redirect one, or to resume a ' +
+      'session that was interrupted (e.g. by a restart). The message must be self-contained.',
+    parameters: z.object({
+      task_id: z.string(),
+      message: z.string().describe("the user's instruction or answer, self-contained"),
+    }),
+    execute: async ({ task_id, message }) => {
+      try {
+        const outcome = manager.sendToSession(task_id, message);
+        return outcome === 'queued'
+          ? 'Delivered to the running session.'
+          : 'Session resumed with the message. You will be told when it finishes.';
+      } catch (err) {
+        return `Could not deliver: ${String(err)}`;
+      }
+    },
+  });
+
   const listTasks = tool({
     name: 'list_tasks',
     description: 'List recent background tasks with their statuses.',
@@ -120,5 +172,5 @@ export function createOrchestratorTools(manager: TaskManager, store: Store) {
     execute: async ({ query, topic }) => webQuickLookup(query, topic),
   });
 
-  return [spawnSubagent, quickLookup, listTasks, getTaskStatus, cancelTask, readReport, saveNote];
+  return [spawnSubagent, spawnClaudeSession, sendToSession, quickLookup, listTasks, getTaskStatus, cancelTask, readReport, saveNote];
 }

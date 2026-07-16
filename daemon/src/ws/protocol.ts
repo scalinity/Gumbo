@@ -20,10 +20,12 @@ export type InboundMessage =
   // shell: speaker queue state. Generation finishes long before audible playback, so the
   // daemon needs this to keep session_state 'speaking' (and the session alive) until
   // the user actually stops hearing Gumbo.
-  | { type: 'playback_state'; draining: boolean };
+  | { type: 'playback_state'; draining: boolean }
+  // shell: the user answered a notch confirm (M4 supervisor escalation).
+  | { type: 'confirm_response'; id: string; approved: boolean };
 
-// Terminal statuses a bubble can show; 'running' is the only live one until M4.
-export type BubbleStatus = 'running' | 'done' | 'failed' | 'cancelled';
+// Statuses a bubble can show; 'running' and 'needs_input' are the live ones (M4).
+export type BubbleStatus = 'running' | 'needs_input' | 'done' | 'failed' | 'cancelled';
 
 // daemon → client
 export type OutboundMessage =
@@ -33,4 +35,6 @@ export type OutboundMessage =
   | { type: 'playback_flush' } // barge-in: drop queued speaker audio immediately
   | { type: 'bubble_upsert'; task_id: string; title: string; status: BubbleStatus } // shell: one panel per task
   | { type: 'bubble_remove'; task_id: string } // shell: fade the panel out (sent after the done-linger)
-  | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running'> }; // shell: brief completion pulse
+  | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running' | 'needs_input'> } // shell: brief completion pulse
+  // shell: a supervisor escalation needs the user's yes/no; deny happens daemon-side on timeout.
+  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number };

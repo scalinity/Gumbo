@@ -51,6 +51,16 @@ test('CHECK constraint rejects unknown memory kinds', () => {
   );
 });
 
+test('claude session ids round-trip and upsert (M4 resume across restarts)', () => {
+  store.saveClaudeSession('t9', { sessionId: 'sess-1', cwd: '/w/t9', brief: 'do the thing' });
+  // Spread: node:sqlite rows have a null prototype, which fails deepEqual vs a literal.
+  assert.deepEqual({ ...store.getClaudeSession('t9') }, { session_id: 'sess-1', cwd: '/w/t9', brief: 'do the thing' });
+  // Resumes create a fresh session id for the same task — the latest one must win.
+  store.saveClaudeSession('t9', { sessionId: 'sess-2', cwd: '/w/t9', brief: 'do the thing\n\nFollow-up from the user: more' });
+  assert.equal(store.getClaudeSession('t9')?.session_id, 'sess-2');
+  assert.equal(store.getClaudeSession('missing'), undefined);
+});
+
 test('nullable columns accept missing url/title/provider', () => {
   store.saveSearchResult({ taskId: null, provider: 'exa', query: 'q', body: 'highlight-only body' });
   const row = raw
