@@ -75,6 +75,7 @@ function isForbiddenLiteral(host: string): boolean {
 export async function startEgressProxy(
   allowed: readonly string[],
   onUnknown: (host: string) => Promise<boolean>,
+  bindHost = '127.0.0.1', // loopback in prod; a unit test passes an unbindable address to exercise fail-closed
 ): Promise<EgressProxy> {
   // Only non-allowlisted hosts land here (allowlisted ones short-circuit). Stores the
   // in-flight promise so two concurrent connects can't spawn two notch confirms.
@@ -146,7 +147,20 @@ export async function startEgressProxy(
   // A malformed CONNECT/handshake surfaces here — destroy the socket, never let it throw.
   proxy.on('clientError', (_e, sock) => sock.destroy());
 
-  await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', () => resolve()));
+  // A listen failure (EMFILE/fd exhaustion, loopback down) is emitted asynchronously as an
+  // 'error' event. Without a listener Node throws it as an uncaught exception (the daemon has no
+  // uncaughtException handler → crash), and the resolve-only promise would never settle — so the
+  // runner's fail-closed CLAUDE_PROXY_ERROR throw would be unreachable on the exact failure it
+  // exists for (review 🔴). Reject on the bind error; after a clean bind, swallow later server
+  // errors so a broken connection can never crash the daemon.
+  await new Promise<void>((resolve, reject) => {
+    proxy.once('error', reject);
+    proxy.listen(0, bindHost, () => {
+      proxy.removeListener('error', reject);
+      proxy.on('error', () => {});
+      resolve();
+    });
+  });
   const addr = proxy.address();
   const port = typeof addr === 'object' && addr ? addr.port : 0;
   if (!port) {

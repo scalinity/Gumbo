@@ -158,6 +158,12 @@ test('startEgressProxy: distinct-host escalations are capped, then refused witho
   }
 });
 
+test('startEgressProxy: a bind failure rejects (fail-closed) instead of crashing/hanging', async () => {
+  // 203.0.113.0/24 is TEST-NET-3 — not assigned to any interface, so listen() fails
+  // EADDRNOTAVAIL. The promise must reject so the runner turns it into CLAUDE_PROXY_ERROR.
+  await assert.rejects(startEgressProxy([], async () => false, '203.0.113.1'), /EADDRNOTAVAIL|ENOTAVAIL|error/i);
+});
+
 test('startEgressProxy: a plain-HTTP (non-CONNECT) request is refused 405', async () => {
   const proxy = await startEgressProxy([], async () => true);
   try {
