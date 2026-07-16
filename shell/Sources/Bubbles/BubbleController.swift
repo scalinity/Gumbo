@@ -33,9 +33,9 @@ final class BubbleController {
     func upsert(taskId: String, title: String, status: String) {
         if let existing = bubbles[taskId] {
             existing.model.title = title
-            let wasRunning = existing.model.status == "running"
+            let wasAlive = existing.model.state.isAlive
             existing.model.status = status
-            if wasRunning && status != "running" {
+            if wasAlive && !existing.model.state.isAlive {
                 existing.model.settledAt = Date() // the cooling ripple
             }
         } else {
@@ -49,7 +49,7 @@ final class BubbleController {
             panel.animator().alphaValue = 1
             layout()
         }
-        if status == "running" {
+        if OrbState(wire: status).isAlive {
             bubbles[taskId]?.failsafe?.cancel()
             bubbles[taskId]?.failsafe = nil
         } else {
@@ -119,13 +119,16 @@ final class BubbleController {
         layout()
     }
 
-    /// The daemon owns the linger (bubble_remove ~12 s after finish); this local cap only
-    /// exists so a bubble can't live forever if the daemon dies inside that window.
+    /// The daemon owns the linger (bubble_remove, config.bubbleLingerMs = 12 s after
+    /// finish); this local cap only exists so a settled bubble can't live forever if the
+    /// daemon dies inside that window — hence comfortably larger than the linger.
+    private static let failsafeSeconds: TimeInterval = 30
+
     private func scheduleFailsafe(_ taskId: String) {
         bubbles[taskId]?.failsafe?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.remove(taskId: taskId) }
         bubbles[taskId]?.failsafe = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.failsafeSeconds, execute: work)
     }
 
     // MARK: history
@@ -210,9 +213,27 @@ private final class FirstMouseHostingView<Content: View>: NSHostingView<Content>
 
 // MARK: - model
 
+/// Single source of truth for the wire status vocabulary (protocol.ts BubbleStatus) on
+/// the Swift side. Every status→visual decision routes through this — a status M4 adds
+/// (e.g. needs_input) lands on .unknown and renders ALIVE with its raw label, instead of
+/// silently inheriting the spent/cancelled look from a String switch default.
+enum OrbState: String {
+    case running, done, failed, cancelled
+    case unknown
+
+    init(wire: String) {
+        self = OrbState(rawValue: wire) ?? .unknown
+    }
+
+    /// Alive = task still in motion (no failsafe, breathing visuals).
+    var isAlive: Bool { self == .running || self == .unknown }
+}
+
 final class BubbleModel: ObservableObject {
     @Published var title: String
     @Published var status: String
+
+    var state: OrbState { OrbState(wire: status) }
     @Published var expanded = false
     @Published var events: [BubbleEvent] = []
     @Published var settledAt: Date? // when the task left 'running' — drives the cooling ripple
@@ -311,12 +332,16 @@ private struct OrbPalette {
     let base: Color
     let deep: Color
 
-    static func palette(for status: String) -> OrbPalette {
-        switch status {
-        case "running": return OrbPalette(hot: hexColor(0xFFCF9E), base: ember, deep: hexColor(0x8A2E12))
-        case "done": return OrbPalette(hot: hexColor(0xD9E9BB), base: bay, deep: hexColor(0x55703F))
-        case "failed": return OrbPalette(hot: hexColor(0xF6AFA9), base: alarm, deep: hexColor(0x8F3030))
-        default: return OrbPalette(hot: hexColor(0x9A8F84), base: faint, deep: hexColor(0x413A33))
+    static func palette(for state: OrbState) -> OrbPalette {
+        switch state {
+        case .running, .unknown: // unknown = alive-but-unrecognized, never spent
+            return OrbPalette(hot: hexColor(0xFFCF9E), base: ember, deep: hexColor(0x8A2E12))
+        case .done:
+            return OrbPalette(hot: hexColor(0xD9E9BB), base: bay, deep: hexColor(0x55703F))
+        case .failed:
+            return OrbPalette(hot: hexColor(0xF6AFA9), base: alarm, deep: hexColor(0x8F3030))
+        case .cancelled:
+            return OrbPalette(hot: hexColor(0x9A8F84), base: faint, deep: hexColor(0x413A33))
         }
     }
 }
@@ -355,25 +380,25 @@ struct OrbView: View {
     @ObservedObject var model: BubbleModel
     var diameter: CGFloat
 
-    private var palette: OrbPalette { OrbPalette.palette(for: model.status) }
+    private var palette: OrbPalette { OrbPalette.palette(for: model.state) }
 
     /// Flow speed + luminosity: running burns, done drifts calmly (never frozen —
     /// frozen reads as dead), failed smolders, cancelled is nearly out.
     private var aliveness: Double {
-        switch model.status {
-        case "running": return 1.0
-        case "failed": return 0.3
-        case "done": return 0.15
-        default: return 0.05
+        switch model.state {
+        case .running, .unknown: return 1.0
+        case .failed: return 0.3
+        case .done: return 0.15
+        case .cancelled: return 0.05
         }
     }
 
     private var breathAmp: Double {
-        switch model.status {
-        case "running": return 1.0
-        case "failed": return 0.3
-        case "done": return 0.12
-        default: return 0.0
+        switch model.state {
+        case .running, .unknown: return 1.0
+        case .failed: return 0.3
+        case .done: return 0.12
+        case .cancelled: return 0.0
         }
     }
 
@@ -412,8 +437,8 @@ struct OrbView: View {
     @ViewBuilder
     private func ring(t: Double) -> some View {
         let ringD = diameter * 1.24
-        switch model.status {
-        case "running": // comet-tail arc, one lap ≈ 6.5 s
+        switch model.state {
+        case .running, .unknown: // comet-tail arc, one lap ≈ 6.5 s
             Circle()
                 .trim(from: 0, to: 0.32)
                 .stroke(
@@ -423,13 +448,13 @@ struct OrbView: View {
                     style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
                 .frame(width: ringD, height: ringD)
                 .rotationEffect(.radians(t * 2 * .pi / 6.5))
-        case "done":
+        case .done:
             Circle().stroke(palette.base.opacity(0.45), lineWidth: 1)
                 .frame(width: ringD, height: ringD)
-        case "failed":
+        case .failed:
             Circle().stroke(palette.base.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 5]))
                 .frame(width: ringD, height: ringD)
-        default:
+        case .cancelled:
             Circle().stroke(faint.opacity(0.25), lineWidth: 1)
                 .frame(width: ringD, height: ringD)
         }
@@ -526,16 +551,20 @@ private struct BubblePanelView: View {
     }
 
     private var statusColor: Color {
-        switch model.status {
-        case "running": return ember
-        case "done": return bay
-        case "failed": return alarm
-        default: return faint
+        switch model.state {
+        case .running, .unknown: return ember
+        case .done: return bay
+        case .failed: return alarm
+        case .cancelled: return faint
         }
     }
 
     private var statusLabel: String {
-        model.status == "running" ? "running…" : model.status
+        switch model.state {
+        case .running: return "running…"
+        case .unknown: return model.status // show the raw wire status until it's mapped
+        default: return model.state.rawValue
+        }
     }
 }
 
