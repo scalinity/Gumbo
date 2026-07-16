@@ -540,3 +540,11 @@ tight search returns nothing, and say so. **Merge note:** the parallel
 `worktree-web-search-providers` branch replaces exa-js with a raw Exa 2.0 client and
 already conflicts in this file — whoever resolves must port `max_age_days` →
 `startPublishedDate` onto the new client (same underlying API param; trivial carry-over).
+
+### Risk #3 CLOSED — TCC persistence verified (2026-07-15, late night)
+
+After the stale ad-hoc-era Accessibility row was purged (`tccutil reset`) and one fresh
+grant was made against the real-cert build, the user confirmed **no Accessibility re-prompt
+across multiple rebuild+relaunch cycles** the same evening (orb v2, notch click-catcher,
+dashboard fixes — each a new binary). Mic grant was already stable. Stable signing
+identity + clean TCC rows = grants persist. Nothing left to watch here.
