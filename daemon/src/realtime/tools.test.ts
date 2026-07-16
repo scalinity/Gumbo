@@ -65,6 +65,25 @@ test('edit_image rejects an invalid named file without starting anything', async
   assert.match(result, /not a valid image filename/);
 });
 
+test('edit_image: a NAMED file different from the viewer context must not inherit the brush strokes (review 🟡)', async () => {
+  // The strokes belong to the image the user highlighted — applying them to a different
+  // image would mask arbitrary pixels. The ack's wording is the observable contract.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('{}', { status: 500 })) as typeof fetch;
+  try {
+    const tool = toolByName('edit_image', {
+      store: { addEvent: () => ({}) },
+      imageContext: { get: () => ({ file: 'swamp-1.png', strokes: [{ points: [[0.1, 0.1]], radius: 0.05 }] }) },
+    });
+    const ack = await tool.invoke({}, JSON.stringify({ prompt: 'brighten it', file: 'other-1.png' }));
+    assert.match(ack, /Edit started in the background/);
+    assert.doesNotMatch(ack, /highlighted area/, 'stale strokes must not follow a differently-named target');
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('edit_image uses the armed context (file + brush strokes) when file is null', async () => {
   // The background edit will hit fetch — stub it to fail fast; the stubs below absorb
   // the failure path (announce + session.error) without touching anything real.

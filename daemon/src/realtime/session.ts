@@ -105,13 +105,21 @@ export class Orchestrator {
   // session's lifetime must track the shell's drain, not the model's turn.
   private shellDraining = false;
 
-  constructor(
-    private store: Store,
-    private hub: Hub,
-    private manager: TaskManager,
-    private scheduler: Scheduler,
-    private imageContext: ImageEditContext,
-  ) {}
+  private store: Store;
+  private hub: Hub;
+  private manager: TaskManager;
+  private scheduler: Scheduler;
+  private imageContext: ImageEditContext;
+
+  // No parameter properties: they fail `node --test` strip-only the moment a test
+  // imports this file (repo gotcha) — and session.test.ts now does.
+  constructor(store: Store, hub: Hub, manager: TaskManager, scheduler: Scheduler, imageContext: ImageEditContext) {
+    this.store = store;
+    this.hub = hub;
+    this.manager = manager;
+    this.scheduler = scheduler;
+    this.imageContext = imageContext;
+  }
 
   private setState(state: SessionState) {
     if (state === this.state) return;
