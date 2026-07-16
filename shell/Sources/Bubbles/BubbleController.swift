@@ -303,20 +303,20 @@ private func hexColor(_ value: UInt32) -> Color {
         blue: Double(value & 0xFF) / 255)
 }
 
-/// Coal palettes: hot center → base → deep edge, plus the bloom strength. Running burns;
-/// done is cooled sea-glass; failed is ash over embers; cancelled is spent.
+/// Orb palettes: hot core → base → deep edge, pushed wide for luminosity contrast —
+/// the plasma shader mixes across the full ramp. Running burns; done is calm sea-glass;
+/// failed is embers under ash; cancelled is spent.
 private struct OrbPalette {
     let hot: Color
     let base: Color
     let deep: Color
-    let bloom: Double
 
     static func palette(for status: String) -> OrbPalette {
         switch status {
-        case "running": return OrbPalette(hot: hexColor(0xFFB38A), base: ember, deep: hexColor(0xC2481F), bloom: 1.0)
-        case "done": return OrbPalette(hot: hexColor(0xCFE0AB), base: bay, deep: hexColor(0x66804D), bloom: 0.55)
-        case "failed": return OrbPalette(hot: hexColor(0xF0938D), base: alarm, deep: hexColor(0xA83B3B), bloom: 0.4)
-        default: return OrbPalette(hot: hexColor(0x8D8177), base: faint, deep: hexColor(0x4A423A), bloom: 0.2)
+        case "running": return OrbPalette(hot: hexColor(0xFFCF9E), base: ember, deep: hexColor(0x8A2E12))
+        case "done": return OrbPalette(hot: hexColor(0xD9E9BB), base: bay, deep: hexColor(0x55703F))
+        case "failed": return OrbPalette(hot: hexColor(0xF6AFA9), base: alarm, deep: hexColor(0x8F3030))
+        default: return OrbPalette(hot: hexColor(0x9A8F84), base: faint, deep: hexColor(0x413A33))
         }
     }
 }
@@ -334,7 +334,7 @@ private struct BubbleRootView: View {
                 BubblePanelView(model: model, onCollapse: onToggle, onDashboard: onDashboard)
                     .transition(.opacity)
             } else {
-                CoalOrbView(model: model, diameter: 54)
+                OrbView(model: model, diameter: 54)
                     .frame(width: BubbleController.collapsedSize.width,
                            height: BubbleController.collapsedSize.height)
                     .contentShape(Circle())
@@ -346,87 +346,93 @@ private struct BubbleRootView: View {
     }
 }
 
-/// The coal. Alive = breathing scale + bloom, molten seams drifting beneath a darkened
-/// crust. Settled = breath decays to a flicker, seams dim, one cooling ripple at the flip.
-struct CoalOrbView: View {
+/// The orb, v2 (coal-orb v1 preserved at git tag `coal-orb-v1`): a Metal-shaded plasma
+/// core — visibly churning fluid interior, fresnel rim, white-hot flecks, luminous
+/// bloom swelling with a clearly perceptible breath — plus one geometric accent: a
+/// comet-tail arc orbiting while the task runs, settling to a still hairline ring on
+/// done. All motion honors Reduce Motion.
+struct OrbView: View {
     @ObservedObject var model: BubbleModel
     var diameter: CGFloat
 
     private var palette: OrbPalette { OrbPalette.palette(for: model.status) }
 
-    /// How much life is left in the coal — drives breath amplitude, seams, and bloom.
+    /// Flow speed + luminosity: running burns, done drifts calmly (never frozen —
+    /// frozen reads as dead), failed smolders, cancelled is nearly out.
     private var aliveness: Double {
         switch model.status {
         case "running": return 1.0
-        case "failed": return 0.22
-        case "done": return 0.08
+        case "failed": return 0.3
+        case "done": return 0.15
+        default: return 0.05
+        }
+    }
+
+    private var breathAmp: Double {
+        switch model.status {
+        case "running": return 1.0
+        case "failed": return 0.3
+        case "done": return 0.12
         default: return 0.0
         }
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 40.0)) { context in
             let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            let t = context.date.timeIntervalSinceReferenceDate
+            let now = context.date.timeIntervalSinceReferenceDate
+            // The shader sees float32 — a raw epoch timestamp loses sub-second precision
+            // and the flow stutters. Wrap hourly (one imperceptible seam per hour).
+            let shaderT = reduceMotion ? 0.0 : now.truncatingRemainder(dividingBy: 3600)
             // Two detuned sines so the breath never reads as a loop.
             let breath = reduceMotion ? 0.0 :
-                (sin(t * 2 * .pi / 3.2) * 0.7 + sin(t * 2 * .pi / 7.7 + 1.3) * 0.3) * aliveness
+                (sin(now * 2 * .pi / 3.4) * 0.7 + sin(now * 2 * .pi / 8.1 + 1.3) * 0.3) * breathAmp
+            let side = diameter * 1.55
 
             ZStack {
-                Circle() // heat bloom
-                    .fill(RadialGradient(
-                        colors: [palette.base.opacity(0.5), .clear],
-                        center: .center, startRadius: diameter * 0.1, endRadius: diameter * 0.75))
-                    .frame(width: diameter * 1.55, height: diameter * 1.55)
-                    .opacity(palette.bloom * (0.7 + 0.3 * breath))
-
-                coalCore(t: reduceMotion ? 0 : t)
-                    .frame(width: diameter, height: diameter)
-                    .scaleEffect(1 + 0.035 * breath)
-
+                Rectangle()
+                    .fill(Color.white)
+                    .frame(width: side, height: side)
+                    .colorEffect(ShaderLibrary.orb(
+                        .float2(side, side),
+                        .float(shaderT),
+                        .float(aliveness),
+                        .float(breath),
+                        .color(palette.hot),
+                        .color(palette.base),
+                        .color(palette.deep)))
+                ring(t: shaderT)
                 ripple(now: context.date)
             }
+            .scaleEffect(1 + 0.04 * breath) // the geometric half of the breath
         }
         .frame(width: diameter * 1.55, height: diameter * 1.55)
     }
 
-    private func coalCore(t: Double) -> some View {
-        ZStack {
-            Circle().fill(RadialGradient(
-                colors: [palette.hot, palette.base, palette.deep],
-                center: UnitPoint(x: 0.38, y: 0.34),
-                startRadius: 0, endRadius: diameter * 0.78))
-
-            if aliveness > 0.01 { // molten seams under the crust
-                seam(t: t, period: 9, phase: 0.0, orbit: 0.16, size: 0.55, color: palette.hot)
-                seam(t: t, period: 13, phase: 2.1, orbit: 0.22, size: 0.42, color: palette.base)
-                seam(t: t, period: 17, phase: 4.2, orbit: 0.12, size: 0.60, color: palette.deep)
-            }
-
-            Circle().fill(RadialGradient( // crust — keeps the seams reading as *beneath*
-                colors: [.clear, .clear, roux.opacity(0.55)],
-                center: .center, startRadius: 0, endRadius: diameter * 0.52))
-
-            Ellipse() // soft specular, matte not glassy
-                .fill(.white.opacity(0.16))
-                .frame(width: diameter * 0.34, height: diameter * 0.20)
-                .blur(radius: diameter * 0.045)
-                .offset(x: -diameter * 0.16, y: -diameter * 0.22)
-
-            Circle().strokeBorder(.white.opacity(0.10), lineWidth: 1)
+    @ViewBuilder
+    private func ring(t: Double) -> some View {
+        let ringD = diameter * 1.24
+        switch model.status {
+        case "running": // comet-tail arc, one lap ≈ 6.5 s
+            Circle()
+                .trim(from: 0, to: 0.32)
+                .stroke(
+                    AngularGradient(colors: [palette.base.opacity(0), palette.hot],
+                                    center: .center,
+                                    startAngle: .degrees(0), endAngle: .degrees(115)),
+                    style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                .frame(width: ringD, height: ringD)
+                .rotationEffect(.radians(t * 2 * .pi / 6.5))
+        case "done":
+            Circle().stroke(palette.base.opacity(0.45), lineWidth: 1)
+                .frame(width: ringD, height: ringD)
+        case "failed":
+            Circle().stroke(palette.base.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 5]))
+                .frame(width: ringD, height: ringD)
+        default:
+            Circle().stroke(faint.opacity(0.25), lineWidth: 1)
+                .frame(width: ringD, height: ringD)
         }
-        .clipShape(Circle())
-    }
-
-    private func seam(t: Double, period: Double, phase: Double, orbit: CGFloat, size: CGFloat, color: Color) -> some View {
-        let angle = t * 2 * .pi / period + phase
-        return Circle()
-            .fill(color)
-            .frame(width: diameter * size, height: diameter * size)
-            .offset(x: cos(angle) * diameter * orbit, y: sin(angle) * diameter * orbit)
-            .blur(radius: diameter * 0.10)
-            .blendMode(.plusLighter)
-            .opacity(0.12 + 0.5 * aliveness)
     }
 
     @ViewBuilder
@@ -467,7 +473,7 @@ private struct BubblePanelView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            CoalOrbView(model: model, diameter: 18)
+            OrbView(model: model, diameter: 18)
                 .frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.title)

@@ -482,3 +482,27 @@ had the whole turn (also confirmed there: the date fix works — the 7 PM sub-ag
   fan-out, which now broadcasts to the shell too. `bubble_remove` / the 30 s failsafe are
   **deferred while expanded** — never yank a panel the user is reading. Full dashboard is
   the ⤴ link in the header (deep-link path reused). One expanded at a time.
+
+### Orb v2 — Metal plasma redesign (2026-07-15, night)
+
+the user's verdict on the coal orbs: "orange balls that are slightly static." Fair — the
+v1 motion was tuned too timid (9–17 s seam orbits, ±3.5 % breath) and the `.plusLighter`
+seams flattened in compositing. **v1 preserved at git tag `coal-orb-v1`** (restore:
+`git show coal-orb-v1:shell/Sources/Bubbles/BubbleController.swift`).
+
+v2 is a per-pixel **Metal shader** (`Orb.metal`, SwiftUI `colorEffect` stitchable):
+- Interior = differential swirl + **domain-warped** trig octaves (the warp is what kills
+  the coherent "pinwheel" arms — first render had them; verified by offscreen renders
+  through the real compiled app bundle via `ShaderLibrary.bundle` + `ImageRenderer`).
+  Energy ramps deep → base → hot → white-hot flecks, smootherstep contrast curve.
+- Fresnel rim, soft specular, luminous bloom that swells with the breath; geometric
+  breath is a view-level `scaleEffect` (±4 %, clearly visible now). Flow speed and
+  luminosity scale with `aliveness` (running 1.0 burns; done 0.15 drifts calmly — never
+  frozen, frozen reads dead; failed smolders dim).
+- One crisp accent over the organic core: a **comet-tail arc** orbiting (~6.5 s/lap)
+  while running → still hairline ring on done → dashed on failed.
+- Palettes pushed wide for contrast (e.g. running: #FFCF9E → ember → #8A2E12).
+- Gotchas: shader time must be **wrapped** (float32 mangles epoch-scale timestamps —
+  hourly `truncatingRemainder`); Xcode 27 ships the Metal compiler as a **downloadable
+  component** (`xcodebuild -downloadComponent MetalToolchain`, ~840 MB — was missing);
+  Reduce Motion freezes flow + breath.
