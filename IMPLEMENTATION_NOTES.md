@@ -682,3 +682,55 @@ commits (9addb00…2f8959a), each built/tested, pushed to origin. Highlights:
   announce excerpt cap; cold-announce copy documented as announce-only by design.
 
 **M3 merged to main after this pass. SPEC §9 M3 marked ✅ DONE.**
+
+---
+
+## M4 — Claude Code + supervisor
+
+### Spikes first (2026-07-15, SPEC §10 risks #2 and #4) — both PASSED
+
+**Spike (a) — subscription auth from a daemon context (risk #2, closed):**
+`@anthropic-ai/claude-agent-sdk` **0.3.211** installed (matches CLI 2.1.211). A bare `query()`
+under `env -i` answers on subscription auth with **no `ANTHROPIC_API_KEY` anywhere** — but two
+findings are load-bearing:
+- **`USER` must be in the child env.** The OAuth token lives in the login keychain as service
+  `"Claude Code-credentials"` with `acct = "dev"`; with only `HOME`+`PATH` the CLI resolves no
+  account and reports "Not logged in · Please run /login" (`apiKeySource: "none"` in init is
+  normal — it means *no API key*, i.e. subscription auth). `HOME`+`PATH`+`USER` → answers.
+- **`ANTHROPIC_API_KEY` anywhere in the env silently outranks the claude.ai login** (the CLI
+  warns "connectors are disabled… takes precedence"). The runner strips it from the subprocess
+  env as defense-in-depth, per the locked no-API-key decision.
+- The SDK's **bundled** executable works on subscription auth; `pathToClaudeCodeExecutable` →
+  `~/.local/share/claude/versions/2.1.211` also verified working as the documented fallback.
+  Not set in the runner (bundled is fine and tracks the SDK version).
+
+**Spike (b) — supervisor↔Claude loop on canned events (risk #4, closed):** the real
+`agents/supervisor.ts` logic against canned events — 2 questions + 1 dangerous permission +
+the cap, live on `gpt-5.6-terra`: decisive brief-grounded answers (picked `--json` over
+`--format=json` per the brief's conventions clause), `git push` escalated to the (stubbed)
+notch and honored both deny and approve, `needs_input` flipped on→off around the confirm,
+and the 3rd question on a cap of 2 returned `deny {interrupt: true}` + `capHit` with event
+trail `reply, reply, cap`. Policy table 8/8 pure checks.
+
+### Design change from the user (2026-07-15, mid-build): sessions run in **auto mode**
+
+the user: "make the claude code sessions run in auto mode so that supervisor doesnt have to be
+called every turn." Consequences, agreed as the M4 shape:
+- `permissionMode: 'acceptEdits'` + a **pure policy table** in `canUseTool` — reads, edits
+  under cwd, and ordinary commands auto-allow with **zero model calls** (logged as
+  `supervisor.decision {source: 'policy'}`). The **escalate pattern list IS the safety
+  boundary**: `git push`, `sudo`, deletes outside cwd, network-send (`curl -d`/`-F`/`-T`/
+  `-X POST…`, `gh pr/issue/… create/edit/…`, mail). Everything else runs unreviewed — e.g.
+  `npm install` no longer gets a supervisor judgment call (trade-off flagged to the user).
+- The supervisor **model** runs only when Claude asks a question — `AskUserQuestion` routes
+  through `canUseTool`, and the supervisor answers via `deny {message}` (the deny message is
+  the channel Claude actually reads; there is no "answer" shape in `PermissionResult`).
+  Intervention cap (default 5) → `deny {interrupt: true}` → runner parks the task
+  `needs_input` for the user instead of finishing it.
+- A run that ends cleanly is **done** — no per-turn "is it done?" model pass. Claude's brief
+  instructs it to use AskUserQuestion when it genuinely needs direction, so a trailing
+  free-text question ends the run as complete (accepted trade-off).
+- Sessions on a real project: `spawn_claude_session` takes an optional `project_dir` that
+  becomes the session **cwd** when the user names a project (the demo edits a real repo, which
+  would otherwise make every edit "outside cwd" and spam the notch). `report.md` +
+  `supervisor.md` always land in the task workspace regardless.

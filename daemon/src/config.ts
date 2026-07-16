@@ -47,6 +47,7 @@ export const config = {
   models: {
     realtime: 'gpt-realtime-2.1',
     subagent: 'gpt-5.6-terra',
+    supervisor: 'gpt-5.6-terra',
     // M3 cold announcements. Verified live (2026-07-15): /v1/audio/speech accepts the
     // 'marin' voice on this model with response_format 'pcm' → 24 kHz mono pcm16, the
     // exact shell wire format — same voice as the realtime session, zero transcoding.
@@ -81,6 +82,18 @@ export const config = {
     quickLookupTimeoutMs: 3000,
     quickLookupMaxResults: 5,
     backgroundNumResults: 10,
+  },
+  // M4 Claude Code sessions run in "auto mode" (the user's call, 2026-07-15): the pure
+  // policy table gates everything; the supervisor MODEL is only invoked when Claude
+  // actually asks a question (AskUserQuestion) — never per turn or per tool call.
+  claude: {
+    // Hard ceiling on supervisor answers per session. A Claude that keeps asking is
+    // stuck, and each answer is a model call — past the cap the session pauses
+    // (needs_input) and waits for the user instead of looping.
+    maxInterventions: 5,
+    // Notch confirm: deny on timeout so a missed prompt can't hang a session forever.
+    confirmTimeoutMs: 60_000,
+    maxTurns: 100, // runaway backstop, not a working budget
   },
   // How long a finished task's bubble lingers before the daemon sends bubble_remove.
   bubbleLingerMs: 12_000,
