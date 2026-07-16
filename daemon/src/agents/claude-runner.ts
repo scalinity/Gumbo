@@ -1,4 +1,5 @@
-import { query, type Query, type SDKUserMessage, type HookJSONOutput } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Query, type SDKUserMessage, type HookJSONOutput, type SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
+import { join } from 'node:path';
 import { config, secretEnvKeys } from '../config.ts';
 import type { Store } from '../events/store.ts';
 import type { Supervisor, GateResult } from './supervisor.ts';
@@ -13,6 +14,30 @@ export const CLAUDE_AUTH_ERROR = 'auth: Claude Code needs you to log in again �
 // Result subtypes that mean "ran out of room," not "failed": the work is on disk and the
 // session resumes with send_to_session, so the task parks for the user rather than failing.
 const RESUMABLE_LIMIT_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd']);
+
+// M4.1 fail-closed detection: with failIfUnavailable the CLI refuses to start and emits a
+// result (subtype error_during_execution) whose errors[] carries this exact phrasing —
+// matched on the ERROR detail only, never on report text (same discipline as AUTH_MARKER).
+// Exported for unit tests.
+export const SANDBOX_MARKER = /sandbox required but unavailable|refusing to start without a working sandbox/i;
+export const CLAUDE_SANDBOX_ERROR = "this Mac can't run the OS sandbox (Seatbelt unavailable), so the session refused to start rather than run unconfined.";
+
+/** M4.1: OS-level containment under the semantic gates. Writes are confined to the session
+ *  cwd (the sandbox's built-in boundary) plus the task workspace; outbound network is
+ *  blocked by default (the SDK's egress proxy 403s any domain not allowlisted). Exported
+ *  for unit tests. */
+export function sandboxSettings(taskId: string): SandboxSettings {
+  const { enabled, failIfUnavailable, allowedDomains } = config.claude.sandbox;
+  return {
+    enabled,
+    failIfUnavailable,
+    // The model can pass dangerouslyDisableSandbox on a Bash call; false makes the CLI
+    // ignore it — containment stays deterministic even under prompt injection.
+    allowUnsandboxedCommands: false,
+    filesystem: { allowWrite: [join(config.home.tasks, taskId)] },
+    ...(allowedDomains.length > 0 ? { network: { allowedDomains: [...allowedDomains] } } : {}),
+  };
+}
 
 // Least privilege: hand the Claude subprocess the environment it needs (HOME/PATH/USER for
 // the keychain login lookup, TMPDIR, locale, …) MINUS every daemon-held provider secret —
@@ -188,6 +213,10 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           // can't kill the hook mid-confirm and let an escalate-class action slip.
           PreToolUse: [{ hooks: [(hookInput) => this.preToolUse(hookInput)], timeout: Math.ceil(config.claude.hookTimeoutMs / 1000) }],
         },
+        // M4.1: OS sandbox (Seatbelt) UNDER the gates above — the hook/notch stay the
+        // semantic layer (git push confirms); the sandbox is the deterministic one
+        // (can't escape cwd+workspace, can't phone home). Fail closed when unavailable.
+        sandbox: sandboxSettings(taskId),
         env: subprocessEnv(),
       },
     });
@@ -236,6 +265,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
             // good run whose report merely mentions "not logged in" (review 🔴 2026-07-16).
             const errText = (msg.errors ?? []).join('; ');
             if (this.authFailed || AUTH_MARKER.test(errText)) throw new Error(CLAUDE_AUTH_ERROR);
+            if (SANDBOX_MARKER.test(errText)) throw new Error(CLAUDE_SANDBOX_ERROR);
             if (RESUMABLE_LIMIT_SUBTYPES.has(msg.subtype)) {
               return this.park(report, msg.subtype === 'error_max_turns' ? 'reached the turn limit — needs your go-ahead to continue' : 'reached the budget limit — needs your go-ahead');
             }

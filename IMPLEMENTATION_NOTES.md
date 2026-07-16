@@ -884,6 +884,58 @@ tests green, and TWO live daemon smokes pass (original auto flow + this hardenin
 > strip-only — no constructor parameter properties. Update IMPLEMENTATION_NOTES with a dated M4.1
 > entry (why, not just what) and the spike result. Do not run build commands on the JS side.
 
+### M4.1 — OS sandbox built (2026-07-16)
+
+**Why:** the M4 policy table is semantic, not containment — a regex tokenizer can't parse a shell,
+and Claude reads attacker-influenceable content. The SDK's `sandbox` option (macOS Seatbelt) makes
+the filesystem/network boundary deterministic *under* the existing gates, so the policy table can
+stay in the job it's good at (semantic confirms like git push) without pretending to be a wall.
+
+**Spike PASSED on macOS 27.0 beta (Seatbelt works — the bubblewrap/fail-closed doc worry was
+Linux-only).** Three throwaway `query()` probes (scratchpad `m41-spike/`), each verified on disk,
+not from the model's narration:
+- Bash write inside `cwd` and inside a `filesystem.allowWrite` extra dir → allowed. Bash write to
+  `$HOME` → `operation not permitted` (file never created). So allowWrite is "cwd + listed paths",
+  additive on a deny-by-default base, exactly what the runner needs for `~/Gumbo/tasks/<id>/`.
+- Outbound `curl` → `curl: (56) CONNECT tunnel failed, response 403`. **The sandbox denies direct
+  sockets and forces all egress through a local SDK-owned HTTP proxy** which 403s any domain not
+  in `network.allowedDomains` — network denial is a proxy refusal, filesystem denial is an OS
+  error; two different enforcement layers, both default-deny.
+- **The Write TOOL is confined too** (not just bash): under `permissionMode: 'auto'`, Write to
+  `$HOME` → `EPERM` on the CLI's temp file. The boundary holds even for the CLI's own file ops.
+- **PreToolUse hook still fires and its deny wins under sandbox + 'auto'** — the M4 layering
+  invariant. Sandbox is the bottom layer; hook/notch stay the top.
+
+**Fail-closed shape (from the CLI 2.1.211 internals, needed for a clear message):** with
+`failIfUnavailable: true` the CLI refuses to start and emits a stream-json `result` with subtype
+`error_during_execution` and `errors: ["Sandbox required but unavailable: <reason>. …"]`. The
+runner matches that phrasing (`SANDBOX_MARKER`, error-text only — same discipline as the auth
+marker after its review 🔴) and throws a clear "this Mac can't run the OS sandbox…" failure
+instead of a cryptic subtype. Note the SDK's own doc: `failIfUnavailable` *defaults to true* when
+sandbox is enabled via SDK options — we still set it explicitly from config so the intent is
+visible and survives SDK default changes.
+
+**Build:** `config.claude.sandbox` (`enabled`, `failIfUnavailable`, `allowedDomains: []`);
+`sandboxSettings(taskId)` in claude-runner.ts (exported for tests) wired into `query()` options.
+Decisions that matter:
+- **`allowUnsandboxedCommands: false` (hardcoded, not config).** The SDK default is `true`, which
+  lets the model pass `dangerouslyDisableSandbox` on any Bash call — i.e. a prompt-injected
+  session could simply opt out of containment. `false` makes the CLI ignore that parameter.
+- **Network default-deny, `allowedDomains` as the only opening.** Empty list → no `network` key →
+  everything 403s at the proxy. **Consequence the user should know: an approved `git push` now
+  fails at the egress proxy even after the notch confirm** (sandbox denies network to commands
+  regardless of permission-layer approvals). If push-from-session should work, add `github.com`
+  to `allowedDomains` (HTTPS remotes only — SSH won't traverse the HTTP proxy); until then the
+  confirm flow still works but the push itself needs to happen outside the session.
+- Tests: 102/102 (`sandboxSettings` shape, per-session copy of allowedDomains, marker regex vs
+  the CLI's real strings and vs a benign report mentioning "sandbox").
+
+**Caveats parked for later (from the CLI settings schema, not enabled):** `allowAppleEvents`
+(needed for `open`/`osascript`/browser auth flows; removes code-execution isolation — leave off),
+trustd access (Go-based CLIs like `gh`/`terraform` can't verify TLS through the proxy's MITM CA
+without it; reduces security — leave off until a session actually hits it), and
+`autoAllowBashIfSandboxed` (we rely on 'auto' mode + hook instead; not set).
+
 ---
 
 ## Firecrawl content acquisition — scrape/crawl/map/extract for background agents — 2026-07-15

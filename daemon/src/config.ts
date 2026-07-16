@@ -112,6 +112,22 @@ export const config = {
     // the user room to read the plan (in the dashboard/bubble) before the notch auto-denies.
     // A denied/timed-out plan parks needs_input; it's resumable, nothing is lost.
     planConfirmTimeoutMs: 900_000, // 15 min
+    // M4.1: OS-level sandbox (macOS Seatbelt) around the session — deterministic
+    // filesystem/network containment UNDER the semantic gates (plan mode, PreToolUse
+    // hook, notch escalations). Spike-verified on this macOS 27.0 beta (2026-07-16):
+    // writes confined to cwd + allowWrite, network default-denied via the SDK's local
+    // egress proxy, and even the Write tool EPERMs outside the boundary.
+    sandbox: {
+      enabled: true,
+      // Fail closed: if Seatbelt can't start, the session refuses to run with a clear
+      // message rather than silently running unconfined.
+      failIfUnavailable: true,
+      // Outbound network is blocked by default. Add domains here to open egress —
+      // e.g. 'github.com' if an approved `git push` over HTTPS should work from
+      // inside the sandbox (until then, pushes fail at the egress proxy even after
+      // the notch confirm approves them).
+      allowedDomains: [] as string[],
+    },
   },
   // Firecrawl: content acquisition (scrape/crawl/map/extract) for background sub-agents
   // only — never a search provider, never on the voice hot path. All budgets are generous
