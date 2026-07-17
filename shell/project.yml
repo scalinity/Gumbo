@@ -43,3 +43,7 @@ targets:
         NSMicrophoneUsageDescription: "Gumbo listens while you hold Control-Option to talk to it."
         # M5: EventKit mirror of Gumbo's reminders (shell owns ALL TCC; first create prompts).
         NSRemindersFullAccessUsageDescription: "Gumbo puts the reminders you set into Reminders.app so they fire even when Gumbo isn't running."
+        # M6: osascript / shortcuts run from the shell so Automation TCC attributes to Gumbo.
+        # Accessibility (AX control) is already granted and needs no usage string; this covers
+        # the Apple-Events prompt macOS shows per target app the first time a script drives it.
+        NSAppleEventsUsageDescription: "Gumbo runs the Mac actions you ask for by controlling apps on your behalf."

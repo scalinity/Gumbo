@@ -97,7 +97,9 @@ final class GumboController {
     private let imageViewer = ImageViewerController()
     private let confirm = ConfirmController()
     private let reminders = RemindersBridge()
+    private let mac = MacBridge()
     private let quickText = QuickTextController()
+    private let mac = MacBridge()
     private lazy var dashboard = DashboardWindow()
 
     private var daemonState = "idle"
@@ -130,6 +132,8 @@ final class GumboController {
         quickText.onSubmit = { [weak self] text in
             self?.ws.sendJSON(["type": "debug_text", "text": text])
         }
+        // M6: mac_action results + kill-switch aborts ride back over the same socket.
+        mac.onReply = { [weak self] json in self?.ws.sendJSON(json) }
         ws.connect()
     }
 
@@ -192,6 +196,9 @@ final class GumboController {
     private func wireWS() {
         ws.onMessage = { [weak self] msg in
             guard let self, let type = msg["type"] as? String else { return }
+            // M6: mac_action / mac_task go straight to the bridge (its own worker queue);
+            // it owns the reply, so short-circuit the notch/bubble switch below.
+            if self.mac.handle(msg) { return }
             switch type {
             case "session_state":
                 self.daemonState = msg["state"] as? String ?? "idle"
@@ -241,6 +248,9 @@ final class GumboController {
                 if let ekId = msg["eventkit_id"] as? String {
                     self.reminders.remove(eventkitId: ekId)
                 }
+            case "mac_action", "mac_task":
+                // M6: computer use — the bridge executes AX/scripts and answers the daemon.
+                _ = self.mac.handle(msg)
             case "event":
                 // Task-scoped activity for the bubble mini-panel live tail.
                 if let event = msg["event"] as? [String: Any] {

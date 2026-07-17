@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Gumbo runs the Mac actions you ask for by controlling apps on your behalf.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Gumbo listens while you hold Control-Option to talk to it.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
