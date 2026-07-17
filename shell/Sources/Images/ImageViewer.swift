@@ -273,34 +273,47 @@ private struct ImageViewerView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "photo")
-                .font(.system(size: 11))
-                .foregroundStyle(ember)
-            Text(model.busy ? "Editing…" : "Image")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.92))
-            if model.busy {
-                ProgressView().controlSize(.small).padding(.leading, 2)
+        // The drag handle is the BOTTOM layer of a ZStack and the passive content
+        // (icon, title, notice) is marked non-hit-testing, so a mouseDown on the header
+        // reaches the NSView and starts a window drag. Only the close Button keeps its
+        // own hits. (The earlier `.background(WindowDragHandle())` never received the
+        // click — a `.contentShape(Rectangle())` above it made SwiftUI eat the mouseDown
+        // first, so the header looked draggable but wasn't — live gripe 2026-07-16.)
+        ZStack {
+            WindowDragHandle().frame(maxWidth: .infinity, maxHeight: .infinity) // fill the header (an NSView has no intrinsic size)
+            // Passive labels — non-hit-testing so mouseDown falls through to the drag view.
+            HStack(spacing: 8) {
+                Image(systemName: "photo")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ember)
+                Text(model.busy ? "Editing…" : "Image")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                if model.busy {
+                    ProgressView().controlSize(.small).padding(.leading, 2)
+                }
+                if let notice = model.notice {
+                    Text(notice)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(alarm)
+                }
+                Spacer()
             }
-            if let notice = model.notice {
-                Text(notice)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(alarm)
+            .allowsHitTesting(false)
+            // The one interactive control — kept above the drag layer.
+            HStack {
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(faint)
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
             }
-            Spacer()
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(faint)
-            }
-            .buttonStyle(.plain)
-            .pointingCursor()
         }
         .padding(.horizontal, 14)
         .frame(height: 36)
-        .contentShape(Rectangle())
-        .background(WindowDragHandle())
     }
 
     private var imageArea: some View {

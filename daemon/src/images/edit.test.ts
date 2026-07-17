@@ -54,7 +54,13 @@ test('multipart contract: endpoint, model, prompt, source image, and a dimension
   const form = calls[0].init.body as FormData;
   assert.ok(form instanceof FormData, 'edits are multipart, not JSON');
   assert.equal(form.get('model'), 'gpt-image-2');
-  assert.equal(form.get('prompt'), 'make the sky purple');
+  // A MASKED edit's prompt is wrapped so gpt-image-2 confines the change to the brushed
+  // region and preserves the rest (live finding 2026-07-16 — a bare instruction let the
+  // model reimagine the whole scene). The instruction is carried verbatim inside.
+  const sentPrompt = String(form.get('prompt'));
+  assert.match(sentPrompt, /Edit ONLY the selected \(masked\) region/);
+  assert.match(sentPrompt, /make the sky purple/);
+  assert.match(sentPrompt, /exactly identical to the original/);
   assert.equal(form.get('quality'), 'high');
   // gpt-image-2 400s on gpt-image-1's input_fidelity (live failure 2026-07-16) — it
   // must never creep back into the form.
@@ -67,11 +73,12 @@ test('multipart contract: endpoint, model, prompt, source image, and a dimension
   assert.deepEqual(pngDimensions(Buffer.from(await mask.arrayBuffer())), { width: 64, height: 48 });
 });
 
-test('no strokes → no mask part (whole-image edit)', async () => {
+test('no strokes → no mask part AND the raw instruction (a whole-image edit is meant to be global)', async () => {
   const calls = capture();
   await editImage(SOURCE_FILE, 'brighten it up');
   const form = calls[0].init.body as FormData;
   assert.equal(form.get('mask'), null);
+  assert.equal(form.get('prompt'), 'brighten it up', 'unmasked edits are not wrapped');
 });
 
 test('the edit lands as a NEW word-named file — never overwrites the source', async () => {

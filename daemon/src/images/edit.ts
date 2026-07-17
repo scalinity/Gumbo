@@ -14,12 +14,31 @@ import { imagesFetch, saveImageResponse } from './generate.ts';
 import { imageNameHint, safeImageFile } from './files.ts';
 import { pngDimensions, sanitizeStrokes, strokeMaskPng, type Stroke } from './mask.ts';
 
+/**
+ * Frame a masked-edit prompt so gpt-image-2 actually CONFINES the change to the brushed
+ * region. Live finding (2026-07-16): with a bare instruction the model treats the mask as
+ * a weak hint and reimagines the whole scene (the user brushed the right rock to add a
+ * moose → the moose landed on the LEFT rock and the right rock vanished). An explicit
+ * "edit ONLY the selected region, keep everything else identical" wrapper fixed it in a
+ * side-by-side test — the moose landed exactly on the brushed rock with the rest
+ * preserved. gpt-image-2 still isn't pixel-strict outside the mask, but it's night-and-day.
+ * Whole-image edits (no strokes) keep the raw instruction — a global change is intended.
+ */
+export function framePromptForMask(instruction: string): string {
+  return (
+    `Edit ONLY the selected (masked) region of this image: ${instruction}. ` +
+    `Blend the change naturally with the surrounding scene's existing lighting, color, and perspective. ` +
+    `Keep everything OUTSIDE the selected region exactly identical to the original.`
+  );
+}
+
 /** Run one masked (or whole-image) edit. Returns the NEW image's bare filename. */
 export async function editImage(file: string, prompt: string, strokes?: Stroke[]): Promise<string> {
   const source = readFileSync(join(config.home.images, safeImageFile(file)));
+  const masked = !!(strokes && strokes.length > 0);
   const form = new FormData();
   form.append('model', config.models.image);
-  form.append('prompt', prompt);
+  form.append('prompt', masked ? framePromptForMask(prompt) : prompt);
   // Highest-fidelity default (verified on a real edit): quality high. Deliberately NO
   // input_fidelity — gpt-image-2 rejects it with a 400 ("does not support the
   // 'input_fidelity' parameter", live failure 2026-07-16). PROBE TRAP for posterity:
@@ -28,9 +47,9 @@ export async function editImage(file: string, prompt: string, strokes?: Stroke[]
   // not that this model takes it. Only a real call proves support.
   form.append('quality', config.images.quality);
   form.append('image', new Blob([new Uint8Array(source)], { type: 'image/png' }), file);
-  if (strokes && strokes.length > 0) {
+  if (masked) {
     const { width, height } = pngDimensions(source);
-    form.append('mask', new Blob([new Uint8Array(strokeMaskPng(width, height, strokes))], { type: 'image/png' }), 'mask.png');
+    form.append('mask', new Blob([new Uint8Array(strokeMaskPng(width, height, strokes!))], { type: 'image/png' }), 'mask.png');
   }
   const res = await imagesFetch('https://api.openai.com/v1/images/edits', {
     method: 'POST',

@@ -16,7 +16,9 @@ final class ImageBubbleController {
 
     static let thumbSize = NSSize(width: 148, height: 104)
     private static let lingerSeconds: TimeInterval = 600
-    private static let maxThumbs = 3
+    // Originals now persist beside their edits (the user, 2026-07-16), so the stack fills
+    // faster — room for an original plus a few edit versions before the oldest fades.
+    private static let maxThumbs = 5
 
     private struct Thumb {
         let panel: NSPanel
@@ -58,23 +60,20 @@ final class ImageBubbleController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
     }
 
-    /// A new image landed (image.created). Its generating orb (matched by gen_id) or its
-    /// edit placeholder morphs into the thumbnail in place; otherwise an edit takes its
-    /// parent's slot and a fresh image stacks on top. Oldest beyond the cap fade out.
+    /// A new image landed (image.created). A generation's orb (matched by gen_id) or an
+    /// edit's own working orb morphs into the thumbnail in place. The edited version is a
+    /// SEPARATE card that stacks alongside its original — the original is NEVER removed
+    /// (the user, 2026-07-16: an edit used to replace the source in the stack). Oldest
+    /// beyond the cap fade out.
     func present(file: String, editedFrom: String?, genId: String?) {
         if let genId, thumbs["gen:" + genId] != nil {
             morph(key: "gen:" + genId, into: file)
-        } else if let parent = editedFrom {
-            if thumbs["edit:" + parent] != nil {
-                morph(key: "edit:" + parent, into: file)
-                removeThumb(parent) // the new version supersedes the source thumb if it's still up
-            } else if let slot = order.firstIndex(of: parent) {
-                removeThumb(parent)
-                insert(key: file, file: file, at: min(slot, order.count))
-            } else if thumbs[file] == nil {
-                insert(key: file, file: file, at: 0)
-            }
+        } else if let parent = editedFrom, thumbs["edit:" + parent] != nil {
+            // The edit's working orb becomes the new version; the parent thumb stays put.
+            morph(key: "edit:" + parent, into: file)
         } else if thumbs[file] == nil {
+            // No orb to morph (edit started before this shell connected, or a plain new
+            // image): land it as a fresh card on top, leaving any original in place.
             insert(key: file, file: file, at: 0)
         }
         trim()
