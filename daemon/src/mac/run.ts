@@ -1,8 +1,18 @@
 import { execFile } from 'node:child_process';
-import { config } from '../config.ts';
+import { config, secretEnvKeys } from '../config.ts';
 import { auditMacAction } from './audit.ts';
 import { macDoDecision, describeMacDo } from './policy.ts';
 import type { MacBridge } from '../ws/mac.ts';
+
+/** The daemon's provider keys must NEVER reach a spawned subprocess (config.ts). mac_do is
+ *  the model-authored bash sink, so it strips them exactly like claude-runner's
+ *  subprocessEnv() — otherwise `mac_do("printenv OPENAI_API_KEY")` would echo a key back
+ *  into the realtime context. */
+function strippedEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of secretEnvKeys) delete env[key];
+  return env;
+}
 
 export type MacInterpreter = 'bash' | 'osascript' | 'shortcuts';
 
@@ -18,13 +28,17 @@ interface BashResult {
  *  is waiting, and a hung child must never wedge it. Injectable so tests don't shell out. */
 function runBashDaemonSide(script: string, timeoutMs: number): Promise<BashResult> {
   return new Promise((resolvePromise) => {
-    execFile('/bin/bash', ['-lc', script], { timeout: timeoutMs, maxBuffer: config.mac.outputMaxChars }, (err, stdout, stderr) => {
+    execFile('/bin/bash', ['-lc', script], { timeout: timeoutMs, maxBuffer: config.mac.outputMaxChars, env: strippedEnv() }, (err, stdout, stderr) => {
       const output = (String(stdout ?? '') + String(stderr ?? '')).trim();
       if (err) {
-        const killed = (err as NodeJS.ErrnoException & { killed?: boolean }).killed;
+        const code = (err as NodeJS.ErrnoException).code;
+        // A maxBuffer overflow ALSO sets killed=true — distinguish it from a real timeout so
+        // the model isn't told "timed out" for output that was simply too large.
+        const overflow = code === 'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER_EXCEEDED';
+        const killed = (err as NodeJS.ErrnoException & { killed?: boolean }).killed && !overflow;
         resolvePromise({
           ok: false,
-          output: output || (killed ? `Timed out after ${timeoutMs} ms.` : String(err)),
+          output: output || (overflow ? 'Output exceeded the size limit.' : killed ? `Timed out after ${timeoutMs} ms.` : String(err)),
           errorKind: killed ? 'timeout' : 'script_error',
         });
       } else {

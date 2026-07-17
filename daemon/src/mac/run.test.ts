@@ -102,6 +102,28 @@ test('a failed execution surfaces the typed error and audits ok=false', async ()
   assert.equal(lastAudit().error, 'script_error');
 });
 
+test('the REAL bash lane strips provider secrets from the child env but keeps other vars (review 🔴)', async () => {
+  // No runBash override → exercises runBashDaemonSide's actual execFile + strippedEnv().
+  process.env.OPENAI_API_KEY = 'sk-secret-should-not-leak';
+  process.env.MAC_TEST_SENTINEL = 'kept';
+  try {
+    const secret = await executeMacDo('printenv OPENAI_API_KEY || echo STRIPPED', 'bash', {
+      macBridge: fakeBridge() as never,
+      confirm: async () => false,
+    });
+    assert.match(secret, /STRIPPED/, 'the provider key must not be visible to the child');
+    assert.doesNotMatch(secret, /sk-secret-should-not-leak/, 'the key value must never appear in output');
+    const kept = await executeMacDo('printenv MAC_TEST_SENTINEL', 'bash', {
+      macBridge: fakeBridge() as never,
+      confirm: async () => false,
+    });
+    assert.match(kept, /kept/, 'non-secret env is preserved (env is stripped, not wiped)');
+  } finally {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.MAC_TEST_SENTINEL;
+  }
+});
+
 test('an empty command runs nothing and writes no audit line', async () => {
   const before = auditLines().length;
   const out = await executeMacDo('   ', 'bash', {
