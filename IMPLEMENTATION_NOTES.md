@@ -1908,3 +1908,55 @@ step). Full URLs in the two research reports (session transcript, 2026-07-16).
 - TCC completeness check across the arc: M6 adds nothing (Accessibility already granted;
   Automation prompts per osascript target as they occur); M7 adds Screen Recording (vision lane)
   — the LAST planned grant; M8 adds none.
+
+## M6 BUILT — computer use v1 (2026-07-17, daemon 192/192 + shell builds; live GUI demo pending the user)
+
+Built exactly to the locked SPEC §M6 design. Daemon side is fully test- and smoke-verified; the
+visual demos (ghost cursor, kill switch, Notes/Chrome flows) need a running app + granted
+Accessibility + a person, so they're handed to the user. What's non-obvious and worth keeping:
+
+- **Layout.** Daemon: `ws/mac.ts` (MacBridge — ConfirmBridge-shaped RPC, pending map, typed-error
+  fail-safe, `sanitize()` coerces the shell's hand-built JSON, refcounted `taskStarted/Finished/resync`
+  for the `mac_task` arm/disarm), `mac/policy.ts` (pure `macDoDecision` gate), `mac/run.ts`
+  (`executeMacDo`: gate→confirm→execute→one audit line; bash daemon-side execFile, osascript/shortcuts
+  → shell), `mac/audit.ts` (`mac-audit.jsonl`), `agents/mac-tools.ts` (ax_snapshot/ax_query/ax_act/
+  run_script/check_permissions + the repetition detector in per-task closure state). Shell:
+  `Sources/Mac/` — AXExecutor, AXSupport, SyntheticInput, ScriptRunner, GhostCursor, KillSwitch,
+  MacBridge. Registry cost held to the SPEC's ≤2: `mac_do` (new realtime tool) + `spawn_subagent`'s
+  `task_type:'mac'` (kind 'computer'); `tools.test.ts` asserts the AX primitives never leak to the
+  realtime registry, mirroring the Firecrawl invariant.
+- **Swift SDK-surface gotchas (cost three build iterations, all in `Sources/Mac/`):** (1) not every
+  `kAX*Role` is exported — `kAXLinkRole`/`kAXSegmentedControlRole` don't exist in this SDK; the AX
+  server still RETURNS those role strings, so match `"AXLink"`/`"AXSegmentedControl"` by string.
+  (2) `CGEventPostToPid`/`CGEventPost` are hard-deprecated into errors by the Swift overlay — use the
+  instance methods `event.postToPid(pid)` / `event.post(tap:)`. My reflexive "free functions are safer
+  across SDKs" was exactly backwards. On an SDK bump, re-check both.
+- **Settle is poll-based, not AXObserver-driven** (deliberate, matches the research). Observers are
+  lossy on Sequoia/Tahoe (destroyed/changed drop silently) and the research itself mandates poll
+  reconciliation — so a debounced signature poll (value + child-count until stable ~180 ms, hard
+  timeout) is the correct baseline, not a fragile background-runloop observer. If snapshots ever feel
+  slow on dense apps, the perf lever is batching reads via `AXUIElementCopyMultipleAttributeValues`
+  (already used in the main `walk`; individual reads elsewhere are the simple-correct choice).
+- **Verify-by-diff is structural.** `ax_act` returns a before/after diff computed in the executor;
+  an empty diff is surfaced verbatim ("no observable change") so the model can't assume success —
+  `AXPress` false-passes on backgrounded/disabled items. The loop instructions
+  (`openai-runner.ts` computerInstructions) carry the entire injection load (a custom AX toolset gets
+  none of the API's built-in computer-use classifiers) + the verify-states-not-elements discipline.
+- **Kill switch tags, not motion-watches.** Every synthetic event carries a `CGEventSource` userData
+  tag (`0x47554D424F`); the listen-only session tap aborts on any UNTAGGED HID. This is the research
+  correction — "any mouse movement aborts" self-triggers once the global rung moves the real pointer.
+  The tap re-enables itself on `tapDisabledByTimeout/UserInput` so it can't go blind mid-task.
+- **Test isolation gotcha:** `mac-audit.jsonl` now has THREE test writers (audit/run/mac-tools),
+  like `search-audit.jsonl` already has (tavily/exa/firecrawl). Absolute-line-count assertions only
+  hold under the canonical `npm test -w daemon` (each file mkdtemps its own home = sole writer).
+  Forcing ONE shared `GUMBO_HOME` across files races those counts — it's a pre-existing suite property,
+  not a mac regression. Run the suite the canonical way; "fresh GUMBO_HOME" means don't reuse a stale
+  dir across runs, which per-file mkdtemp already guarantees.
+- **Verified (how):** daemon suite 192/192 (`npm test -w daemon`); shell `xcodegen generate` +
+  `xcodebuild` BUILD SUCCEEDED, no warnings; daemon boots clean with the full M6 wiring (placeholder
+  keys, scratch home → "listening"); a scratch smoke exercised the REAL execFile bash lane
+  (unit tests stub it): auto command ran + audited gate:auto, a bad command surfaced typed
+  `script_error`, a `sudo` command was declined at the gate and never executed — three audit lines,
+  one per action. **Still pending (the user):** the live GUI demos — "open Notes and draft a packing
+  list" AX-only with the visible ghost cursor + untagged-input abort, and "open Chrome to claude.ai"
+  as a single hot mac_do — need the app running with Accessibility granted.
