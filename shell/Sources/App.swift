@@ -248,6 +248,11 @@ final class GumboController {
                 if let id = msg["id"] as? String {
                     self.confirm.cancel(id: id)
                 }
+            case "open_image":
+                // Voice-driven gallery recall (open_image tool): straight into the editor.
+                if let file = msg["file"] as? String {
+                    self.imageViewer.open(file: file)
+                }
             case "create_reminder":
                 // M5: mirror the daemon's schedule row into Reminders.app; the reply
                 // carries the EventKit id (or omits it on failure — daemon reads null).

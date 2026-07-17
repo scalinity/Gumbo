@@ -68,4 +68,7 @@ export type OutboundMessage =
   // shell (2026-07-16): present a file the user should see — a document card in the top-right
   // stack; clicking it opens Gumbo's own renderer (markdown prettified). Content rides
   // inline (size-capped daemon-side) so no new HTTP file-serving surface is exposed.
-  | { type: 'file_present'; title: string; file: string; path: string; content: string };
+  | { type: 'file_present'; title: string; file: string; path: string; content: string }
+  // shell (M5.5 follow-up): open a gallery image in the viewer/editor by voice — the
+  // open_image tool resolved the word-name daemon-side; the viewer arms the edit context.
+  | { type: 'open_image'; file: string };

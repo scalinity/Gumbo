@@ -8,6 +8,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.ts';
 import { echoForInstructions } from '../audio/announce.ts';
+import { imageNameHint } from './files.ts';
 import type { Store } from '../events/store.ts';
 
 export type ImageShape = 'square' | 'landscape' | 'portrait';
@@ -40,12 +41,14 @@ export async function generateImage(prompt: string, shape: ImageShape, quality?:
       quality: quality ?? config.images.quality,
     }),
   });
-  return saveImageResponse(res);
+  return saveImageResponse(res, imageNameHint(prompt));
 }
 
 /** Shared tail for generations AND edits: parse the b64_json envelope, decode, land the
- *  PNG in the images home, return the bare filename (the only thing that travels on). */
-export async function saveImageResponse(res: Response): Promise<string> {
+ *  PNG in the images home, return the bare filename (the only thing that travels on).
+ *  Names are prompt-derived WORDS (the user, 2026-07-16 — recallable by voice), with a
+ *  numbered suffix only on collision; 'wx' keeps every write non-clobbering. */
+export async function saveImageResponse(res: Response, nameHint = 'image'): Promise<string> {
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`images api ${res.status}: ${detail.slice(0, 200)}`);
@@ -53,11 +56,8 @@ export async function saveImageResponse(res: Response): Promise<string> {
   const body = (await res.json()) as { data?: Array<{ b64_json?: string }> };
   const b64 = body.data?.[0]?.b64_json;
   if (!b64) throw new Error('images api: no b64_json in response');
-  // 'wx' + retry (review 🟡): 8-hex names are a 32-bit namespace and a plain write
-  // silently replaces on collision — which would clobber a prior image and break the
-  // non-destructive-edits guarantee. Exclusive create makes a collision loud and cheap.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const file = `${randomUUID().slice(0, 8)}.png`;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const file = attempt === 0 ? `${nameHint}.png` : `${nameHint}-${attempt + 1}.png`;
     try {
       writeFileSync(join(config.home.images, file), Buffer.from(b64, 'base64'), { flag: 'wx' });
       return file;
@@ -65,7 +65,10 @@ export async function saveImageResponse(res: Response): Promise<string> {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
   }
-  throw new Error('images: could not allocate a unique filename');
+  // 30 same-named collisions means something pathological — fall back to a unique id.
+  const fallback = `${nameHint}-${randomUUID().slice(0, 8)}.png`;
+  writeFileSync(join(config.home.images, fallback), Buffer.from(b64, 'base64'), { flag: 'wx' });
+  return fallback;
 }
 
 /**

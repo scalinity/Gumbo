@@ -11,7 +11,7 @@ import { config } from '../config.ts';
 import { echoForInstructions } from '../audio/announce.ts';
 import type { Store } from '../events/store.ts';
 import { imagesFetch, saveImageResponse } from './generate.ts';
-import { safeImageFile } from './files.ts';
+import { imageNameHint, safeImageFile } from './files.ts';
 import { pngDimensions, sanitizeStrokes, strokeMaskPng, type Stroke } from './mask.ts';
 
 /** Run one masked (or whole-image) edit. Returns the NEW image's bare filename. */
@@ -20,10 +20,13 @@ export async function editImage(file: string, prompt: string, strokes?: Stroke[]
   const form = new FormData();
   form.append('model', config.models.image);
   form.append('prompt', prompt);
-  // Highest-fidelity defaults (probed live 2026-07-16): quality high, and
-  // input_fidelity high so everything OUTSIDE the mask survives the edit faithfully.
+  // Highest-fidelity default (verified on a real edit): quality high. Deliberately NO
+  // input_fidelity — gpt-image-2 rejects it with a 400 ("does not support the
+  // 'input_fidelity' parameter", live failure 2026-07-16). PROBE TRAP for posterity:
+  // the invalid-value probe listed high|low because the API validates parameter VALUES
+  // before model support — enumeration proves the param exists somewhere (gpt-image-1),
+  // not that this model takes it. Only a real call proves support.
   form.append('quality', config.images.quality);
-  form.append('input_fidelity', config.images.editInputFidelity);
   form.append('image', new Blob([new Uint8Array(source)], { type: 'image/png' }), file);
   if (strokes && strokes.length > 0) {
     const { width, height } = pngDimensions(source);
@@ -35,7 +38,7 @@ export async function editImage(file: string, prompt: string, strokes?: Stroke[]
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: form,
   });
-  return saveImageResponse(res);
+  return saveImageResponse(res, imageNameHint(prompt));
 }
 
 /**

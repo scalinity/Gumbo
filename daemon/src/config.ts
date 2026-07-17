@@ -240,14 +240,12 @@ export const config = {
     timeoutMs: 300_000,
     // The voice model picks a shape; sizes verified against the live API (÷16 rule).
     sizes: { square: '1024x1024', landscape: '1536x1024', portrait: '1024x1536' } as Record<string, string>,
-    // Highest-fidelity defaults (the user, 2026-07-16 — his "highest quality" ask was
-    // silently droppable when quality wasn't a knob). Probed live: generations take
-    // quality low|medium|high|auto (no reasoning-class param exists on this endpoint);
-    // edits additionally take input_fidelity high|low — high preserves the source
-    // outside the mask, exactly right for brush edits. The generate_image tool can
-    // still lower quality per request ("quick draft").
+    // Highest-fidelity default (the user, 2026-07-16 — his "highest quality" ask was
+    // silently droppable when quality wasn't a knob). Probed live: quality takes
+    // low|medium|high|auto on both generations and edits; no reasoning-class param
+    // exists on this endpoint, and gpt-image-2 REJECTS gpt-image-1's input_fidelity
+    // (live 400). The generate_image tool can still lower quality per request.
     quality: 'high' as 'low' | 'medium' | 'high' | 'auto',
-    editInputFidelity: 'high' as 'high' | 'low',
   },
   // M5 scheduler: Gumbo's own timed-action primitive (kind 'reminder' for now). The poll
   // loop is the spoken-presence half; EventKit is the OS-durable half (fires even if the

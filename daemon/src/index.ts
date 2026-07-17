@@ -9,6 +9,7 @@ import { TaskManager } from './tasks/manager.ts';
 import { Scheduler } from './schedule/scheduler.ts';
 import { applyImageContext, ImageEditContext } from './images/context.ts';
 import { acceptImageEditRequest } from './images/edit.ts';
+import { reapInterruptedImageWork } from './images/reconcile.ts';
 import { applyFileContext, FileEditContext } from './files/context.ts';
 import { acceptFileEditRequest } from './files/edit.ts';
 import { Orchestrator } from './realtime/session.ts';
@@ -27,6 +28,10 @@ for (const dir of [config.home.tasks, config.home.images, config.home.notes, con
 const store = new Store(config.dbPath);
 const reaped = store.reapInterruptedTasks();
 if (reaped.length) console.log(`reaped ${reaped.length} task(s) left running by a previous run`);
+// In-flight image work dies with the process (live failure 2026-07-16: a tsx-watch
+// restart silently ate a generation — no event, no speech). Fail the orphans loudly now…
+const reapedImages = reapInterruptedImageWork(store);
+if (reapedImages.length) console.log(`failed ${reapedImages.length} image job(s) interrupted by the restart`);
 
 const server = createHttpServer(store);
 const hub = new Hub(server);
@@ -230,6 +235,22 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 // Pending schedule rows persisted by a previous run resume here — the first sweep is one
 // poll interval in (grace for the shell to reconnect before an overdue reminder speaks).
 scheduler.start();
+
+// …and tell the user about them once the shell has had time to reconnect (same grace idea
+// as the scheduler's delayed first sweep): the silent version of this failure cost him a
+// "did the picture regenerate?" round with no honest answer available.
+if (reapedImages.length) {
+  setTimeout(() => {
+    const single = reapedImages.length === 1;
+    const what = single ? `an image ${reapedImages[0].kind}` : `${reapedImages.length} image jobs`;
+    orchestrator.speakProactively(
+      `the user, heads up — ${what} ${single ? "was interrupted by a restart and didn't" : "were interrupted by a restart and didn't"} finish. Ask me again and I'll redo ${single ? 'it' : 'them'}.`,
+      `A daemon restart interrupted ${what} before finishing (prompt: "${echoForInstructions(reapedImages[0].prompt)}"). Tell the user briefly and offer to run it again.`,
+    ).catch((err: unknown) => {
+      store.addEvent(null, 'session.error', { message: `image reap announce: ${String(err)}` });
+    });
+  }, 8_000).unref();
+}
 
 server.listen(config.port, config.host, () => {
   console.log(`gumbo daemon listening on http://${config.host}:${config.port} (ws: /ws)`);

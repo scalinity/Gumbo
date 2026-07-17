@@ -64,12 +64,15 @@ test('an explicit quality (quick draft) overrides the high default', async () =>
   assert.equal(JSON.parse(String(calls[0].init.body)).quality, 'low');
 });
 
-test('decodes b64_json and writes a real PNG into the images home', async () => {
+test('decodes b64_json and writes a real PNG under a prompt-derived word name; collisions suffix, never clobber', async () => {
   capture();
   const file = await generateImage('a swamp at dusk', 'square');
-  assert.match(file, /^[0-9a-f-]{8}\.png$/);
+  assert.match(file, /^swamp-dusk(-\d+)?\.png$/, 'name comes from the prompt words (the user: recallable by voice)');
   const bytes = readFileSync(join(config.home.images, file));
   assert.deepEqual([...bytes.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47], 'PNG magic bytes');
+  const second = await generateImage('a swamp at dusk', 'square');
+  assert.notEqual(second, file, 'same prompt again gets a suffixed name — wx never overwrites');
+  assert.match(second, /^swamp-dusk-\d+\.png$/);
 });
 
 test('runImageGeneration lifecycle: image.generating FIRST, then image.created with the same gen_id — never the base64', async () => {

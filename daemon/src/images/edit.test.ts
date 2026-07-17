@@ -55,10 +55,10 @@ test('multipart contract: endpoint, model, prompt, source image, and a dimension
   assert.ok(form instanceof FormData, 'edits are multipart, not JSON');
   assert.equal(form.get('model'), 'gpt-image-2');
   assert.equal(form.get('prompt'), 'make the sky purple');
-  // Highest-fidelity defaults (probed live 2026-07-16): input_fidelity preserves the
-  // source outside the mask — the whole point of a scoped brush edit.
   assert.equal(form.get('quality'), 'high');
-  assert.equal(form.get('input_fidelity'), 'high');
+  // gpt-image-2 400s on gpt-image-1's input_fidelity (live failure 2026-07-16) — it
+  // must never creep back into the form.
+  assert.equal(form.get('input_fidelity'), null);
   const image = form.get('image') as Blob;
   assert.ok(image instanceof Blob && image.size > 0, 'source image attached');
   const mask = form.get('mask') as Blob;
@@ -74,11 +74,11 @@ test('no strokes → no mask part (whole-image edit)', async () => {
   assert.equal(form.get('mask'), null);
 });
 
-test('the edit lands as a NEW file — never overwrites the source', async () => {
+test('the edit lands as a NEW word-named file — never overwrites the source', async () => {
   capture();
-  const out = await editImage(SOURCE_FILE, 'p', STROKES);
+  const out = await editImage(SOURCE_FILE, 'purple stormy sky over the water', STROKES);
   assert.notEqual(out, SOURCE_FILE);
-  assert.match(out, /^[0-9a-f-]{8}\.png$/);
+  assert.match(out, /^purple-stormy-sky(-\d+)?\.png$/, 'edit names come from the edit prompt');
 });
 
 test('runImageEdit emits image.created with lineage (edited_from) and never the base64', async () => {

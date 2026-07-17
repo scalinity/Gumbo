@@ -14,7 +14,7 @@ const { createOrchestratorTools } = await import('./tools.ts');
 // Tool definitions are built eagerly; manager/store/deps are only touched inside execute
 // closures, so stubs are safe here. Tests that exercise an execute path pass real-enough
 // stubs through the overrides.
-function buildTools(overrides: { store?: unknown; imageContext?: unknown; fileContext?: unknown; presentFile?: unknown } = {}) {
+function buildTools(overrides: { store?: unknown; imageContext?: unknown; fileContext?: unknown; presentFile?: unknown; openImage?: unknown } = {}) {
   return createOrchestratorTools(
     {} as never,
     (overrides.store ?? {}) as never,
@@ -24,6 +24,7 @@ function buildTools(overrides: { store?: unknown; imageContext?: unknown; fileCo
       imageContext: (overrides.imageContext ?? { get: () => null }) as never,
       fileContext: (overrides.fileContext ?? { get: () => null }) as never,
       presentFile: (overrides.presentFile ?? (() => true)) as never,
+      openImage: (overrides.openImage ?? (() => true)) as never,
     },
   );
 }
@@ -58,7 +59,7 @@ test('M5 tools registered: generate_image, edit_image + the three reminder tools
   }
 });
 
-function toolByName(name: string, overrides: { store?: unknown; imageContext?: unknown; fileContext?: unknown; presentFile?: unknown } = {}) {
+function toolByName(name: string, overrides: { store?: unknown; imageContext?: unknown; fileContext?: unknown; presentFile?: unknown; openImage?: unknown } = {}) {
   const t = buildTools(overrides).find((t) => (t as { name: string }).name === name);
   assert.ok(t, `${name} not found`);
   return t as unknown as { invoke: (ctx: unknown, args: string) => Promise<string> };
@@ -128,6 +129,37 @@ test('edit_image falls back to the LATEST created image when no viewer is open (
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+// open_image (2026-07-16): gallery recall by word-name — the model must never regenerate
+// an image the user already has.
+test('open_image: empty gallery refuses; a word query opens the match; null opens the latest', async () => {
+  const { mkdirSync: mkd, writeFileSync: wf, utimesSync } = await import('node:fs');
+  const { config } = await import('../config.ts');
+  const dir = config.home.images;
+
+  // Empty gallery (dir may not exist yet in this test home).
+  let opened: string[] = [];
+  const tool = () => toolByName('open_image', { openImage: (f: string) => { opened.push(f); return true; } });
+  assert.match(await tool().invoke({}, JSON.stringify({ name: 'ember' })), /gallery is empty/i);
+
+  mkd(dir, { recursive: true });
+  wf(join(dir, 'green-ember.png'), 'x');
+  wf(join(dir, 'dragon-battle.png'), 'x');
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(join(dir, 'green-ember.png'), past, past); // dragon is newest
+
+  opened = [];
+  assert.match(await tool().invoke({}, JSON.stringify({ name: 'ember' })), /Opened green-ember\.png/);
+  assert.deepEqual(opened, ['green-ember.png']);
+
+  opened = [];
+  assert.match(await tool().invoke({}, JSON.stringify({ name: null })), /Opened dragon-battle\.png/, 'null = most recent');
+
+  assert.match(await tool().invoke({}, JSON.stringify({ name: 'unicorn' })), /No image matches/);
+
+  const offline = await toolByName('open_image', { openImage: () => false }).invoke({}, JSON.stringify({ name: 'ember' }));
+  assert.match(offline, /shell is not connected/);
 });
 
 // present_file (2026-07-16): the deliverable-on-screen path — absolute paths only, secret

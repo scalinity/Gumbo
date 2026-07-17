@@ -77,7 +77,10 @@ final class ImageViewerController {
             panel.backgroundColor = .clear
             panel.hasShadow = true
             panel.isMovable = true
-            panel.isMovableByWindowBackground = true
+            // NOT movable-by-background: window-background drags were winning against
+            // the brush-size slider's drag (live gripe 2026-07-16 — "it drags the whole
+            // window"). The header is the explicit drag handle instead (WindowDragHandle).
+            panel.isMovableByWindowBackground = false
             panel.hidesOnDeactivate = false
             panel.isReleasedWhenClosed = false
             panel.animationBehavior = .none
@@ -164,6 +167,21 @@ final class ImageViewerController {
 /// field needs it (Spotlight-style: key without activating the app).
 private final class ImageViewerPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+}
+
+/// Explicit window-move affordance for the header row. Replaces
+/// isMovableByWindowBackground, which routed drags ANYWHERE the hit view didn't claim
+/// them — including losing races against the brush-size slider (live gripe 2026-07-16).
+private struct WindowDragHandle: NSViewRepresentable {
+    final class DragView: NSView {
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
+        }
+    }
+
+    func makeNSView(context: Context) -> NSView { DragView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 enum ViewerChrome {
@@ -272,6 +290,8 @@ private struct ImageViewerView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 36)
+        .contentShape(Rectangle())
+        .background(WindowDragHandle())
     }
 
     private var imageArea: some View {
@@ -297,8 +317,8 @@ private struct ImageViewerView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(model.strokes.isEmpty && model.liveStroke == nil ? faint : gold)
             Slider(value: $model.brushRadius, in: 0.01...0.12)
-                .controlSize(.mini)
-                .frame(width: 110)
+                .controlSize(.small)
+                .frame(width: 140)
                 .help("Brush size")
             if !model.strokes.isEmpty {
                 Button("Clear") {

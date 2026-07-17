@@ -7,7 +7,7 @@ import { webQuickLookup } from '../search/tavily.ts';
 import { xLookup } from '../search/grok.ts';
 import { runImageGeneration } from '../images/generate.ts';
 import { runImageEdit } from '../images/edit.ts';
-import { safeImageFile } from '../images/files.ts';
+import { findGalleryImages, safeImageFile } from '../images/files.ts';
 import type { ImageEditContext } from '../images/context.ts';
 import { readForPresentation, type PresentedFile } from '../files/present.ts';
 import { runFileEdit } from '../files/edit.ts';
@@ -45,6 +45,9 @@ export interface OrchestratorToolDeps {
   /** Push a file onto the user's screen (shell document card → Gumbo's renderer).
    *  Returns false when no shell is connected — nothing would be shown. */
   presentFile: (payload: PresentedFile) => boolean;
+  /** Open a gallery image in the shell viewer/editor (open_image tool). Returns false
+   *  when no shell is connected. */
+  openImage: (file: string) => boolean;
 }
 
 export function createOrchestratorTools(manager: TaskManager, store: Store, deps: OrchestratorToolDeps) {
@@ -238,7 +241,40 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       runImageGeneration({ prompt, shape, quality, store, announce: deps.announce }).catch((err: unknown) => {
         store.addEvent(null, 'session.error', { message: `image announce: ${String(err)}` });
       });
-      return "Image generation started in the background — tell the user it's on the way. You will be told when it lands in his gallery; no need to wait.";
+      return 'Image generation started — a generating orb is already on the user\'s screen (top right) and will become the image when it lands; you will be told when it does. If you already told him it\'s coming, add at most ONE short sentence — never repeat yourself, and never tell him to check the gallery or open anything himself.';
+    },
+  });
+
+  // M5.5 follow-up (live gap: the model REGENERATED an image the user already had because
+  // it had no way back into the gallery): open any gallery image by its word-name.
+  const openImage = tool({
+    name: 'open_image',
+    description:
+      "Open one of the user's existing images from his gallery on his screen (the viewer/editor) and " +
+      'make it the edit target. Use whenever he references an image he already has ("get the ember ' +
+      'back up", "open the dragon one") — NEVER regenerate an image that already exists. Pass words ' +
+      "from how he referred to it, or null for his most recent image. Image names are plain words — " +
+      'say them naturally, without the .png.',
+    parameters: z.object({
+      name: z.string().nullable().describe("Words identifying the image ('green ember'), or null for the most recent"),
+    }),
+    execute: async ({ name }) => {
+      const query = name?.trim() || null;
+      const matches = findGalleryImages(query);
+      if (matches.length === 0) {
+        const recent = findGalleryImages(null, 5);
+        return recent.length === 0
+          ? 'The gallery is empty — nothing to open yet.'
+          : `No image matches "${query}". Recent images: ${recent.join(', ')} — ask the user which he means.`;
+      }
+      const file = matches[0];
+      if (query && matches.length > 1) {
+        return `Several images match: ${matches.slice(0, 4).join(', ')}. Ask the user which one, then call open_image with its name.`;
+      }
+      if (!deps.openImage(file)) {
+        return 'The shell is not connected right now, so nothing can be shown on screen.';
+      }
+      return `Opened ${file} on the user's screen — it's now the edit target. Refer to it by its name (without the .png).`;
     },
   });
 
@@ -449,7 +485,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
 
   return [
     spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, xLookupTool,
-    generateImage, editImageTool, setReminder, listReminders, cancelReminder,
+    generateImage, editImageTool, openImage, setReminder, listReminders, cancelReminder,
     listTasks, getTaskStatus, cancelTask, readReport, saveNote, presentFileTool, editFileTool,
   ];
 }
