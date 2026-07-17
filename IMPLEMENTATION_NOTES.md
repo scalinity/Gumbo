@@ -1960,3 +1960,37 @@ Accessibility + a person, so they're handed to the user. What's non-obvious and 
   one per action. **Still pending (the user):** the live GUI demos — "open Notes and draft a packing
   list" AX-only with the visible ghost cursor + untagged-input abort, and "open Chrome to claude.ai"
   as a single hot mac_do — need the app running with Accessibility granted.
+
+### M6 review-address pass (2026-07-17, /review-2 on Fable — 1 debugger + 1 code-auditor — → /address)
+
+2 🔴 + 8 🟡 + 8 🔵, all fixed on the branch (daemon 198/198, shell builds). The two Criticals were
+genuine and both landed on the `mac_do` execution path — the review's real value was proving the
+gate is the *entire* security boundary for the unsandboxed lane, so every hole in it is load-bearing:
+- **🔴 secret exposure:** `runBashDaemonSide` spawned bash with no `env`, so the child inherited the
+  daemon's provider keys — `mac_do("printenv OPENAI_API_KEY")` would echo a key into the realtime
+  context. Fixed by stripping `secretEnvKeys` exactly like `claude-runner`'s `subprocessEnv()`. The
+  bash lane had NO real-execFile test (the unit tests inject `runBash`), which is why it slipped —
+  added one that sets a real key + sentinel and asserts the key is stripped but other env survives.
+- **🔴 delete-gate bypass:** `riskyDelete` matched delete commands by exact basename, so `/bin/rm` and
+  `\rm` (both ordinary, non-obfuscated) skipped the whole delete check and auto-ran. Fixed with a
+  `commandName()` that strips a leading path/backslash for the COMMAND slot only (targets keep their
+  dir). Same pass closed the sibling gate gaps the pattern table *named but didn't catch*: osascript
+  `send`/`do shell script`/`with administrator privileges` (the table was bash-shaped but run verbatim
+  on AppleScript — the word "osascript" is never in the osascript body), and GET-style exfil
+  (`curl "…?k=$SECRET"`, `open` an expanded URL) which the upload-only network pattern missed.
+- **🟡 the notable ones:** the sub-agent's `run_script` was entirely ungated (arbitrary shell reachable
+  from obeyed on-screen injection) — now routed through the same policy table + a notch confirm threaded
+  from the ConfirmBridge escalate path (declined → audited, never runs). The kill switch failed OPEN: if
+  `CGEvent.tapCreate` returned nil (PostEvent grant missing) the task drove the machine with no abort —
+  now `arm()` returns success and `MacBridge` fails closed via `mac_abort(kill_switch_unavailable)`. The
+  Swift snapshot `generation` was dead code (stale refs silently rebound to a same-index element) — now
+  encoded in the ref string. The `key` verb was DOA (the tool contract says ref-null but Swift's ref
+  guard rejected it) — now handled before the guard, targeting the focused app.
+- **Non-obvious discovery, NOT in the review:** the `key` verb being dead means the keyboard-shortcut
+  rung the Notes demo leans on (`cmd+n`) never worked in the original build — the demo would have
+  fallen back to clicking or stalled. Worth knowing before the live demo. Also: `URLSessionWebSocketTask.send`
+  is already internally serialized, so the flagged cross-thread `onReply` race was ordering-only (no
+  byte corruption); funneled through main anyway for consistency with every other sender.
+- Two 🔵 resolved as documented-and-kept rather than changed (the double focused-window walk per act
+  is bounded by the 2 s messaging timeout and fine for attended single-user; the confirm-string cap is
+  backed by the risky-class `reason` which already carries the operative token). All others fixed.

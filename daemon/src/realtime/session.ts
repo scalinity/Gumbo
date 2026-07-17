@@ -482,10 +482,13 @@ export class Orchestrator {
     // finding: the score sat on disk 25 s while Gumbo asked permission to say it).
     // The report is embedded inline so delivery never depends on a follow-up tool call.
     const report = task.status === 'done' ? this.manager.readReport(task.id) : null;
-    // The report body is built from web-search results — untrusted text. Frame it as
-    // data-only and neutralize any embedded closing tag so page content can't "escape"
-    // the delimiter and read as instructions (blast radius is bounded — spawn/cancel/
-    // save_note tools, loopback-only — but don't rely on the model's obedience alone).
+    // The report body is built from web-search results / on-screen text — untrusted. Frame
+    // it as data-only and neutralize any embedded closing tag so content can't "escape" the
+    // delimiter and read as instructions. Blast radius is NO LONGER purely informational: the
+    // realtime registry now includes mac_do (gated daemon-side bash) and can spawn a
+    // computer-use sub-agent, so an injection the model obeyed could reach a shell/UI sink.
+    // The mac_do policy gate + the sub-agent run_script gate (mac/policy.ts) are the real
+    // containment here — this neutralization is the first layer, not the last.
     const excerpt = report
       ?.slice(0, config.announceReportMaxChars)
       .replaceAll(/<\s*\/\s*report\s*>/gi, '<​/report>');
