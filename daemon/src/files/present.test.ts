@@ -1,12 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
 const { readForPresentation, isEditableFile, PRESENT_FILE_MAX_CHARS } = await import('./present.ts');
 const { config, secretFilePaths } = await import('../config.ts');
+// isEditableFile expects a realpath'd path (the write boundary realpaths its target);
+// canonicalize the root here so the assertions match on macOS where the temp home sits
+// under the /var → /private/var symlink.
+const HOME_REAL = realpathSync(config.home.root);
 
 test('readForPresentation: relative path refused', () => {
   const r = readForPresentation('relative/x.md');
@@ -62,10 +66,10 @@ test('readForPresentation: oversize refused before content is returned', () => {
 });
 
 test('isEditableFile: only paths under ~/Gumbo are editable', () => {
-  assert.equal(isEditableFile(join(config.home.root, 'tasks/abc/spec.md')), true);
-  assert.equal(isEditableFile(config.home.root), true);
+  assert.equal(isEditableFile(join(HOME_REAL, 'tasks/abc/spec.md')), true);
+  assert.equal(isEditableFile(HOME_REAL), true);
   assert.equal(isEditableFile('/etc/hosts'), false);
   assert.equal(isEditableFile('/Users/dev/Documents/Apps/Gumbo/daemon/src/index.ts'), false, 'repo code is not editable this way');
   // A sibling dir sharing the prefix must not slip through (boundary check).
-  assert.equal(isEditableFile(`${config.home.root}-evil/x.md`), false);
+  assert.equal(isEditableFile(`${HOME_REAL}-evil/x.md`), false);
 });

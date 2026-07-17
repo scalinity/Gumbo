@@ -3,7 +3,7 @@
 // finished session's deliverable (session.ts), and the re-present after a document edit
 // (files/edit.ts). Guards live in one place: absolute path, secret paths refused (incl.
 // symlink targets), text-only, size-capped.
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { config, secretFilePaths } from '../config.ts';
@@ -55,8 +55,13 @@ export function readForPresentation(rawPath: string, title?: string | null): Pre
 /** The boundary for EDITING (not just showing) a presented file: only documents under
  *  ~/Gumbo — the files Gumbo itself produced. Showing any non-secret file read-only is
  *  low-risk; writing arbitrary paths by voice is not. Repo/code files go through a
- *  supervised coding session instead. `realPath` must already be realpath'd. */
+ *  supervised coding session instead. `realPath` must already be realpath'd (the write
+ *  path realpaths its target because writeFileSync follows symlinks). The ROOT is realpath'd
+ *  too when it exists: config.home.root is stored raw, but a parent can be a symlink
+ *  (macOS temp/home dirs sit under /var → /private/var), so a raw-vs-realpath'd compare
+ *  would wrongly refuse a legitimate in-workspace write. Matches how the rest of the
+ *  codebase canonicalizes config.home paths (realOrLiteral in claude-runner). */
 export function isEditableFile(realPath: string): boolean {
-  const root = resolve(config.home.root);
+  const root = existsSync(config.home.root) ? realpathSync(config.home.root) : resolve(config.home.root);
   return realPath === root || realPath.startsWith(root + sep);
 }
