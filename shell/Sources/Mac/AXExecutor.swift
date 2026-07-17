@@ -138,10 +138,13 @@ final class AXExecutor {
         walk(root, pid: target.pid, depth: 0, into: &nodes, cap: maxElements, truncated: &truncated)
 
         // New generation: mint fresh refs, drop the old map (old refs now stale by design).
+        // The generation is ENCODED in the ref ("g3e12"), so a ref from a prior snapshot can
+        // never collide with a same-index element in this one — it fails the map lookup and
+        // returns stale_ref instead of silently rebinding to a different element.
         generation += 1
         refs = [:]
         for (i, _) in nodes.enumerated() {
-            let ref = "e\(i)"
+            let ref = "g\(generation)e\(i)"
             nodes[i].ref = ref
             refs[ref] = nodes[i].element
         }
@@ -218,6 +221,12 @@ final class AXExecutor {
             return waitFor(role: action["role"] as? String, name: action["name"] as? String, timeoutMs: timeoutMs)
         }
 
+        // key is a keyboard shortcut to the focused app — it has no element target (the tool
+        // contract says ref is null for key), so it must be handled BEFORE the ref guard.
+        if verb == "key" {
+            return performKey(action["value"] as? String ?? "", timeoutMs: timeoutMs)
+        }
+
         guard let ref = action["ref"] as? String else {
             return AXResult.failure("element_not_found", "\(verb) needs a ref.")
         }
@@ -239,7 +248,6 @@ final class AXExecutor {
         case "focus": actErr = performFocus(element)
         case "set_value": actErr = performSetValue(element, value: action["value"] as? String ?? "")
         case "type": actErr = performType(element, text: action["value"] as? String ?? "", pid: pid)
-        case "key": actErr = SyntheticInput.pressKey(action["value"] as? String ?? "", pid: pid) ? nil : "unknown key chord"
         case "show_menu": actErr = performShowMenu(element, pid: pid)
         default: return AXResult.failure("out_of_scope", "Unknown verb \"\(verb)\".")
         }
@@ -253,6 +261,23 @@ final class AXExecutor {
         // items. An empty diff is a real "no observable change" signal the model can act on.
         let diff = diffLines(before: before, after: after)
         let body = diff.isEmpty ? "(no observable change — the action may not have taken effect)" : diff
+        return AXResult(ok: true, output: body, errorKind: nil, health: nil)
+    }
+
+    /// key targets no element (a shortcut to the focused app). Diff the focused window
+    /// before/after so the model still verifies by diff rather than assuming success.
+    private func performKey(_ chord: String, timeoutMs: Int) -> AXResult {
+        let appElement = lastApp.map { AXUIElement.application($0.pid) } ?? AXUIElement.systemWide
+        let pid = lastApp?.pid ?? resolveApp(nil)?.pid
+        let win = focusedWindow(of: appElement)
+        let before = describe(nil)
+        guard SyntheticInput.pressKey(chord, pid: pid) else {
+            return AXResult.failure("out_of_scope", "Unknown key chord \"\(chord)\".")
+        }
+        settle(element: win ?? appElement, timeoutMs: timeoutMs)
+        let after = describe(nil)
+        let diff = diffLines(before: before, after: after)
+        let body = diff.isEmpty ? "(sent \(chord); no observable change — snapshot to confirm)" : diff
         return AXResult(ok: true, output: body, errorKind: nil, health: nil)
     }
 
@@ -366,11 +391,15 @@ final class AXExecutor {
 
     // MARK: before/after diff
 
-    /// A compact, human-readable descriptor of the element + its focused window, so the
-    /// diff shows what changed around the action (focus moved, value set, a sheet appeared).
-    private func describe(_ element: AXUIElement) -> [String] {
+    /// A compact, human-readable descriptor of an optional target element + its focused
+    /// window, so the diff shows what changed around the action (focus moved, value set, a
+    /// sheet appeared). element == nil for verbs with no element target (key).
+    /// Cost note: this walks the focused window (cap 60) once per call = twice per act. Fine
+    /// for attended single-user use, bounded by the 2 s per-element messaging timeout; if act
+    /// latency ever matters on dense apps, batch the reads (AXUIElementCopyMultipleAttributeValues).
+    private func describe(_ element: AXUIElement?) -> [String] {
         var lines: [String] = []
-        if let role = stringAttr(element, kAXRoleAttribute) {
+        if let element, let role = stringAttr(element, kAXRoleAttribute) {
             let name = stringAttr(element, kAXTitleAttribute) ?? stringAttr(element, kAXDescriptionAttribute) ?? ""
             let value = stringAttr(element, kAXValueAttribute).map { " value=\"\(truncate($0))\"" } ?? ""
             let focused = (boolAttr(element, kAXFocusedAttribute) ?? false) ? " focused" : ""
@@ -390,14 +419,23 @@ final class AXExecutor {
         return lines
     }
 
-    /// Line-level +/−/~ diff (volatile fields already stripped by describe's truncation).
+    /// Line-level +/−/~ diff via MULTISET counts (not a Set), so a duplicate row/button
+    /// appearing (2→3 identical lines) is reported instead of being swallowed by set-dedup.
     /// Typical click = a handful of lines; empty = true no-op.
     private func diffLines(before: [String], after: [String]) -> String {
-        let beforeSet = Set(before)
-        let afterSet = Set(after)
+        var counts: [String: Int] = [:]
+        for line in before { counts[line, default: 0] -= 1 }
+        for line in after { counts[line, default: 0] += 1 }
         var out: [String] = []
-        for line in after where !beforeSet.contains(line) { out.append("+ \(line)") }
-        for line in before where !afterSet.contains(line) { out.append("- \(line)") }
+        // Emit in `after` order for additions, `before` order for removals, honoring counts.
+        for line in after where counts[line, default: 0] > 0 {
+            out.append("+ \(line)")
+            counts[line]! -= 1
+        }
+        for line in before where counts[line, default: 0] < 0 {
+            out.append("- \(line)")
+            counts[line]! += 1
+        }
         return out.prefix(80).joined(separator: "\n")
     }
 
@@ -406,10 +444,15 @@ final class AXExecutor {
     private func resolveApp(_ name: String?) -> (pid: pid_t, name: String)? {
         if let name, !name.isEmpty {
             let lc = name.lowercased()
-            if let match = NSWorkspace.shared.runningApplications.first(where: {
-                ($0.localizedName?.lowercased() == lc) || ($0.bundleIdentifier?.lowercased().contains(lc) ?? false)
-            }) {
-                return (match.processIdentifier, match.localizedName ?? name)
+            let apps = NSWorkspace.shared.runningApplications
+            // Prefer an EXACT localizedName match across all apps before falling back to a
+            // bundle-id substring — otherwise a short/common name can match an unrelated app
+            // whose bundle id happens to contain it and appears earlier in the (unordered) list.
+            if let exact = apps.first(where: { $0.localizedName?.lowercased() == lc }) {
+                return (exact.processIdentifier, exact.localizedName ?? name)
+            }
+            if let fuzzy = apps.first(where: { $0.bundleIdentifier?.lowercased().contains(lc) ?? false }) {
+                return (fuzzy.processIdentifier, fuzzy.localizedName ?? name)
             }
             return nil
         }
