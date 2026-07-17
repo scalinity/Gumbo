@@ -249,8 +249,12 @@ final class GumboController {
                     self.confirm.cancel(id: id)
                 }
             case "open_image":
-                // Voice-driven gallery recall (open_image tool): straight into the editor.
+                // Voice-driven gallery recall (open_image tool): straight into the editor,
+                // AND onto the thumbnail shelf — the corner stack reflects everything
+                // recently pulled up, not just fresh renders, so closing the editor still
+                // leaves a click-path back (the user, 2026-07-16).
                 if let file = msg["file"] as? String {
+                    self.imageBubbles.present(file: file, editedFrom: nil, genId: nil)
                     self.imageViewer.open(file: file)
                 }
             case "create_reminder":
