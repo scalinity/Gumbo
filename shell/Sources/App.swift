@@ -305,6 +305,7 @@ final class GumboController {
                             self.imageBubbles.failWork(key: "gen:" + genId)
                         } else if type == "image.edit_requested", let file = payload["file"] as? String {
                             self.imageBubbles.beginWork(key: "edit:" + file)
+                            self.imageViewer.handleEditRequested(file: file)
                         } else if type == "image.edit_failed", let file = payload["file"] as? String {
                             self.imageBubbles.failWork(key: "edit:" + file)
                             self.imageViewer.handleEditFailed(file: file)

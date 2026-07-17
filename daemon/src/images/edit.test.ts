@@ -96,8 +96,12 @@ test('runImageEdit emits image.created with lineage (edited_from) and never the 
       announced.push(cold);
     },
   });
+  const requested = events.find((e) => e.type === 'image.edit_requested');
+  assert.ok(requested, 'edit_requested emitted by runImageEdit itself — voice edits (which skip acceptImageEditRequest) must pop the working orb too');
+  assert.equal((requested.payload as { selection?: boolean }).selection, true);
   const created = events.find((e) => e.type === 'image.created');
   assert.ok(created, 'image.created emitted');
+  assert.ok(requested.seq < created.seq, 'the in-progress signal precedes the terminal');
   const payload = created.payload as { file: string; edited_from: string; selection?: boolean };
   assert.equal(payload.edited_from, SOURCE_FILE);
   assert.equal(payload.selection, true);

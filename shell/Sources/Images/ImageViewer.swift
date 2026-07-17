@@ -48,6 +48,15 @@ final class ImageViewerController {
         loadImage(file)
     }
 
+    /// image.edit_requested: an edit is running against a file — if it's the one open
+    /// here, show the busy state even when the edit was started by VOICE (live gap
+    /// 2026-07-16: only the panel's own typed submits ever set busy).
+    func handleEditRequested(file: String) {
+        guard model.file == file, !model.busy else { return }
+        model.busy = true
+        model.notice = nil
+    }
+
     /// image.edit_failed: leave the busy state with an honest notice (the daemon also
     /// speaks the failure).
     func handleEditFailed(file: String) {

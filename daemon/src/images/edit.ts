@@ -60,7 +60,9 @@ export function acceptImageEditRequest(
   try {
     const file = safeImageFile(rawFile);
     const strokes = msg.strokes !== undefined ? sanitizeStrokes(msg.strokes) : undefined;
-    store.addEvent(null, 'image.edit_requested', { file, prompt, ...(strokes?.length ? { selection: true } : {}) });
+    // image.edit_requested is emitted inside runImageEdit — one emitter for BOTH the
+    // typed and voice paths (live gap 2026-07-16: voice edits skipped this function
+    // entirely, so no working orb and no viewer busy state ever showed).
     runImageEdit({ file, prompt, strokes, store, announce }).catch((err: unknown) => {
       // runImageEdit handles (and speaks) its own failures — this only guards the
       // announce path itself so nothing becomes an unhandled rejection.
@@ -85,12 +87,19 @@ export async function runImageEdit(opts: {
   store: Store;
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
 }): Promise<void> {
+  const { file, prompt, strokes, store, announce } = opts;
+  // Emitted synchronously so the shell's working orb (and the viewer's busy state) pop
+  // the instant ANY edit starts — typed or voice; the boot reaper also keys on it.
+  store.addEvent(null, 'image.edit_requested', {
+    file,
+    prompt,
+    ...(strokes && strokes.length > 0 ? { selection: true } : {}),
+  });
   // Yield before the synchronous prefix (readFileSync + mask rasterization): callers
   // fire-and-forget this promise from the tool's execute / the WS handler, and without
   // the yield that sync work would run inline on THEIR turn — delaying the "instant"
   // ack and stalling the event loop that carries live voice audio (review 🟡).
   await new Promise((resolve) => setImmediate(resolve));
-  const { file, prompt, strokes, store, announce } = opts;
   const short = echoForInstructions(prompt); // quoted inside live instructions — defanged (review 🔵)
   const scoped = strokes && strokes.length > 0;
   try {

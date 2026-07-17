@@ -162,6 +162,23 @@ test('open_image: empty gallery refuses; a word query opens the match; null open
   assert.match(offline, /shell is not connected/);
 });
 
+test('edit_image last resort: with no context at all, the newest gallery file on DISK is the target (restart-proof)', async () => {
+  // The open_image test above seeded the gallery: dragon-battle.png is newest.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('{}', { status: 500 })) as typeof fetch;
+  try {
+    const tool = toolByName('edit_image', {
+      store: { addEvent: () => ({}) },
+      imageContext: { get: () => null, latest: null }, // both in-memory rungs dead (daemon restarted)
+    });
+    const ack = await tool.invoke({}, JSON.stringify({ prompt: 'brighten it', file: null }));
+    assert.match(ack, /Edit started in the background/, 'the gallery on disk survives restarts — the edit must proceed');
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 // present_file (2026-07-16): the deliverable-on-screen path — absolute paths only, secret
 // paths refused, content pushed to the shell inline.
 test('present_file guards: relative path, protected path, missing file all refuse cleanly', async () => {

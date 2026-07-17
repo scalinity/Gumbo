@@ -300,11 +300,13 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       const ctx = deps.imageContext.get();
       const named = file?.trim() || null;
       // Resolution ladder (live gap 2026-07-16): named file → the viewer's open image →
-      // the most recently created image. The voice model never sees filenames, so
-      // "edit the one you just made" is only resolvable daemon-side.
-      const target = named ?? ctx?.file ?? deps.imageContext.latest;
+      // the most recently created image (in-memory note, exact) → the newest gallery
+      // file on DISK. The last rung is what survives daemon restarts — tsx-watch reloads
+      // are constant in dev, and the in-memory note dying with them left "edit the pine
+      // forest" refusing while the image sat right there in the gallery (live, 20:33).
+      const target = named ?? ctx?.file ?? deps.imageContext.latest ?? findGalleryImages(null, 1)[0];
       if (!target) {
-        return 'No image is open, none was named, and nothing has been generated yet this run — ask the user to open or describe the image to edit.';
+        return 'No image is open, none was named, and the gallery is empty — ask the user to describe the image he wants created.';
       }
       // The brush selection belongs to the viewer's OPEN image; a target resolved any
       // other way (named differently, or the latest-created fallback) must not inherit it.
@@ -317,7 +319,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       runImageEdit({ file: target, prompt, strokes, store, announce: deps.announce }).catch((err: unknown) => {
         store.addEvent(null, 'session.error', { message: `image edit announce: ${String(err)}` });
       });
-      return `Edit started in the background${strokes && strokes.length > 0 ? ' on the highlighted area' : ''} — tell the user it's on the way. You will be told when the new version lands; no need to wait.`;
+      return `Edit started in the background${strokes && strokes.length > 0 ? ' on the highlighted area' : ''} — a working orb is on the user's screen and becomes the new version when it lands; you will be told when it does. If you already told him it's on the way, add at most ONE short sentence.`;
     },
   });
 
