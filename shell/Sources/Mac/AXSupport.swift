@@ -24,12 +24,12 @@ struct AXNode {
         case kAXButtonRole, kAXMenuButtonRole, kAXPopUpButtonRole, kAXMenuItemRole,
              kAXMenuBarItemRole, kAXCheckBoxRole, kAXRadioButtonRole, kAXTextFieldRole,
              kAXTextAreaRole, kAXComboBoxRole, kAXSliderRole, kAXIncrementorRole,
-             kAXDisclosureTriangleRole, kAXTabGroupRole, kAXStaticTextRole, kAXLinkRole,
-             kAXCellRole, kAXRowRole, kAXSegmentedControlRole:
+             kAXDisclosureTriangleRole, kAXTabGroupRole, kAXStaticTextRole,
+             kAXCellRole, kAXRowRole:
             return true
         default:
-            // AXLink is a string constant only on some SDKs; match defensively by name too.
-            return role == "AXLink"
+            // These roles have no exported kAX*Role constant on this SDK — match strings.
+            return role == "AXLink" || role == "AXSegmentedControl"
         }
     }
 

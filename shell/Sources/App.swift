@@ -97,7 +97,6 @@ final class GumboController {
     private let imageViewer = ImageViewerController()
     private let confirm = ConfirmController()
     private let reminders = RemindersBridge()
-    private let mac = MacBridge()
     private let quickText = QuickTextController()
     private let mac = MacBridge()
     private lazy var dashboard = DashboardWindow()
@@ -248,9 +247,6 @@ final class GumboController {
                 if let ekId = msg["eventkit_id"] as? String {
                     self.reminders.remove(eventkitId: ekId)
                 }
-            case "mac_action", "mac_task":
-                // M6: computer use — the bridge executes AX/scripts and answers the daemon.
-                _ = self.mac.handle(msg)
             case "event":
                 // Task-scoped activity for the bubble mini-panel live tail.
                 if let event = msg["event"] as? [String: Any] {

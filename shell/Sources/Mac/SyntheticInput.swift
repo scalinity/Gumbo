@@ -94,9 +94,8 @@ enum SyntheticInput {
     private static func post(_ event: CGEvent?, pid: pid_t?) {
         guard let event else { return }
         // Rung 2 = pid-targeted (background-safe, doesn't fight the user's pointer);
-        // rung 3 = global HID. Free functions — the CGEvent instance-method forms vary
-        // across SDKs.
-        if let pid { CGEventPostToPid(pid, event) } else { CGEventPost(.cghidEventTap, event) }
+        // rung 3 = global HID.
+        if let pid { event.postToPid(pid) } else { event.post(tap: .cghidEventTap) }
     }
 
     /// US-ANSI virtual keycodes — enough for the shortcuts the demos exercise (⌘N, ⌘L,
