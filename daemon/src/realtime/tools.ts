@@ -11,6 +11,8 @@ import type { ImageEditContext } from '../images/context.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
+import type { MacBridge } from '../ws/mac.ts';
+import { executeMacDo } from '../mac/run.ts';
 
 // Keep note filenames confined to the notes/ dir — one flat, predictable slug per topic.
 function noteSlug(topic: string): string {
@@ -36,23 +38,60 @@ export interface OrchestratorToolDeps {
   scheduler: Scheduler;
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
   imageContext: ImageEditContext;
+  // M6: the hands (shell executor) + the notch confirm for a risky one-shot command.
+  macBridge: MacBridge;
+  confirmMacDo: (detail: string) => Promise<boolean>;
 }
 
 export function createOrchestratorTools(manager: TaskManager, store: Store, deps: OrchestratorToolDeps) {
   const spawnSubagent = tool({
     name: 'spawn_subagent',
     description:
-      'Spawn a background sub-agent to do research, analysis, or writing. Returns immediately with a task id; the user is notified on completion. The brief must be detailed and self-contained — the sub-agent cannot ask follow-up questions.',
+      'Spawn a background sub-agent to do research, analysis, or writing — OR a multi-step task on ' +
+      "this Mac's apps and windows (task_type \"mac\"): opening an app and doing something inside it, " +
+      'navigating menus, filling things in, any "open X and do Y" that takes more than one command. ' +
+      'Returns immediately with a task id; the user is notified on completion. The brief must be ' +
+      'detailed and self-contained — the sub-agent cannot ask follow-up questions.',
     parameters: z.object({
       title: z.string().describe('Short human-readable task title, a few words'),
       brief: z.string().describe('Detailed, self-contained instructions for the sub-agent'),
+      task_type: z
+        .enum(['research', 'mac'])
+        .default('research')
+        .describe('"mac" ONLY for driving apps on this Mac (multi-step UI work); "research" for everything web/writing'),
     }),
-    execute: async ({ title, brief }) => {
-      const task = manager.spawnSubagent(title, brief);
+    execute: async ({ title, brief, task_type }) => {
       // The voice model tends to echo tool results verbatim — keep the id clearly
       // marked as internal so it isn't read aloud.
-      return `Started "${title}" in the background (internal task_id ${task.id} — never say it aloud). You will be told when it finishes — no need to wait.`;
+      try {
+        const task = manager.spawnSubagent(title, brief, task_type);
+        return `Started "${title}" in the background (internal task_id ${task.id} — never say it aloud). You will be told when it finishes — no need to wait.`;
+      } catch (err) {
+        return `Could not start that: ${err instanceof Error ? err.message : String(err)}`;
+      }
     },
+  });
+
+  // M6 hot tier: one-shot Mac commands the voice model writes itself. The description IS
+  // the router between this and spawn_subagent(task_type "mac") — one command, one result,
+  // sub-second; anything needing looking-then-acting goes to the sub-agent.
+  const macDo = tool({
+    name: 'mac_do',
+    description:
+      'Run ONE quick command on this Mac and return its output — open an app or URL ("open -a ..."), ' +
+      'toggle a setting, read system info (tmutil, defaults read, osascript one-liners). Use for ' +
+      'single-shot requests you can express as one bash or AppleScript command. NOT for multi-step ' +
+      'app driving ("open X and then do Y inside it") — use spawn_subagent with task_type "mac" for ' +
+      'that. Risky commands ask the user via the notch first; if declined, report that and move on.',
+    parameters: z.object({
+      script: z.string().describe('The one-liner to run, complete and self-contained'),
+      interpreter: z
+        .enum(['bash', 'osascript', 'shortcuts'])
+        .default('bash')
+        .describe("'bash' for shell commands, 'osascript' for AppleScript, 'shortcuts' to run a Shortcut by name"),
+    }),
+    execute: async ({ script, interpreter }) =>
+      executeMacDo(script, interpreter, { macBridge: deps.macBridge, confirm: deps.confirmMacDo }),
   });
 
   // M4: real code/file/shell work = a full Claude Code session, supervised. The
@@ -337,7 +376,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   });
 
   return [
-    spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup,
+    spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, macDo,
     generateImage, editImageTool, setReminder, listReminders, cancelReminder,
     listTasks, getTaskStatus, cancelTask, readReport, saveNote,
   ];

@@ -4,6 +4,9 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Per-file temp home (house convention): `npm test -w daemon` runs each file in its own
+// process, so this file is the sole writer of its mac-audit.jsonl and the absolute
+// line-count assertions below are deterministic — same pattern as search/audit.test.ts.
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
 const { auditMacAction } = await import('./audit.ts');
 const { config } = await import('../config.ts');

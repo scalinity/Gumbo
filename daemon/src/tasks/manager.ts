@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.ts';
 import type { Store, TaskRow } from '../events/store.ts';
-import { runSubagent } from '../agents/openai-runner.ts';
+import { runSubagent, type SubagentKind } from '../agents/openai-runner.ts';
 import { ClaudeRunner, type ClaudeRunnerOpts, type ClaudeSessionRunner } from '../agents/claude-runner.ts';
 import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
+import type { MacBridge } from '../ws/mac.ts';
 
 /** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod).
  *  The signal fires if the task is cancelled while the confirm is pending. */
@@ -28,6 +29,7 @@ export class TaskManager {
   private escalate: EscalateFn;
   private approvePlan: ApprovePlanFn;
   private makeRunner: RunnerFactory;
+  private macBridge?: MacBridge;
   onFinished: (task: TaskRow) => void = () => {};
 
   // No parameter properties: daemon tests run node --test in strip-only mode.
@@ -36,27 +38,34 @@ export class TaskManager {
     escalate: EscalateFn = async () => false, // no bridge (tests) → deny, fail safe
     approvePlan: ApprovePlanFn = async () => false, // no bridge (tests) → don't execute
     makeRunner: RunnerFactory = (opts) => new ClaudeRunner(opts),
+    macBridge?: MacBridge, // M6: present in prod; omitted in tests (mac tasks aren't spawned there)
   ) {
     this.store = store;
     this.escalate = escalate;
     this.approvePlan = approvePlan;
     this.makeRunner = makeRunner;
+    this.macBridge = macBridge;
   }
 
-  spawnSubagent(title: string, brief: string): TaskRow {
+  /** Spawn a background sub-agent. taskType 'mac' runs the computer-use loop (kind
+   *  'computer' so the kill switch can find it) with the AX toolset; 'research' is the
+   *  default web/writing agent. */
+  spawnSubagent(title: string, brief: string, taskType: SubagentKind = 'research'): TaskRow {
+    if (taskType === 'mac' && !this.macBridge) throw new Error('Mac control is unavailable (no shell bridge wired).');
     const id = randomUUID().slice(0, 8);
     const workspace = join(config.home.tasks, id);
     mkdirSync(workspace, { recursive: true });
     const now = Date.now();
-    const task: TaskRow = { id, kind: 'subagent', title, status: 'running', workspace, created_at: now, updated_at: now };
+    const rowKind = taskType === 'mac' ? 'computer' : 'subagent';
+    const task: TaskRow = { id, kind: rowKind, title, status: 'running', workspace, created_at: now, updated_at: now };
     this.store.createTask(task);
-    this.store.addEvent(id, 'task.created', { title, brief, kind: 'subagent' });
+    this.store.addEvent(id, 'task.created', { title, brief, kind: rowKind });
 
     const abort = new AbortController();
     this.aborts.set(id, abort);
     // Two-arg then(): the rejection handler sees ONLY runSubagent errors, so a failure
     // while writing the report (success path) can't be mislabeled 'cancelled'/'failed'.
-    runSubagent({ taskId: id, brief, store: this.store, signal: abort.signal }).then(
+    runSubagent({ taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType, macBridge: this.macBridge }).then(
       (report) => this.finishWithReport(id, title, workspace, report),
       (err: unknown) => {
         this.finish(id, abort.signal.aborted ? 'cancelled' : 'failed', { error: String(err) });

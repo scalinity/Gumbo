@@ -5,6 +5,8 @@ import type { Hub } from '../ws/hub.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
 import type { ImageEditContext } from '../images/context.ts';
+import type { MacBridge } from '../ws/mac.ts';
+import type { ConfirmBridge } from '../ws/confirm.ts';
 import { AUDIO_REALTIME } from '../ws/protocol.ts';
 import { announcementText, speakAnnouncement } from '../audio/announce.ts';
 import { createOrchestratorTools } from './tools.ts';
@@ -110,15 +112,19 @@ export class Orchestrator {
   private manager: TaskManager;
   private scheduler: Scheduler;
   private imageContext: ImageEditContext;
+  private macBridge: MacBridge;
+  private confirms: ConfirmBridge;
 
   // No parameter properties: they fail `node --test` strip-only the moment a test
   // imports this file (repo gotcha) — and session.test.ts now does.
-  constructor(store: Store, hub: Hub, manager: TaskManager, scheduler: Scheduler, imageContext: ImageEditContext) {
+  constructor(store: Store, hub: Hub, manager: TaskManager, scheduler: Scheduler, imageContext: ImageEditContext, macBridge: MacBridge, confirms: ConfirmBridge) {
     this.store = store;
     this.hub = hub;
     this.manager = manager;
     this.scheduler = scheduler;
     this.imageContext = imageContext;
+    this.macBridge = macBridge;
+    this.confirms = confirms;
   }
 
   private setState(state: SessionState) {
@@ -170,6 +176,11 @@ export class Orchestrator {
             scheduler: this.scheduler,
             announce: (coldText, liveInstructions) => this.speakProactively(coldText, liveInstructions),
             imageContext: this.imageContext,
+            macBridge: this.macBridge,
+            // M6 hot mac_do confirm: no task backs a voice one-shot, so task fields are
+            // cosmetic; the shorter mac window applies (a voice turn is waiting).
+            confirmMacDo: (detail) =>
+              this.confirms.request('', 'Mac command', 'Allow this Mac command?', detail, undefined, config.mac.confirmTimeoutMs),
           }),
         });
         const session = new RealtimeSession(agent, {

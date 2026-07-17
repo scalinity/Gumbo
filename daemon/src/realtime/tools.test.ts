@@ -14,7 +14,7 @@ const { createOrchestratorTools } = await import('./tools.ts');
 // Tool definitions are built eagerly; manager/store/deps are only touched inside execute
 // closures, so stubs are safe here. Tests that exercise an execute path pass real-enough
 // stubs through the overrides.
-function buildTools(overrides: { store?: unknown; imageContext?: unknown } = {}) {
+function buildTools(overrides: { store?: unknown; imageContext?: unknown; macBridge?: unknown; confirmMacDo?: unknown } = {}) {
   return createOrchestratorTools(
     {} as never,
     (overrides.store ?? {}) as never,
@@ -22,6 +22,8 @@ function buildTools(overrides: { store?: unknown; imageContext?: unknown } = {})
       scheduler: {} as never,
       announce: async () => {},
       imageContext: (overrides.imageContext ?? { get: () => null }) as never,
+      macBridge: (overrides.macBridge ?? {}) as never,
+      confirmMacDo: (overrides.confirmMacDo ?? (async () => false)) as never,
     },
   );
 }
@@ -45,6 +47,18 @@ test('M5 tools registered: generate_image, edit_image + the three reminder tools
   const names = buildTools().map((t) => (t as { name: string }).name);
   for (const expected of ['generate_image', 'edit_image', 'set_reminder', 'list_reminders', 'cancel_reminder']) {
     assert.ok(names.includes(expected), `${expected} missing from the realtime registry`);
+  }
+});
+
+// M6: exactly ONE new realtime tool for the whole computer-use domain (mac_do). The
+// multi-step lane rides spawn_subagent's task_type, not a second tool — the SPEC caps the
+// realtime registry growth at ≤2, and the AX primitives (ax_snapshot/ax_act/run_script)
+// belong to the sub-agent only and must never surface to the voice model.
+test('M6: mac_do is registered; the sub-agent AX primitives never leak to the realtime registry', () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  assert.ok(names.includes('mac_do'), 'mac_do missing from the realtime registry');
+  for (const banned of ['ax_snapshot', 'ax_act', 'ax_query', 'run_script', 'check_permissions']) {
+    assert.ok(!names.includes(banned), `${banned} is a sub-agent-only primitive and must not be a realtime tool`);
   }
 });
 

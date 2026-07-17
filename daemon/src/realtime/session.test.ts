@@ -31,7 +31,7 @@ function harness(shellConnected: boolean) {
     hasRole: (role: string) => role === 'shell' && shellConnected,
     sendBinary: (frame: Uint8Array) => frames.push(Buffer.from(frame)),
   };
-  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never);
+  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never, {} as never, {} as never);
   return { store, events, frames, orchestrator };
 }
 

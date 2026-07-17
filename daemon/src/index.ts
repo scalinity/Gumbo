@@ -41,6 +41,8 @@ const manager = new TaskManager(
   // the confirm shows a one-line summary). Deny/timeout parks the task — nothing is lost.
   (taskId, taskTitle, plan, signal) =>
     confirms.request(taskId, taskTitle, 'Approve Claude’s plan?', plan.replace(/\s+/g, ' ').slice(0, 140), signal, config.claude.planConfirmTimeoutMs),
+  undefined, // default ClaudeRunner factory
+  macBridge, // M6: computer-use tasks execute through the shell
 );
 // M5: the Gumbo-owned scheduler. Its fire loop delivers through the M3 announce path —
 // live session injection when one is open, cold one-shot TTS otherwise (never opens a
@@ -49,7 +51,7 @@ const scheduler = new Scheduler(store, hub);
 // M5.5: the shell image viewer's live state (open image + brush selection) — what voice
 // edits resolve "this image" and "the highlighted area" against.
 const imageContext = new ImageEditContext();
-const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext);
+const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, macBridge, confirms);
 scheduler.onFire = (row) =>
   orchestrator.speakProactively(
     // Cold TTS speaks the raw text verbatim; the LIVE instruction echo is defanged
