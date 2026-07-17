@@ -23,8 +23,15 @@ final class MacBridge {
         // running computer-use task(s), and stop the ghost cursor immediately.
         killSwitch.onFire = { [weak self] reason in
             self?.ghost.hide()
-            self?.onReply?(["type": "mac_abort", "reason": reason])
+            self?.reply(["type": "mac_abort", "reason": reason])
         }
+    }
+
+    /// All replies to the daemon go out on the MAIN thread — action results are produced on
+    /// the `work` queue while aborts fire on main, and every other App.swift sender posts
+    /// from main, so funnel through one thread to keep ordering unambiguous.
+    private func reply(_ json: [String: Any]) {
+        if Thread.isMainThread { onReply?(json) } else { DispatchQueue.main.async { self.onReply?(json) } }
     }
 
     /// Route one inbound daemon message. Returns true if it was a mac_* message we handled.
@@ -60,7 +67,7 @@ final class MacBridge {
                 }
                 result = self.executor.perform(action)
             }
-            self.onReply?(["type": "mac_action_result", "id": id, "result": result])
+            self.reply(["type": "mac_action_result", "id": id, "result": result])
         }
     }
 
@@ -77,8 +84,14 @@ final class MacBridge {
     // MARK: session lifecycle (main thread)
 
     private func armSession() {
+        // Fail CLOSED: if the kill switch can't arm (PostEvent grant missing), we must not
+        // let the task drive the machine with no human-input abort — tell the daemon to
+        // cancel it, and don't show the ghost cursor (nothing will be driving).
+        guard killSwitch.arm() else {
+            reply(["type": "mac_abort", "reason": "kill_switch_unavailable"])
+            return
+        }
         ghost.show()
-        killSwitch.arm()
     }
 
     private func disarmSession() {

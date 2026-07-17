@@ -16,8 +16,12 @@ final class KillSwitch {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
-    func arm() {
-        guard tap == nil else { return }
+    /// Returns true if the listen-only tap was created. False means the PostEvent grant is
+    /// missing — the caller MUST fail closed (refuse the task), never drive the machine
+    /// without a human-input abort.
+    @discardableResult
+    func arm() -> Bool {
+        guard tap == nil else { return true }
         let types: [CGEventType] = [
             .keyDown, .keyUp, .flagsChanged,
             .mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
@@ -38,13 +42,14 @@ final class KillSwitch {
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
             NSLog("KillSwitch: could not create event tap — PostEvent permission missing?")
-            return
+            return false
         }
         self.tap = tap
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        return true
     }
 
     func disarm() {

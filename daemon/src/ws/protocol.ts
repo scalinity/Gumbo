@@ -71,9 +71,10 @@ export type InboundMessage =
   | { type: 'image_edit_request'; file: string; prompt: string; strokes?: Array<{ points: Array<[number, number]>; radius: number }> }
   // shell (M6): the executor's answer to a mac_action, matched by correlation id.
   | { type: 'mac_action_result'; id: string; result: MacActionResult }
-  // shell (M6): kill switch fired — untagged HID input (the user touched the machine) or
-  // the abort hotkey. The daemon cancels every running computer-use task.
-  | { type: 'mac_abort'; reason: 'human_input' | 'hotkey' };
+  // shell (M6): kill switch fired — untagged HID input (the user touched the machine), the
+  // abort hotkey, or the kill switch failing to arm (fail closed). The daemon cancels every
+  // running computer-use task.
+  | { type: 'mac_abort'; reason: 'human_input' | 'hotkey' | 'kill_switch_unavailable' };
 
 // Statuses a bubble can show; 'running' and 'needs_input' are the live ones (M4).
 export type BubbleStatus = 'running' | 'needs_input' | 'done' | 'failed' | 'cancelled';

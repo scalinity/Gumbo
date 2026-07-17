@@ -10,13 +10,18 @@ final class GhostCursor {
     private var window: NSWindow?
     private var dot: CALayer?
     private var ring: CAShapeLayer?
+    // The overlay spans the UNION of all displays so the fake cursor can fly to a target on
+    // any screen; layer positions are converted into this frame's coordinate space.
+    private var overlayFrame: CGRect = .zero
 
     // Warm ember tone matching the notch/confirm palette.
     private let emberColor = NSColor(calibratedRed: 0.95, green: 0.45, blue: 0.15, alpha: 1)
 
     func show() {
-        guard window == nil, let screen = NSScreen.main else { return }
-        let win = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        guard window == nil, !NSScreen.screens.isEmpty else { return }
+        let frame = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
+        overlayFrame = frame
+        let win = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         win.level = .screenSaver
         win.isOpaque = false
         win.backgroundColor = .clear
@@ -25,7 +30,7 @@ final class GhostCursor {
         win.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         win.isReleasedWhenClosed = false
 
-        let content = NSView(frame: screen.frame)
+        let content = NSView(frame: CGRect(origin: .zero, size: frame.size))
         content.wantsLayer = true
         win.contentView = content
 
@@ -37,7 +42,7 @@ final class GhostCursor {
         dot.shadowOpacity = 0.9
         dot.shadowRadius = 10
         dot.shadowOffset = .zero
-        dot.position = CGPoint(x: screen.frame.midX, y: screen.frame.midY)
+        dot.position = CGPoint(x: frame.width / 2, y: frame.height / 2)
         content.layer?.addSublayer(dot)
 
         let ring = CAShapeLayer()
@@ -99,10 +104,12 @@ final class GhostCursor {
         ring.add(fade, forKey: "fade")
     }
 
-    /// AX frames use top-left-origin global screen coordinates; AppKit windows use
-    /// bottom-left of the PRIMARY screen. NSScreen.screens[0] is the primary.
+    /// AX frames are top-left-origin global screen coordinates; AppKit is bottom-left-origin
+    /// off the PRIMARY screen (NSScreen.screens[0]). Flip via the primary's maxY to get global
+    /// AppKit coords, then subtract the overlay's origin so the point lands in the (possibly
+    /// multi-display) overlay view's own coordinate space.
     private func convert(axCenter: CGPoint) -> CGPoint {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        return CGPoint(x: axCenter.x, y: primaryHeight - axCenter.y)
+        let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
+        return CGPoint(x: axCenter.x - overlayFrame.minX, y: (primaryMaxY - axCenter.y) - overlayFrame.minY)
     }
 }
