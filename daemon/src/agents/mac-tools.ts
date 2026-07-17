@@ -2,8 +2,13 @@ import { tool } from '@openai/agents';
 import { z } from 'zod';
 import { config } from '../config.ts';
 import { auditMacAction } from '../mac/audit.ts';
+import { macDoDecision, describeMacDo } from '../mac/policy.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import type { MacActionResult } from '../ws/protocol.ts';
+
+/** Notch confirm for a risky sub-agent script; resolves false on deny/timeout (fail safe).
+ *  Deny-on-timeout means an UNATTENDED risky script blocks then refuses — intended. */
+export type ConfirmScript = (detail: string) => Promise<boolean>;
 
 /** Format a shell result for the model: the raw output on success; on failure the typed
  *  kind up front so the model branches on it (never on the message text). */
@@ -24,7 +29,7 @@ function present(result: MacActionResult): string {
  * times running is a top-4 documented computer-use failure — short-circuit with a warning
  * before it burns the step budget looping.
  */
-export function createMacTools(taskId: string, macBridge: MacBridge, signal: AbortSignal) {
+export function createMacTools(taskId: string, macBridge: MacBridge, signal: AbortSignal, confirmScript: ConfirmScript) {
   let lastActKey = '';
   let repeatCount = 0;
 
@@ -104,17 +109,30 @@ export function createMacTools(taskId: string, macBridge: MacBridge, signal: Abo
       'Run an osascript (AppleScript) or a Shortcut when a scriptable path beats driving the UI — ' +
       'app dictionaries, `open`, tmutil, defaults, or `shortcuts run <id>`. For interpreter "shortcuts", ' +
       'pass the shortcut name/UUID as the script. Prefer this over ax_act when an app exposes a direct ' +
-      'command. Always finishes within its timeout.',
+      'command. Risky scripts (sending, deleting, sudo) ask the user first. Always finishes within its timeout.',
     parameters: z.object({
       interpreter: z.enum(['osascript', 'shortcuts']),
       script: z.string().describe('AppleScript source, or a shortcut name/UUID'),
     }),
     async execute({ interpreter, script }) {
+      // The sub-agent ingests untrusted on-screen text, so its shell sink is gated by the
+      // SAME policy table as hot mac_do: reversible scripts auto-run; risky ones notch-confirm
+      // (deny-on-timeout). A shortcut is opaque to the table — treat it as auto (its own
+      // per-shortcut TCC pre-auth is the gate). A declined script is audited and never runs.
+      const decision = interpreter === 'osascript' ? macDoDecision(script) : { route: 'auto' as const, reason: 'shortcut' };
+      let gate: 'auto' | 'confirmed' | 'declined' = decision.route === 'auto' ? 'auto' : 'confirmed';
+      if (decision.route === 'confirm') {
+        const approved = await confirmScript(`${decision.reason}: ${describeMacDo(script)}`);
+        if (!approved) {
+          auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script.slice(0, 120)}`, gate: 'declined', ok: false, error: decision.reason, taskId });
+          return `the user didn't approve that script (${decision.reason}) — try another approach or skip it.`;
+        }
+      }
       const result = await macBridge.request(
         { kind: 'script', interpreter, script, timeout_ms: config.mac.scriptTimeoutMs },
         { signal, timeoutMs: config.mac.scriptTimeoutMs + 2000 },
       );
-      auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script.slice(0, 120)}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script.slice(0, 120)}`, gate, ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
       return present(result);
     },
   });

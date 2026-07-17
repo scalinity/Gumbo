@@ -21,8 +21,8 @@ function fakeBridge(reply: (action: Record<string, unknown>) => MacActionResult)
   };
 }
 
-function tools(bridge: unknown) {
-  return createMacTools('t1', bridge as never, new AbortController().signal) as unknown as ToolLike[];
+function tools(bridge: unknown, confirmScript: (detail: string) => Promise<boolean> = async () => false) {
+  return createMacTools('t1', bridge as never, new AbortController().signal, confirmScript) as unknown as ToolLike[];
 }
 function byName(list: ToolLike[], name: string) {
   const t = list.find((t) => t.name === name);
@@ -65,6 +65,22 @@ test('a DIFFERENT act resets the repetition counter', async () => {
   await act.invoke({}, b); // breaks the streak
   await act.invoke({}, a); // counter for `a` was reset by `b`
   assert.equal(bridge.calls.length, 4, 'nothing short-circuited once the streak broke');
+});
+
+test('run_script gates a risky osascript through the notch; a declined script never reaches the shell (review 🟡)', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'ran' }));
+  // confirm → deny: a `do shell script "rm …"` is risky per the policy table.
+  const denied = tools(bridge, async () => false);
+  const out = await byName(denied, 'run_script').invoke({}, JSON.stringify({ interpreter: 'osascript', script: 'do shell script "rm -rf ~/Documents"' }));
+  assert.match(out, /didn't approve/i);
+  assert.equal(bridge.calls.length, 0, 'a declined risky script must not run');
+
+  // A reversible osascript auto-runs without consulting confirm.
+  let confirmConsulted = false;
+  const auto = tools(fakeBridge(() => ({ ok: true, output: 'processes' })), async () => { confirmConsulted = true; return false; });
+  const ran = await byName(auto, 'run_script').invoke({}, JSON.stringify({ interpreter: 'osascript', script: 'tell application "System Events" to get name of every process' }));
+  assert.doesNotMatch(ran, /didn't approve/i);
+  assert.equal(confirmConsulted, false, 'a reversible script must not consult the notch');
 });
 
 test('check_permissions reports the health state', async () => {

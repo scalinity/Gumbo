@@ -5,7 +5,7 @@ import type { Store } from '../events/store.ts';
 import { exaSearch, exaContents, type ExaResult } from '../search/exa.ts';
 import { firecrawlScrape, firecrawlMap, firecrawlCrawl, firecrawlExtract, type FirecrawlPage } from '../scrape/firecrawl.ts';
 import { SearchError } from '../search/client.ts';
-import { createMacTools } from './mac-tools.ts';
+import { createMacTools, type ConfirmScript } from './mac-tools.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
 export type SubagentKind = 'research' | 'mac';
@@ -331,20 +331,21 @@ export async function runSubagent(opts: {
   signal: AbortSignal;
   kind?: SubagentKind;
   macBridge?: MacBridge;
+  confirmScript?: ConfirmScript;
 }): Promise<string> {
-  const { taskId, brief, store, signal, kind = 'research', macBridge } = opts;
+  const { taskId, brief, store, signal, kind = 'research', macBridge, confirmScript } = opts;
 
   // Computer-use tasks need the shell: the AX toolset routes through MacBridge, and the
   // shell must arm the ghost cursor + kill switch for the whole run.
   const isMac = kind === 'mac';
-  if (isMac && !macBridge) throw new Error('computer-use task requires a MacBridge (no shell wiring)');
+  if (isMac && (!macBridge || !confirmScript)) throw new Error('computer-use task requires a MacBridge + confirm (no shell/notch wiring)');
   if (isMac) macBridge!.taskStarted();
   try {
     const agent = new Agent({
       name: `subagent-${taskId}`,
       instructions: isMac ? computerInstructions() : instructions(),
       model: config.models.subagent,
-      tools: isMac ? createMacTools(taskId, macBridge!, signal) : createSubagentTools(taskId, store, signal),
+      tools: isMac ? createMacTools(taskId, macBridge!, signal, confirmScript!) : createSubagentTools(taskId, store, signal),
     });
 
     // Pass the signal so the SDK aborts the underlying model/tool request promptly on cancel;

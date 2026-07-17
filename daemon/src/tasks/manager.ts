@@ -63,9 +63,15 @@ export class TaskManager {
 
     const abort = new AbortController();
     this.aborts.set(id, abort);
+    // Risky sub-agent scripts route to the same notch confirm as everything else (deny on
+    // timeout / no shell). Only computer-use tasks use it; research tasks pass undefined.
+    const confirmScript =
+      taskType === 'mac'
+        ? (detail: string) => this.escalate(id, title, { title: 'Allow this Mac script?', detail }, abort.signal)
+        : undefined;
     // Two-arg then(): the rejection handler sees ONLY runSubagent errors, so a failure
     // while writing the report (success path) can't be mislabeled 'cancelled'/'failed'.
-    runSubagent({ taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType, macBridge: this.macBridge }).then(
+    runSubagent({ taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType, macBridge: this.macBridge, confirmScript }).then(
       (report) => this.finishWithReport(id, title, workspace, report),
       (err: unknown) => {
         this.finish(id, abort.signal.aborted ? 'cancelled' : 'failed', { error: String(err) });
