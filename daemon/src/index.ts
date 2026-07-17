@@ -5,6 +5,7 @@ import { Store } from './events/store.ts';
 import { createHttpServer } from './http.ts';
 import { Hub } from './ws/hub.ts';
 import { ConfirmBridge } from './ws/confirm.ts';
+import { MacBridge } from './ws/mac.ts';
 import { TaskManager } from './tasks/manager.ts';
 import { Scheduler } from './schedule/scheduler.ts';
 import { applyImageContext, ImageEditContext } from './images/context.ts';
@@ -30,6 +31,9 @@ const server = createHttpServer(store);
 const hub = new Hub(server);
 // M4: supervisor escalations resolve through the notch (deny on timeout / no shell).
 const confirms = new ConfirmBridge(hub);
+// M6: computer-use actions execute in the shell (it owns the TCC grants); this bridge
+// is the daemon's hands. Fails safe to typed errors — never hangs a waiting loop.
+const macBridge = new MacBridge(hub);
 const manager = new TaskManager(
   store,
   (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal),
@@ -119,6 +123,9 @@ hub.onHello((role) => {
   // M5: repair the EventKit mirror — create/remove broadcasts dropped while no shell
   // was connected get re-sent now (pending w/o twin, cancelled w/ surviving twin).
   scheduler.resyncEventKit();
+  // M6: a shell that (re)connects while a computer-use task runs must arm its kill
+  // switch + ghost cursor immediately.
+  macBridge.resync();
 });
 
 hub.onMessage((msg, role) => {
@@ -146,6 +153,13 @@ hub.onMessage((msg, role) => {
     applyImageContext(imageContext, msg, (detail) => {
       store.addEvent(null, 'session.error', { message: `image_context: ${detail}` });
     });
+  } else if (msg.type === 'mac_action_result' && role === 'shell' && typeof msg.id === 'string') {
+    // M6: the executor's answer to a mac_action — payload is sanitized inside the bridge.
+    macBridge.handleResult(msg.id, msg.result);
+  } else if (msg.type === 'mac_abort' && role === 'shell') {
+    // M6 kill switch: the user touched the machine (or hit the hotkey) while a computer-use
+    // task was driving it — cancel every running computer task, instantly and audibly.
+    manager.cancelComputerTasks(String(msg.reason ?? 'human_input'));
   } else if (msg.type === 'image_edit_request' && role === 'shell') {
     // M5.5: typed edit from the viewer panel — no realtime session involved; the
     // completion (or failure) is spoken through the same proactive announce path, and

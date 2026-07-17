@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 
 export interface TaskRow {
   id: string;
-  kind: 'subagent' | 'claude';
+  kind: 'subagent' | 'claude' | 'computer';
   title: string;
   status: 'running' | 'needs_input' | 'done' | 'failed' | 'cancelled';
   workspace: string;

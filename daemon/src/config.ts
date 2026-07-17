@@ -112,6 +112,18 @@ export const config = {
     quickLookupMaxResults: 5,
     backgroundNumResults: 10,
   },
+  // M6 computer use: budgets for the daemon⇄shell mac_action RPC and both script lanes.
+  // Every lane has a hard timeout — Tahoe regressed Apple-Events timing (scripts hang to
+  // the 2-min -1712 timeout on some apps), so nothing here waits on the OS's patience.
+  mac: {
+    rpcTimeoutMs: 15_000, // per mac_action (snapshot/act/health) — settle+diff finishes well under this
+    hotScriptTimeoutMs: 10_000, // mac_do: a voice turn is waiting — fail fast, never stack
+    scriptTimeoutMs: 60_000, // sub-agent run_script (osascript/shortcuts get more room than the hot path)
+    confirmTimeoutMs: 30_000, // hot mac_do notch confirm — shorter than Claude's 60 s (a voice turn is waiting)
+    snapshotMaxElements: 400, // interactive elements per compacted snapshot the model sees
+    maxTurns: 50, // computer-mode sub-agent step budget (SPEC §M6: default ~50)
+    outputMaxChars: 262_144, // defensive cap on any single shell result payload
+  },
   // M4 Claude Code sessions run in "auto mode" (the user's call, 2026-07-15): the pure
   // policy table gates everything; the supervisor MODEL is only invoked when Claude
   // actually asks a question (AskUserQuestion) — never per turn or per tool call.

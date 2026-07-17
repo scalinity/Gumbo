@@ -274,6 +274,18 @@ export class TaskManager {
     if (task) this.onFinished(task);
   }
 
+  /** M6 kill switch: untagged HID input (the user) or the abort hotkey — stop every
+   *  running computer-use task at once. The abort propagates through each task's
+   *  AbortController into in-flight MacBridge RPCs and script children. */
+  cancelComputerTasks(reason: string) {
+    for (const id of this.aborts.keys()) {
+      const task = this.store.getTask(id);
+      if (task?.kind !== 'computer') continue;
+      this.store.addEvent(id, 'mac.kill_switch', { reason });
+      this.cancel(id);
+    }
+  }
+
   cancel(id: string): boolean {
     const abort = this.aborts.get(id);
     if (abort) {
