@@ -31,6 +31,19 @@ test('file null (viewer closed) clears the context and drops the strokes', () =>
   assert.equal(context.get(), null);
 });
 
+test('noteCreated tracks the latest image independently of the viewer lifecycle', () => {
+  const { context, apply } = harness();
+  assert.equal(context.latest, null);
+  context.noteCreated('gen-1.png');
+  context.noteCreated('gen-2.png');
+  assert.equal(context.latest, 'gen-2.png', 'newest wins');
+  // Opening and closing the viewer must not disturb it — "edit the one you just made"
+  // has to work after the thumbnail is gone.
+  apply({ file: 'gen-1.png' });
+  apply({ file: null });
+  assert.equal(context.latest, 'gen-2.png');
+});
+
 test('a bad payload fails toward NO TARGET — cleared context, error surfaced (review 🟡)', () => {
   const { context, errors, apply } = harness();
   apply({ file: 'swamp-1.png' }); // armed

@@ -4,10 +4,14 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.ts';
 import { webQuickLookup } from '../search/tavily.ts';
+import { xLookup } from '../search/grok.ts';
 import { runImageGeneration } from '../images/generate.ts';
 import { runImageEdit } from '../images/edit.ts';
-import { safeImageFile } from '../images/files.ts';
+import { findGalleryImages, safeImageFile } from '../images/files.ts';
 import type { ImageEditContext } from '../images/context.ts';
+import { readForPresentation, type PresentedFile } from '../files/present.ts';
+import { runFileEdit } from '../files/edit.ts';
+import type { FileEditContext } from '../files/context.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
@@ -38,6 +42,14 @@ export interface OrchestratorToolDeps {
   scheduler: Scheduler;
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
   imageContext: ImageEditContext;
+  /** The shell file viewer's open document (edit_file resolves "this document" from here). */
+  fileContext: FileEditContext;
+  /** Push a file onto the user's screen (shell document card → Gumbo's renderer).
+   *  Returns false when no shell is connected — nothing would be shown. */
+  presentFile: (payload: PresentedFile) => boolean;
+  /** Open a gallery image in the shell viewer/editor (open_image tool). Returns false
+   *  when no shell is connected. */
+  openImage: (file: string) => boolean;
   // M6: the hands (shell executor) + the notch confirm for a risky one-shot command.
   macBridge: MacBridge;
   confirmMacDo: (detail: string) => Promise<boolean>;
@@ -169,16 +181,37 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
 
   const getTaskStatus = tool({
     name: 'get_task_status',
-    description: 'Get the current status and recent activity of one background task.',
+    description:
+      "Get one background task's full picture: status, why it's paused (if it is), its original " +
+      'brief, the plan awaiting approval (if any), and recent activity. Use it to answer ANY ' +
+      'question about what a task is doing, did, or was originally asked to do — it works for ' +
+      'finished and cancelled tasks too, so you can always recover the original instructions.',
     parameters: z.object({ task_id: z.string() }),
     execute: async ({ task_id }) => {
       const task = store.getTask(task_id);
       if (!task) return `No task with id ${task_id}.`;
-      const recent = store
-        .listEvents({ taskId: task_id, limit: 5 })
+      // The 5-events × 200-chars digest this replaces left the voice model blind — it could
+      // see "paused, blocked" but not the brief, the plan, or what the session had done
+      // (live failure 2026-07-16). Everything below survives cancellation and restarts.
+      const parts = [`${task.title} — ${task.status}${task.kind === 'claude' ? ' (coding session)' : ''}`];
+      const brief = store.getClaudeSession(task_id)?.brief ?? store.getTaskBrief(task_id);
+      if (brief) parts.push(`Original brief: ${brief.slice(0, 800)}`);
+      const events = store.listEvents({ taskId: task_id, limit: 200 });
+      const lastStatus = [...events].reverse().find((e) => e.type === 'task.status');
+      const statusReason = (lastStatus?.payload as { reason?: string } | null)?.reason;
+      if (task.status === 'needs_input' && statusReason) parts.push(`Paused because: ${statusReason}`);
+      if (task.status === 'needs_input') {
+        // Direct SQL, not the 200-event window above — a chatty session can push the
+        // plan event out of the slice while it's still the one awaiting approval.
+        const plan = (store.getLatestEventPayload(task_id, 'claude.plan') as { plan?: string } | null)?.plan;
+        if (plan && plan !== '{}') parts.push(`Claude's plan (awaiting the user's approval — read it to him on request):\n${plan.slice(0, 3000)}`);
+      }
+      const recent = events
+        .slice(-12)
         .map((e) => `${e.type}: ${JSON.stringify(e.payload).slice(0, 200)}`)
         .join('\n');
-      return `${task.title} — ${task.status}\nRecent activity:\n${recent}`;
+      parts.push(`Recent activity (oldest first):\n${recent}`);
+      return parts.join('\n\n');
     },
   });
 
@@ -236,14 +269,51 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         .enum(['square', 'landscape', 'portrait'])
         .default('square')
         .describe("'landscape' for wallpapers and scenes, 'portrait' for people or posters, 'square' otherwise"),
+      quality: z
+        .enum(['low', 'medium', 'high', 'auto'])
+        .default('high')
+        .describe("Render quality — default 'high'; lower it ONLY if the user asks for a quick or draft version"),
     }),
-    execute: async ({ prompt, shape }) => {
+    execute: async ({ prompt, shape, quality }) => {
       // Fire-and-forget: runImageGeneration handles (and speaks) its own failures; this
       // catch only guards the announce path itself so nothing becomes an unhandled rejection.
-      runImageGeneration({ prompt, shape, store, announce: deps.announce }).catch((err: unknown) => {
+      runImageGeneration({ prompt, shape, quality, store, announce: deps.announce }).catch((err: unknown) => {
         store.addEvent(null, 'session.error', { message: `image announce: ${String(err)}` });
       });
-      return "Image generation started in the background — tell the user it's on the way. You will be told when it lands in his gallery; no need to wait.";
+      return 'Image generation started — a generating orb is already on the user\'s screen (top right) and will become the image when it lands; you will be told when it does. If you already told him it\'s coming, add at most ONE short sentence — never repeat yourself, and never tell him to check the gallery or open anything himself.';
+    },
+  });
+
+  // M5.5 follow-up (live gap: the model REGENERATED an image the user already had because
+  // it had no way back into the gallery): open any gallery image by its word-name.
+  const openImage = tool({
+    name: 'open_image',
+    description:
+      "Open one of the user's existing images from his gallery on his screen (the viewer/editor) and " +
+      'make it the edit target. Use whenever he references an image he already has ("get the ember ' +
+      'back up", "open the dragon one") — NEVER regenerate an image that already exists. Pass words ' +
+      "from how he referred to it, or null for his most recent image. Image names are plain words — " +
+      'say them naturally, without the .png.',
+    parameters: z.object({
+      name: z.string().nullable().describe("Words identifying the image ('green ember'), or null for the most recent"),
+    }),
+    execute: async ({ name }) => {
+      const query = name?.trim() || null;
+      const matches = findGalleryImages(query);
+      if (matches.length === 0) {
+        const recent = findGalleryImages(null, 5);
+        return recent.length === 0
+          ? 'The gallery is empty — nothing to open yet.'
+          : `No image matches "${query}". Recent images: ${recent.join(', ')} — ask the user which he means.`;
+      }
+      const file = matches[0];
+      if (query && matches.length > 1) {
+        return `Several images match: ${matches.slice(0, 4).join(', ')}. Ask the user which one, then call open_image with its name.`;
+      }
+      if (!deps.openImage(file)) {
+        return 'The shell is not connected right now, so nothing can be shown on screen.';
+      }
+      return `Opened ${file} on the user's screen — it's now the edit target. Refer to it by its name (without the .png).`;
     },
   });
 
@@ -253,27 +323,33 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     name: 'edit_image',
     description:
       'Edit a previously generated image with a plain-language instruction. Use when the user asks to ' +
-      'change, tweak, fix, or redo an image. If he is viewing one in the image panel, that image — ' +
-      'and any area he highlighted with the brush — is targeted automatically: pass file null. Only ' +
-      'pass a filename if the user explicitly named a different image. Returns immediately; the edit ' +
-      "lands as a NEW version and you will be told when it's ready.",
+      'change, tweak, fix, or redo an image. Pass file null (the usual case): that targets the image ' +
+      'he has open in the image panel — including any area he highlighted with the brush — or, if ' +
+      'none is open, the most recently created image ("edit the image you just made"). Only pass a ' +
+      'filename if the user explicitly named a different image. Returns immediately; the edit lands ' +
+      "as a NEW version and you will be told when it's ready.",
     parameters: z.object({
       prompt: z.string().describe("The edit instruction, faithful to the user's words"),
       file: z
         .string()
         .nullable()
-        .describe('null = the image the user is currently viewing (the usual case); a filename only if he named one'),
+        .describe('null = the open image, else the latest created one (the usual case); a filename only if the user named one'),
     }),
     execute: async ({ prompt, file }) => {
       const ctx = deps.imageContext.get();
       const named = file?.trim() || null;
-      const target = named ?? ctx?.file;
+      // Resolution ladder (live gap 2026-07-16): named file → the viewer's open image →
+      // the most recently created image (in-memory note, exact) → the newest gallery
+      // file on DISK. The last rung is what survives daemon restarts — tsx-watch reloads
+      // are constant in dev, and the in-memory note dying with them left "edit the pine
+      // forest" refusing while the image sat right there in the gallery (live, 20:33).
+      const target = named ?? ctx?.file ?? deps.imageContext.latest ?? findGalleryImages(null, 1)[0];
       if (!target) {
-        return 'No image is open in the viewer and none was named — ask the user to open the image (click its thumbnail) or say which one to edit.';
+        return 'No image is open, none was named, and the gallery is empty — ask the user to describe the image he wants created.';
       }
-      // The brush selection belongs to the viewer's image; a differently-named target
-      // must not inherit it.
-      const strokes = named && named !== ctx?.file ? undefined : ctx?.strokes;
+      // The brush selection belongs to the viewer's OPEN image; a target resolved any
+      // other way (named differently, or the latest-created fallback) must not inherit it.
+      const strokes = target === ctx?.file ? ctx?.strokes : undefined;
       try {
         safeImageFile(target);
       } catch {
@@ -282,7 +358,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       runImageEdit({ file: target, prompt, strokes, store, announce: deps.announce }).catch((err: unknown) => {
         store.addEvent(null, 'session.error', { message: `image edit announce: ${String(err)}` });
       });
-      return `Edit started in the background${strokes && strokes.length > 0 ? ' on the highlighted area' : ''} — tell the user it's on the way. You will be told when the new version lands; no need to wait.`;
+      return `Edit started in the background${strokes && strokes.length > 0 ? ' on the highlighted area' : ''} — a working orb is on the user's screen and becomes the new version when it lands; you will be told when it does. If you already told him it's on the way, add at most ONE short sentence.`;
     },
   });
 
@@ -354,6 +430,60 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     },
   });
 
+  // File presentation (2026-07-16): a coding session's deliverable is often a FILE (a
+  // spec, a doc) — the user shouldn't have to dig through Finder to see it. The daemon reads
+  // the file and pushes it to the shell, which shows a document card that opens in Gumbo's
+  // own markdown renderer. Guards: absolute path only, secret paths refused, text only,
+  // size-capped.
+  const presentFileTool = tool({
+    name: 'present_file',
+    description:
+      'Show the user a file on his screen — a document card appears in the corner and opens in a ' +
+      'clean reader (markdown rendered nicely). Use whenever a task produced a file (a spec, ' +
+      'plan, report, doc, or code) and the user should see it — offer it instead of telling him ' +
+      'to go find the file himself. Pass the absolute path exactly as it appears in the task ' +
+      'report or activity.',
+    parameters: z.object({
+      path: z.string().describe('Absolute path of the file to show'),
+      title: z.string().nullable().describe('Short display title for the card; null → the filename'),
+    }),
+    execute: async ({ path, title }) => {
+      const read = readForPresentation(path, title);
+      if ('error' in read) return read.error;
+      const shown = deps.presentFile(read);
+      store.addEvent(null, 'file.presented', { path: read.path, shown });
+      return shown
+        ? 'It is on the user\'s screen now — the document card in the corner opens the full view (he can also prompt edits from there). Tell him it\'s up.'
+        : 'No shell is connected, so nothing can be shown on screen — tell the user, and offer to read it aloud instead.';
+    },
+  });
+
+  // Editable file viewer (2026-07-16): the user prompts a change to the document he has open
+  // and the agent rewrites it in place (lightweight LLM round-trip, no coding session). The
+  // filename never passes through the voice model — resolved from the viewer's file_context.
+  const editFileTool = tool({
+    name: 'edit_file',
+    description:
+      'Edit the document the user currently has open in the file viewer — apply a plain-language ' +
+      'change (fix wording, correct a fact, add or remove a section, reformat). Use when he asks ' +
+      'to change, fix, tweak, or rewrite the document he is looking at. Returns immediately; the ' +
+      'updated version refreshes on screen. Only works on documents in his Gumbo workspace — for ' +
+      'repo or code files use spawn_claude_session instead.',
+    parameters: z.object({
+      prompt: z.string().describe("The edit instruction, faithful to the user's words"),
+    }),
+    execute: async ({ prompt }) => {
+      const open = deps.fileContext.get();
+      if (!open) {
+        return 'No document is open in the viewer — ask the user to open the document card first, then say the change.';
+      }
+      runFileEdit({ path: open, prompt, store, present: deps.presentFile, announce: deps.announce }).catch((err: unknown) => {
+        store.addEvent(null, 'session.error', { message: `file edit announce: ${String(err)}` });
+      });
+      return "Editing the document in the background — tell the user it's on the way; the updated version will refresh on his screen. You'll be told when it lands.";
+    },
+  });
+
   // Hot path: Tavily, hard-capped at config.search.quickLookupTimeoutMs, no retries. The
   // description below IS the router between this and spawn_subagent — its wording is part
   // of the spec; don't loosen it.
@@ -375,9 +505,28 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     execute: async ({ query, topic }) => webQuickLookup(query, topic),
   });
 
+  // Hot path, X-first: Grok's live X access, hard-capped at config.grok.quickLookupTimeoutMs,
+  // no retries. Its description is the router between this and web_quick_lookup — X/real-time-
+  // social lives here, general facts stay on Tavily. Don't cross the streams; the wording is
+  // load-bearing (realtime/tools.test.ts asserts both are registered).
+  const xLookupTool = tool({
+    name: 'x_lookup',
+    description:
+      "Use for what's happening on X (Twitter) RIGHT NOW — a post from a specific account, real-time " +
+      'social reaction, or a breaking announcement made ON X (e.g. "did the Claude Dev account post ' +
+      'about the usage-limit reset?"). Powered by Grok\'s live X access, which the general web lookup ' +
+      'lacks. For general facts, scores, prices, or "is X true today", use web_quick_lookup instead — ' +
+      'not this. Returns a spoken-ready `answer` (read it aloud nearly verbatim) plus source URLs as ' +
+      'metadata. If it returns lookup_failed, follow its instruction — never guess.',
+    parameters: z.object({
+      query: z.string().describe('What to check on X right now — a specific account, post, or breaking claim'),
+    }),
+    execute: async ({ query }) => xLookup(query),
+  });
+
   return [
-    spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, macDo,
-    generateImage, editImageTool, setReminder, listReminders, cancelReminder,
-    listTasks, getTaskStatus, cancelTask, readReport, saveNote,
+    spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, xLookupTool, macDo,
+    generateImage, editImageTool, openImage, setReminder, listReminders, cancelReminder,
+    listTasks, getTaskStatus, cancelTask, readReport, saveNote, presentFileTool, editFileTool,
   ];
 }

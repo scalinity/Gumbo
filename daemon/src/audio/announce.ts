@@ -37,6 +37,16 @@ export function echoForInstructions(text: string, max = 90): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+/** Both halves of the needs_input pause announcement (index.ts task.status listener),
+ *  pure so the reason interpolation is testable. Cold TTS speaks verbatim; the live
+ *  string is instruction prose, so its echoes are defanged. No task id enters either. */
+export function needsInputAnnounce(title: string, reason: string): { cold: string; live: string } {
+  return {
+    cold: `the user, the ${title} task is paused — ${reason}.`,
+    live: `The background task "${echoForInstructions(title, 80)}" just paused and needs the user: ${echoForInstructions(reason, 140)}. Tell him now, in one short sentence, and offer to read out the details (use get_task_status if he asks). Never mention task ids.`,
+  };
+}
+
 // Announcements are serialized: two tasks finishing together must not interleave their
 // 0x02 frames into one garbled stream at the shell's single player.
 let queue: Promise<void> = Promise.resolve();

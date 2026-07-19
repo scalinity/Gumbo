@@ -9,10 +9,16 @@ import SwiftUI
 /// durable home) or via the hover ✕.
 final class ImageBubbleController {
     var onOpen: ((String) -> Void)?
+    /// Reports the y just below the thumbnail stack after every layout, so the presented-
+    /// file cards (FileBubbleController) can stack beneath the images — the same chaining
+    /// BubbleController does for this layer.
+    var onStackBottomChange: ((CGFloat) -> Void)?
 
     static let thumbSize = NSSize(width: 148, height: 104)
     private static let lingerSeconds: TimeInterval = 600
-    private static let maxThumbs = 3
+    // Originals now persist beside their edits (the user, 2026-07-16), so the stack fills
+    // faster — room for an original plus a few edit versions before the oldest fades.
+    private static let maxThumbs = 5
 
     private struct Thumb {
         let panel: NSPanel
@@ -20,7 +26,7 @@ final class ImageBubbleController {
         var expiry: DispatchWorkItem?
     }
 
-    private var thumbs: [String: Thumb] = [:] // keyed by image filename
+    private var thumbs: [String: Thumb] = [:] // keyed by filename, or "gen:<id>"/"edit:<file>" for in-flight work
     private var order: [String] = [] // stacking order, newest on top
     private var stackBottom: CGFloat? // y just below the task-orb stack
     private let margin: CGFloat = 10
@@ -32,38 +38,87 @@ final class ImageBubbleController {
         layout()
     }
 
-    /// A new image landed (image.created). An edit takes its parent's slot; a fresh
-    /// image stacks on top. Oldest thumbs beyond the cap fade out.
-    func present(file: String, editedFrom: String?) {
-        if let parent = editedFrom, let slot = order.firstIndex(of: parent) {
-            removeThumb(parent)
-            insert(file: file, at: min(slot, order.count))
+    /// In-flight work (image.generating / image.edit_requested): a breathing orb holds
+    /// the slot so the user SEES the render running (live gap 2026-07-16: a generation died
+    /// silently and there was nothing on screen to even suggest it had started). The orb
+    /// morphs into the thumbnail on image.created, or flips failed and fades.
+    func beginWork(key: String) {
+        guard thumbs[key] == nil else { return }
+        insert(key: key, file: nil, at: 0)
+        trim()
+    }
+
+    /// image.generate_failed / image.edit_failed: show the failure mark briefly (the
+    /// daemon speaks the details), then fade the slot out.
+    func failWork(key: String) {
+        guard let thumb = thumbs[key] else { return }
+        thumb.model.working = false
+        thumb.model.failed = true
+        thumbs[key]?.expiry?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.removeThumb(key) }
+        thumbs[key]?.expiry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+    }
+
+    /// A new image landed (image.created). A generation's orb (matched by gen_id) or an
+    /// edit's own working orb morphs into the thumbnail in place. The edited version is a
+    /// SEPARATE card that stacks alongside its original — the original is NEVER removed
+    /// (the user, 2026-07-16: an edit used to replace the source in the stack). Oldest
+    /// beyond the cap fade out.
+    func present(file: String, editedFrom: String?, genId: String?) {
+        if let genId, thumbs["gen:" + genId] != nil {
+            morph(key: "gen:" + genId, into: file)
+        } else if let parent = editedFrom, thumbs["edit:" + parent] != nil {
+            // The edit's working orb becomes the new version; the parent thumb stays put.
+            morph(key: "edit:" + parent, into: file)
         } else if thumbs[file] == nil {
-            insert(file: file, at: 0)
+            // No orb to morph (edit started before this shell connected, or a plain new
+            // image): land it as a fresh card on top, leaving any original in place.
+            insert(key: file, file: file, at: 0)
         }
-        while order.count > Self.maxThumbs, let oldest = order.last {
-            removeThumb(oldest)
-        }
+        trim()
     }
 
     func dismiss(file: String) {
         removeThumb(file)
     }
 
-    private func insert(file: String, at index: Int) {
-        let model = ThumbModel(file: file)
-        let panel = makePanel(model: model, file: file)
-        thumbs[file] = Thumb(panel: panel, model: model)
-        order.insert(file, at: index)
+    private func trim() {
+        while order.count > Self.maxThumbs, let oldest = order.last {
+            removeThumb(oldest)
+        }
+    }
+
+    /// Work orb → thumbnail, keeping the panel and slot (no flicker, no restack jump).
+    private func morph(key: String, into file: String) {
+        guard let thumb = thumbs.removeValue(forKey: key) else { return }
+        thumbs[file] = thumb
+        if let index = order.firstIndex(of: key) { order[index] = file }
+        thumb.model.file = file
+        thumb.model.working = false
+        ImageFetch.load(file: file) { image in
+            thumb.model.image = image
+            thumb.model.failed = image == nil
+        }
+        scheduleExpiry(file) // fresh linger from the moment it landed
+    }
+
+    private func insert(key: String, file: String?, at index: Int) {
+        let model = ThumbModel(key: key, file: file)
+        let panel = makePanel(model: model, key: key)
+        thumbs[key] = Thumb(panel: panel, model: model)
+        order.insert(key, at: index)
         panel.setFrame(NSRect(origin: origin(forIndex: index), size: Self.thumbSize), display: false)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         panel.animator().alphaValue = 1
-        ImageFetch.load(file: file) { image in
-            model.image = image
-            model.failed = image == nil
+        if let file {
+            ImageFetch.load(file: file) { image in
+                model.image = image
+                model.failed = image == nil
+            }
         }
-        scheduleExpiry(file)
+        scheduleExpiry(key)
         layout()
     }
 
@@ -88,7 +143,7 @@ final class ImageBubbleController {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.lingerSeconds, execute: work)
     }
 
-    private func makePanel(model: ThumbModel, file: String) -> NSPanel {
+    private func makePanel(model: ThumbModel, key: String) -> NSPanel {
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: Self.thumbSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -105,8 +160,12 @@ final class ImageBubbleController {
         panel.contentView = FirstMouseHostingView(
             rootView: ImageThumbView(
                 model: model,
-                onOpen: { [weak self] in self?.onOpen?(file) },
-                onDismiss: { [weak self] in self?.removeThumb(file) }))
+                // Read the file at CLICK time — a work orb has none yet, and a morph
+                // rewrites it in place (the closure must open the landed image).
+                onOpen: { [weak self] in
+                    if let file = model.file { self?.onOpen?(file) }
+                },
+                onDismiss: { [weak self] in self?.removeThumb(model.file ?? key) }))
         return panel
     }
 
@@ -127,6 +186,8 @@ final class ImageBubbleController {
                     NSRect(origin: origin(forIndex: index), size: Self.thumbSize), display: true)
             }
         }
+        let top = stackBottom ?? ((NSScreen.gumboHome?.visibleFrame.maxY ?? 0) - margin)
+        onStackBottomChange?(top - CGFloat(order.count) * (Self.thumbSize.height + gap))
     }
 }
 
@@ -147,12 +208,19 @@ enum ImageFetch {
 }
 
 final class ThumbModel: ObservableObject {
-    let file: String
+    let key: String
+    @Published var file: String? // nil while the render is still working (orb phase)
     @Published var image: NSImage?
-    @Published var failed = false // fetch failed — show a broken-image mark, not an eternal spinner
+    @Published var failed = false // work or fetch failed — show a broken-image mark, not an eternal spinner
+    @Published var working: Bool
+    /// Drives the same plasma orb the task bubbles use — "generating" wears the running
+    /// ember look, so in-flight renders read exactly like other live work.
+    let orb = BubbleModel(title: "", status: "running")
 
-    init(file: String) {
+    init(key: String, file: String?) {
+        self.key = key
         self.file = file
+        self.working = file == nil
     }
 }
 
@@ -176,6 +244,10 @@ private struct ImageThumbView: View {
                             Image(systemName: "photo.badge.exclamationmark")
                                 .font(.system(size: 16))
                                 .foregroundStyle(Tokens.faint)
+                        } else if model.working {
+                            // The render is running: the same breathing ember orb the
+                            // task bubbles use, morphing into the image when it lands.
+                            OrbView(model: model.orb, diameter: 40)
                         } else {
                             ProgressView().controlSize(.small)
                         }

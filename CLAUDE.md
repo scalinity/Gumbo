@@ -21,9 +21,10 @@ non-obvious (record *why*, not just *what*).
 ## Provider-client conventions (established by the web-search work — follow for any new provider)
 
 - **Secrets:** keys live in the repo-root `.env` (`OPENAI_API_KEY`, `EXA_API_KEY`,
-  `TAVILY_API_KEY`, `FIRECRAWL_API_KEY`), loaded by `daemon/src/config.ts` via
+  `TAVILY_API_KEY`, `FIRECRAWL_API_KEY`, `XAI_API_KEY`), loaded by `daemon/src/config.ts` via
   `process.loadEnvFile`, validated at boot in `index.ts`. Keys are read from `process.env`
-  inside the daemon only — never sent to, or read by, the dashboard/shell.
+  inside the daemon only — never sent to, or read by, the dashboard/shell. Every provider key
+  must also be in `config.secretEnvKeys` so it's stripped from spawned Claude Code sessions.
 - **HTTP + retries:** all provider calls go through `requestJson`/`postJson` in
   `daemon/src/search/client.ts` (GET/DELETE exist for async-job polling/cancellation).
   Retry only 429/5xx, max 2 retries, backoff 500 ms → 1500 ms. **Voice hot path passes
@@ -44,6 +45,26 @@ non-obvious (record *why*, not just *what*).
   sub-agent tools only (`web_search`, `fetch_page_contents`) — full page text + highlights,
   deliberately **no `maxCharacters`/truncation anywhere** (quality over token cost). Don't cross
   these streams: the tool descriptions are the router, and their wording is load-bearing.
+- **Grok (xAI) = live X/real-time-social, both tiers:** `search/grok.ts` serves a hot-path
+  realtime tool (`x_lookup` → `xLookup`, spoken `{answer,sources}`/`lookup_failed`, `retries:0`)
+  AND a background sub-agent tool (`x_search` → `grokLiveSearch` `style:'detailed'`, `retries:2` +
+  task signal, persisted to `memory` as provider `'grok'`). Grok closes a real gap — Exa/Tavily
+  barely see inside X. **Agent Tools API** (`POST /v1/responses` + server-side `web_search` +
+  `x_search` tools) — the old declarative Live Search (`/chat/completions` + `search_parameters`)
+  is **decommissioned (HTTP 410)**; don't reach for it. Answer is the trailing `output[]` item of
+  `type:'message'` → `content[].output_text.text`; sources are its `annotations[]` of
+  `type:'url_citation'`. The model injects inline `[[n]](url)` markers — **stripped** for speech.
+  Sources are **X+web** (catch a post OR a blog) but the tool descriptions are **X-first** so
+  routing stays clean vs Tavily's general-facts lane — don't cross the streams.
+  **TIERED MODELS (measured live):** hot path uses `config.grok.hotModel`
+  (`grok-4.20-non-reasoning`, ~2–8 s) because the reasoning model `grok-4.5` ran **28–45 s** on
+  the hot path (non-viable — `max_tool_calls` does NOT bound the reasoning loop, so it's not sent;
+  the per-call timeout is the real guard). Background uses `config.grok.backgroundModel`
+  (`grok-4.5`) for depth. Hot-path budget `quickLookupTimeoutMs` (15 s) headroom over the ~11 s
+  tail; on timeout → `lookup_failed`. `realtime/tools.test.ts` asserts `x_lookup` is registered
+  alongside `web_quick_lookup`. **Any new provider needs a live smoke** (docs lag deprecations —
+  Context7 still described the 410'd surface). Deferred: the sub-agent MODEL swap to Grok, and
+  A-style multi-provider consensus.
 - **Firecrawl = content acquisition, never search:** `scrape/firecrawl.ts` serves background
   sub-agent tools only (`scrape_page`, `map_site`, `crawl_site`, `extract_structured`) — fetch,
   crawl, map, and extract content from **known URLs/sites**. Firecrawl's `/search` endpoint is

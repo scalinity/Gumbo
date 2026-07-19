@@ -95,6 +95,8 @@ final class GumboController {
     private let bubbles = BubbleController()
     private let imageBubbles = ImageBubbleController()
     private let imageViewer = ImageViewerController()
+    private let fileBubbles = FileBubbleController()
+    private let fileViewer = FileViewerController()
     private let confirm = ConfirmController()
     private let reminders = RemindersBridge()
     private let quickText = QuickTextController()
@@ -118,10 +120,19 @@ final class GumboController {
         // the viewer/editor, whose context + edit requests ride the WS back to the daemon.
         bubbles.onStackBottomChange = { [weak self] y in self?.imageBubbles.setStackBottom(y) }
         imageBubbles.onOpen = { [weak self] file in self?.imageViewer.open(file: file) }
+        // Presented files (specs, docs) stack beneath the images; a card opens Gumbo's own
+        // renderer, never a system text editor.
+        imageBubbles.onStackBottomChange = { [weak self] y in self?.fileBubbles.setStackBottom(y) }
+        fileBubbles.onOpen = { [weak self] doc in self?.fileViewer.open(doc) }
+        // The file viewer arms a file_context + sends typed edit requests over the WS.
+        fileViewer.onSend = { [weak self] json in self?.ws.sendJSON(json) }
         imageViewer.onSend = { [weak self] json in self?.ws.sendJSON(json) }
-        // Daemon restarts lose the in-memory image_context while the viewer sits open —
-        // re-arm it on every (re)connect so voice edits keep working (review 🟡).
-        ws.onConnect = { [weak self] in self?.imageViewer.resendContext() }
+        // Daemon restarts lose the in-memory image_context / file_context while a viewer
+        // sits open — re-arm both on every (re)connect so voice edits keep working (review 🟡).
+        ws.onConnect = { [weak self] in
+            self?.imageViewer.resendContext()
+            self?.fileViewer.resendContext()
+        }
         // M4: notch confirms answer supervisor escalations (deny happens daemon-side on timeout).
         confirm.onRespond = { [weak self] id, approved in
             self?.ws.sendJSON(["type": "confirm_response", "id": id, "approved": approved])
@@ -187,8 +198,8 @@ final class GumboController {
                 self.refreshState()
             }
         }
-        audio.onPlaybackProgress = { [weak self] fraction in
-            self?.notch.setPlaybackProgress(fraction)
+        audio.onPlaybackProgress = { [weak self] played, enqueued in
+            self?.notch.setPlaybackProgress(played: played, enqueued: enqueued)
         }
     }
 
@@ -208,14 +219,23 @@ final class GumboController {
                 self.audio.flushPlayback()
             case "bubble_upsert":
                 if let taskId = msg["task_id"] as? String, !taskId.isEmpty {
+                    let status = msg["status"] as? String ?? "running"
                     self.bubbles.upsert(
                         taskId: taskId,
                         title: msg["title"] as? String ?? taskId,
-                        status: msg["status"] as? String ?? "running")
+                        status: status)
+                    // A task that just ended can't need a confirm anymore. The daemon sends
+                    // confirm_cancel too, but after a daemon RESTART it has no memory of the
+                    // pending prompt — the shell must self-dismiss (live failure 2026-07-16:
+                    // a plan approval outlived its cancelled session).
+                    if ["done", "failed", "cancelled"].contains(status) {
+                        self.confirm.cancelForTask(taskId)
+                    }
                 }
             case "bubble_remove":
                 if let taskId = msg["task_id"] as? String {
                     self.bubbles.remove(taskId: taskId)
+                    self.confirm.cancelForTask(taskId)
                 }
             case "notch_pulse":
                 self.notch.pulse(status: msg["status"] as? String ?? "done")
@@ -223,14 +243,25 @@ final class GumboController {
                 if let id = msg["id"] as? String {
                     self.confirm.present(
                         id: id,
+                        taskId: msg["task_id"] as? String ?? "",
                         taskTitle: msg["task_title"] as? String ?? "",
                         title: msg["title"] as? String ?? "Allow this action?",
                         detail: msg["detail"] as? String ?? "",
+                        body: msg["body"] as? String ?? "",
                         timeoutMs: msg["timeout_ms"] as? Double ?? 60_000)
                 }
             case "confirm_cancel":
                 if let id = msg["id"] as? String {
                     self.confirm.cancel(id: id)
+                }
+            case "open_image":
+                // Voice-driven gallery recall (open_image tool): straight into the editor,
+                // AND onto the thumbnail shelf — the corner stack reflects everything
+                // recently pulled up, not just fresh renders, so closing the editor still
+                // leaves a click-path back (the user, 2026-07-16).
+                if let file = msg["file"] as? String {
+                    self.imageBubbles.present(file: file, editedFrom: nil, genId: nil)
+                    self.imageViewer.open(file: file)
                 }
             case "create_reminder":
                 // M5: mirror the daemon's schedule row into Reminders.app; the reply
@@ -247,6 +278,19 @@ final class GumboController {
                 if let ekId = msg["eventkit_id"] as? String {
                     self.reminders.remove(eventkitId: ekId)
                 }
+            case "file_present":
+                // The voice agent put a file on screen — document card now, renderer on click.
+                // Also refresh the open viewer in place (this is how an edit's new content
+                // arrives, and how a re-present of the same doc updates it).
+                if let file = msg["file"] as? String, let content = msg["content"] as? String {
+                    let doc = PresentedFile(
+                        title: msg["title"] as? String ?? file,
+                        file: file,
+                        path: msg["path"] as? String ?? "",
+                        content: content)
+                    self.fileBubbles.present(doc)
+                    self.fileViewer.handlePresented(doc)
+                }
             case "event":
                 // Task-scoped activity for the bubble mini-panel live tail.
                 if let event = msg["event"] as? [String: Any] {
@@ -257,10 +301,24 @@ final class GumboController {
                        let payload = event["payload"] as? [String: Any] {
                         if type == "image.created", let file = payload["file"] as? String {
                             let parent = payload["edited_from"] as? String
-                            self.imageBubbles.present(file: file, editedFrom: parent)
+                            self.imageBubbles.present(file: file, editedFrom: parent,
+                                                      genId: payload["gen_id"] as? String)
                             self.imageViewer.handleCreated(file: file, editedFrom: parent)
+                        } else if type == "image.generating", let genId = payload["gen_id"] as? String {
+                            // A render just started: hold its slot with a working orb.
+                            self.imageBubbles.beginWork(key: "gen:" + genId)
+                        } else if type == "image.generate_failed", let genId = payload["gen_id"] as? String {
+                            self.imageBubbles.failWork(key: "gen:" + genId)
+                        } else if type == "image.edit_requested", let file = payload["file"] as? String {
+                            self.imageBubbles.beginWork(key: "edit:" + file)
+                            self.imageViewer.handleEditRequested(file: file)
                         } else if type == "image.edit_failed", let file = payload["file"] as? String {
+                            self.imageBubbles.failWork(key: "edit:" + file)
                             self.imageViewer.handleEditFailed(file: file)
+                        } else if type == "file.edit_failed", let path = payload["path"] as? String {
+                            // The edited doc's new content arrives via file_present (success);
+                            // failure only fans out as this event — un-busy the viewer.
+                            self.fileViewer.handleEditFailed(path: path)
                         }
                     }
                 }

@@ -48,7 +48,7 @@ export function timeLabel(): string {
 // needs none of them). Stripped from the subprocess env in claude-runner. Add any new
 // provider key here the moment it lands in .env. ANTHROPIC_API_KEY is included because it
 // silently outranks the claude.ai subscription login (spike finding).
-export const secretEnvKeys = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'ANTHROPIC_API_KEY'] as const;
+export const secretEnvKeys = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY', 'ANTHROPIC_API_KEY'] as const;
 
 // Secrets ON DISK a sandboxed Claude session must never touch (review 🟡 2026-07-16): the
 // env strip above covers the subprocess environment, but the same provider keys live in the
@@ -101,6 +101,33 @@ export const config = {
   // A ⌃⌥ tap shorter than this has no usable audio — the API rejects commits under ~100 ms.
   minPttAudioBytes: 4800, // 100 ms @ 24 kHz mono 16-bit (48 bytes/ms)
   sessionIdleMs: 60_000,
+  // Local (daemon-side) speech-energy gate on the armed mic stream (2026-07-16). Two jobs:
+  // 1. INSTANT barge-in. The SDK clears its interrupt tracking the moment audio GENERATION
+  //    completes (response.output_audio.done → #resetAudioPlaybackState), but the shell
+  //    drains the buffered audio for far longer — during that window the server-VAD
+  //    barge-in path (speech_started → interrupt()) is a silent no-op, measured live as
+  //    seconds of talking over Gumbo. The daemon detects speech energy on the armed mic
+  //    frames itself and flushes shell playback immediately; it also covers cold TTS
+  //    announcements, which have no session to interrupt at all.
+  // 2. Silence gate. A PTT window with no speech-like energy is cleared, never committed —
+  //    a silent ⌃⌥ hold used to commit an empty buffer and the model answered it with a
+  //    generic "what can I do for you?" (live bug, seen twice).
+  // Frames are post-AEC (the shell taps VPIO-processed input), so Gumbo's own speaker
+  // output does not read as speech. RMS is over pcm16 (±32767): AGC'd speech lands around
+  // 2000–4000; AEC residue and room noise sit well under 500.
+  localVad: {
+    rmsThreshold: 900,
+    minSpeechMs: 90, // sustained AND consecutive — debounces keyboard clicks and breaths
+  },
+  // Session continuity (2026-07-16): sessions are short-lived by design (idle close above,
+  // tsx-watch daemon restarts), but the CONVERSATION must not reset with them — a fresh
+  // session's instructions carry the recent dialogue + active-task snapshot, rebuilt from
+  // the event log at connect. Lookback bounds how far back the replay reaches; maxChars
+  // bounds the instruction-size cost (oldest lines drop first).
+  continuity: {
+    lookbackMs: 45 * 60_000,
+    maxChars: 4000,
+  },
   // Web search providers: Tavily answers on the voice hot path (fail fast, no retries);
   // Exa does background research (full contents, retries allowed). Keys in repo .env.
   search: {
@@ -123,6 +150,31 @@ export const config = {
     snapshotMaxElements: 400, // interactive elements per compacted snapshot the model sees
     maxTurns: 50, // computer-mode sub-agent step budget (SPEC §M6: default ~50)
     outputMaxChars: 262_144, // defensive cap on any single shell result payload
+  },
+  // Grok (xAI) = live X/real-time-social lookups Exa/Tavily barely see inside X. Same
+  // provider contract as the others (shared client, typed SearchError, one audit line,
+  // keys in .env/daemon-only), routed by tool description: hot-path `x_lookup` (voice,
+  // spoken) + background `x_search` (sub-agent, persisted). Uses the Agent Tools API
+  // (POST /v1/responses + server-side web_search/x_search) — the old declarative Live
+  // Search is decommissioned (HTTP 410). Sources are X + web (catch an announcement whether
+  // it's a post OR a blog) but the tool wording is X-first so it never poaches Tavily's
+  // general-facts lane.
+  //
+  // TIERED MODELS (measured live 2026-07-16): grok-4.5 is a REASONING model — its agentic
+  // X search ran 28–45 s on the hot path (non-viable for voice; max_tool_calls doesn't bound
+  // the reasoning between calls). So the voice hot path uses grok-4.20-NON-reasoning (~2–8 s
+  // live — it skips the inner deliberation), while background research keeps grok-4.5 for
+  // depth (30–45 s is fine off the voice turn). The hot-path timeout is the real guard: on
+  // the rare slow query it fails to lookup_failed while the session speaks a filler.
+  grok: {
+    hotModel: 'grok-4.20-non-reasoning', // voice: fast, non-reasoning (live-verified: 2–11 s, typ ~2–8 s)
+    backgroundModel: 'grok-4.5', // background: the user's pick, deeper reasoning (live-verified)
+    // Headroom over the observed ~11 s tail so an occasional slow query succeeds instead of
+    // spuriously timing out; the session speaks a filler, and a real timeout still degrades to
+    // lookup_failed (offer to background it). Most lookups return in 2–8 s.
+    quickLookupTimeoutMs: 15_000,
+    backgroundTimeoutMs: 120_000,
+    sources: ['x', 'web'] as ('x' | 'web')[],
   },
   // M4 Claude Code sessions run in "auto mode" (the user's call, 2026-07-15): the pure
   // policy table gates everything; the supervisor MODEL is only invoked when Claude
@@ -193,12 +245,19 @@ export const config = {
     extractJobBudgetMs: 300_000,
   },
   // M5 images: generation runs in the background off the voice turn (the tool acks
-  // instantly), so the budget is generous like other background calls. Quality is left
-  // to the API default deliberately — fewer knobs on a voice tool.
+  // instantly), so the budget is generous like other background calls.
   images: {
-    timeoutMs: 180_000,
+    // Was 180 s — quality:high renders run long, and a timeout mid-render reads to
+    // the user as a failed request. 300 s stays a hard bound (the failure IS spoken).
+    timeoutMs: 300_000,
     // The voice model picks a shape; sizes verified against the live API (÷16 rule).
     sizes: { square: '1024x1024', landscape: '1536x1024', portrait: '1024x1536' } as Record<string, string>,
+    // Highest-fidelity default (the user, 2026-07-16 — his "highest quality" ask was
+    // silently droppable when quality wasn't a knob). Probed live: quality takes
+    // low|medium|high|auto on both generations and edits; no reasoning-class param
+    // exists on this endpoint, and gpt-image-2 REJECTS gpt-image-1's input_fidelity
+    // (live 400). The generate_image tool can still lower quality per request.
+    quality: 'high' as 'low' | 'medium' | 'high' | 'auto',
   },
   // M5 scheduler: Gumbo's own timed-action primitive (kind 'reminder' for now). The poll
   // loop is the spoken-presence half; EventKit is the OS-durable half (fires even if the
@@ -208,9 +267,11 @@ export const config = {
   },
   // How long a finished task's bubble lingers before the daemon sends bubble_remove.
   bubbleLingerMs: 12_000,
-  // Report excerpt embedded in a live completion announcement — enough for the model to
-  // deliver the key finding without reciting the whole file (full cap: reportMaxChars).
-  announceReportMaxChars: 2_500,
+  // Report excerpt embedded in a live completion announcement. Was 2 500 — which sliced a
+  // 14 k report mid-example and the model read right up to the cut edge, heard as "the
+  // report cut off out of nowhere" (live failure 2026-07-16). Now matches reportMaxChars,
+  // and session.ts cuts at a paragraph boundary + flags the truncation to the model.
+  announceReportMaxChars: 12_000,
   reportMaxChars: 12_000,
   activityLogMaxChars: 500, // truncation for tool args / outputs in the activity log
 };

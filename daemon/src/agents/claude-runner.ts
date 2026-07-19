@@ -2,7 +2,7 @@ import { query, type Query, type SDKUserMessage, type HookJSONOutput, type Spawn
 import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { config, secretEnvKeys, secretFilePaths } from '../config.ts';
 import { startEgressProxy, type EgressProxy } from './egress-proxy.ts';
 import type { Store } from '../events/store.ts';
@@ -18,6 +18,14 @@ export const CLAUDE_AUTH_ERROR = 'auth: Claude Code needs you to log in again �
 // Result subtypes that mean "ran out of room," not "failed": the work is on disk and the
 // session resumes with send_to_session, so the task parks for the user rather than failing.
 const RESUMABLE_LIMIT_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd']);
+
+// Where the CLI persists its plan BEFORE calling ExitPlanMode (whose input is empty on
+// current CLIs) — the runner captures the Write content as the plan-approval fallback.
+const PLAN_DIR = join(homedir(), '.claude', 'plans');
+
+// Prompt text recorded to the activity feed (claude.prompt) — larger than
+// activityLogMaxChars because the brief IS the context the user may need to re-read.
+const PROMPT_LOG_MAX_CHARS = 4000;
 
 export const CLAUDE_SANDBOX_ERROR = "this Mac can't run the OS sandbox (Seatbelt unavailable), so the session refused to start rather than run unconfined.";
 
@@ -330,6 +338,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   private firstUserMessageId: string | null = null; // rewind target for undo() (checkpointing)
   private planRejected = false; // the user declined the plan → park, don't fail
   private authFailed = false; // an assistant message reported an auth error
+  private planFileContent: string | null = null; // last Write into ~/.claude/plans (see PLAN_DIR)
 
   // No parameter properties: daemon tests run node --test in strip-only mode.
   constructor(opts: ClaudeRunnerOpts) {
@@ -340,6 +349,9 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   send(text: string): boolean {
     if (!this.input.push(text)) return false;
     this.turnsSent += 1;
+    // the user's follow-ups belong in the activity feed too — without them the transcript
+    // shows Claude reacting to instructions nobody can see.
+    this.opts.store.addEvent(this.opts.taskId, 'claude.prompt', { text: text.slice(0, PROMPT_LOG_MAX_CHARS) });
     return true;
   }
 
@@ -393,8 +405,12 @@ export class ClaudeRunner implements ClaudeSessionRunner {
       }
     }
 
-    this.input.push(this.opts.resumeSessionId ? brief : composePrompt(brief, cwd, this.planning));
+    const initialPrompt = this.opts.resumeSessionId ? brief : composePrompt(brief, cwd, this.planning);
+    this.input.push(initialPrompt);
     this.turnsSent += 1;
+    // The session's opening instruction, in the feed — the transcript viewer was missing
+    // the very thing Claude was responding to (live finding 2026-07-16).
+    store.addEvent(taskId, 'claude.prompt', { text: initialPrompt.slice(0, PROMPT_LOG_MAX_CHARS) });
 
     const session = query({
       prompt: this.input,
@@ -453,6 +469,19 @@ export class ClaudeRunner implements ClaudeSessionRunner {
               store.addEvent(taskId, 'claude.message', { text: block.text });
               report = block.text; // the last assistant text is the run's report
             } else if (block.type === 'tool_use') {
+              // The CLI drafts its plan into ~/.claude/plans BEFORE ExitPlanMode — hold on
+              // to the content so handlePlan can surface the real plan (input.plan is empty
+              // on current CLIs).
+              if (block.name === 'Write') {
+                const write = block.input as { file_path?: string; content?: string } | null;
+                if (typeof write?.file_path === 'string' && typeof write.content === 'string') {
+                  // Boundary-correct match (same idiom as supervisor.ts): expand a leading ~,
+                  // then require a real path-segment boundary — a bare prefix test misses
+                  // tilde-form writes and matches siblings like ~/.claude/plansXYZ.
+                  const abs = write.file_path.startsWith('~') ? homedir() + write.file_path.slice(1) : write.file_path;
+                  if (abs === PLAN_DIR || abs.startsWith(PLAN_DIR + sep)) this.planFileContent = write.content;
+                }
+              }
               store.addEvent(taskId, 'claude.tool_use', { name: block.name, input: JSON.stringify(block.input ?? {}).slice(0, limit) });
             }
           }
@@ -553,7 +582,12 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   }
 
   private async handlePlan(input: Record<string, unknown>): Promise<GateResult> {
-    const plan = String(input.plan ?? JSON.stringify(input));
+    // Current CLIs call ExitPlanMode with EMPTY input and persist the plan to
+    // ~/.claude/plans instead — captured in the tool_use loop. Prefer inline plan text
+    // when present (older CLIs), else the plan file, else the raw input as a last resort
+    // (an empty "{}" here is exactly the live failure this fixes, 2026-07-16).
+    const inline = typeof input.plan === 'string' && input.plan.trim() ? input.plan : null;
+    const plan = inline ?? this.planFileContent ?? JSON.stringify(input);
     this.opts.store.addEvent(this.opts.taskId, 'claude.plan', { plan });
     // No approver wired (tests) → don't execute. Otherwise surface the plan to the user.
     const approved = this.opts.onPlanReady ? await this.opts.onPlanReady(plan) : false;

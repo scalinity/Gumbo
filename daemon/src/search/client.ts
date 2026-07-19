@@ -1,8 +1,8 @@
-// Shared HTTP layer for external providers (Tavily, Exa, Firecrawl). One request helper
-// with the repo-wide retry policy and one typed error so callers branch on `kind`, never
-// on message strings.
+// Shared HTTP layer for external providers (Tavily, Exa, Firecrawl, Grok). One request
+// helper with the repo-wide retry policy and one typed error so callers branch on `kind`,
+// never on message strings.
 
-export type Provider = 'tavily' | 'exa' | 'firecrawl';
+export type Provider = 'tavily' | 'exa' | 'firecrawl' | 'grok';
 export type SearchErrorKind = 'timeout' | 'auth' | 'quota' | 'empty_results' | 'http' | 'network';
 
 export class SearchError extends Error {

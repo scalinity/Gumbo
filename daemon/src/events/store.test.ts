@@ -70,3 +70,27 @@ test('nullable columns accept missing url/title/provider', () => {
   assert.equal(row.title, null);
   assert.equal(row.task_id, null);
 });
+
+// getTaskBrief answers "what was that task doing?" from the task.created payload alone —
+// it must survive missing tasks and brief-less payloads with a clean null, never a throw.
+test('getTaskBrief returns the brief from the task.created payload', () => {
+  store.addEvent('tb1', 'task.created', { title: 'Spec', brief: 'Write the harness spec' });
+  store.addEvent('tb1', 'claude.message', { text: 'noise after it' }); // must not confuse the lookup
+  assert.equal(store.getTaskBrief('tb1'), 'Write the harness spec');
+});
+
+test('getTaskBrief is null for a task with no task.created event', () => {
+  assert.equal(store.getTaskBrief('never-created'), null);
+});
+
+test('getTaskBrief is null when task.created carries no brief field', () => {
+  store.addEvent('tb2', 'task.created', { title: 'No brief here' });
+  assert.equal(store.getTaskBrief('tb2'), null);
+});
+
+test('recentTranscripts stitches user/assistant lines oldest-first with roles mapped', () => {
+  store.addEvent(null, 'transcript.user', { text: 'hello gumbo' });
+  store.addEvent(null, 'transcript.assistant', { text: 'hi the user' });
+  const lines = store.recentTranscripts(0).map((l) => `${l.role}:${l.text}`);
+  assert.deepEqual(lines, ['user:hello gumbo', 'assistant:hi the user']);
+});

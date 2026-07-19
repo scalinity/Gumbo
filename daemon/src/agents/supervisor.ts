@@ -1,7 +1,7 @@
 import { Agent, run } from '@openai/agents';
 import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import { resolve, sep } from 'node:path';
-import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { config, secretFilePaths, todayLabel } from '../config.ts';
@@ -34,12 +34,31 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 // network-deny proxy closes it — see IMPLEMENTATION_NOTES).
 const PROTECTED_PATHS = secretFilePaths.map((p) => resolve(p));
 
+// Plan-mode exemption under the ~/.claude deny: the CLI persists its plan to
+// ~/.claude/plans/<slug>.md BEFORE calling ExitPlanMode — whose input no longer carries the
+// plan text — so denying that Write left the plan-approval confirm empty (live failure,
+// 2026-07-16). Plans are session work products, not secrets; allow exactly this subtree.
+// The Seatbelt layer already write-allows ~/.claude (minus exec surfaces), so this is the
+// only gate in the way.
+const PROTECTED_EXEMPT = [resolve(join(homedir(), '.claude', 'plans'))];
+
 // Path-bearing inputs across the CLI file tools: file_path (Read/Write/Edit/MultiEdit),
 // notebook_path (NotebookEdit), path (Grep/Glob search root).
 function protectedPathHit(input: Record<string, unknown>, cwd: string): string | null {
   for (const raw of [input.file_path, input.notebook_path, input.path]) {
     if (typeof raw !== 'string' || raw === '') continue;
     const abs = resolve(cwd, raw.startsWith('~') ? homedir() + raw.slice(1) : raw);
+    if (PROTECTED_EXEMPT.some((ex) => abs === ex || abs.startsWith(ex + sep))) {
+      // The exemption must not follow a symlink OUT of plans/ (a planted link at
+      // plans/x.md → ~/.claude/projects/y.jsonl would exfiltrate through the carve-out).
+      // A not-yet-created plan file is the common case and stays exempt — only what
+      // exists on disk gets the realpath re-check; a failed resolve falls through to deny.
+      let real = abs;
+      if (existsSync(abs)) {
+        try { real = realpathSync(abs); } catch { real = ''; }
+      }
+      if (real && PROTECTED_EXEMPT.some((ex) => real === ex || real.startsWith(ex + sep))) continue;
+    }
     for (const secret of PROTECTED_PATHS) {
       // Deny reading/writing the secret itself, anything inside it (~/.claude/*), and a
       // search root that CONTAINS it (Grep/Glob rooted above .env would surface it).
@@ -164,6 +183,13 @@ export function policyDecision(toolName: string, input: Record<string, unknown>,
   }
   if (EDIT_TOOLS.has(toolName)) {
     const path = String(input.file_path ?? input.notebook_path ?? '');
+    // The plan-file exemption is a legitimate out-of-cwd write — the CLI persists its plan
+    // under ~/.claude/plans during plan mode; a notch confirm here would stall every
+    // planning session on a mechanical step.
+    const abs = resolve(cwd, path.startsWith('~') ? homedir() + path.slice(1) : path);
+    if (PROTECTED_EXEMPT.some((ex) => abs === ex || abs.startsWith(ex + sep))) {
+      return { route: 'allow', reason: 'plan file under ~/.claude/plans' };
+    }
     // Edits under cwd are normally auto-accepted by the CLI (acceptEdits) and never
     // reach us; one that DID reach us and points outside the project is exactly the
     // risky class the escalate tier exists for.

@@ -272,7 +272,7 @@ final class BubbleModel: ObservableObject {
 }
 
 struct BubbleEvent: Identifiable {
-    enum Kind { case call, result, message, lifecycle }
+    enum Kind { case call, result, message, prompt, lifecycle }
 
     let seq: Int
     let kind: Kind
@@ -286,6 +286,23 @@ struct BubbleEvent: Identifiable {
         return formatter
     }()
 
+    /// One human line for a tool call — the tool's primary argument instead of raw JSON
+    /// ("Write — /path/plan.md", "Bash — npm test"). Raw payload stays the fallback for
+    /// anything unparseable (incl. daemon-truncated JSON past activityLogMaxChars).
+    private static func summarizeCall(name: String, argsJSON: String) -> String {
+        guard let data = argsJSON.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return argsJSON.isEmpty ? name : "\(name) \(argsJSON)"
+        }
+        // Primary-argument preference order across the tools both streams actually use.
+        for key in ["command", "file_path", "notebook_path", "description", "query", "pattern", "prompt", "url", "title", "text"] {
+            if let value = dict[key] as? String, !value.isEmpty {
+                return "\(name) — \(value)"
+            }
+        }
+        return dict.isEmpty ? name : "\(name) \(argsJSON)"
+    }
+
     init?(raw: [String: Any]) {
         guard let type = raw["type"] as? String else { return nil }
         let seq = (raw["seq"] as? Int) ?? Int(raw["seq"] as? Double ?? -1)
@@ -296,26 +313,26 @@ struct BubbleEvent: Identifiable {
         switch type {
         case "tool.call":
             kind = .call
-            let name = payload["name"] as? String ?? "tool"
-            let args = payload["args"] as? String ?? ""
-            body = "\(name) \(args)"
+            body = Self.summarizeCall(name: payload["name"] as? String ?? "tool",
+                                      argsJSON: payload["args"] as? String ?? "")
         case "claude.tool_use": // M4: Claude Code session stream
             kind = .call
-            let name = payload["name"] as? String ?? "tool"
-            let input = payload["input"] as? String ?? ""
-            body = "\(name) \(input)"
-        case "tool.result":
+            body = Self.summarizeCall(name: payload["name"] as? String ?? "tool",
+                                      argsJSON: payload["input"] as? String ?? "")
+        case "tool.result", "claude.tool_result":
             kind = .result
-            body = payload["output"] as? String ?? ""
-        case "claude.tool_result":
-            kind = .result
-            body = payload["output"] as? String ?? ""
+            let output = payload["output"] as? String ?? ""
+            body = output.isEmpty ? "(no output)" : output // a blank row reads as a glitch
         case "subagent.message", "claude.message":
             kind = .message
             body = payload["text"] as? String ?? ""
+        case "claude.prompt": // the instruction the session is responding to (incl. the opener)
+            kind = .prompt
+            body = payload["text"] as? String ?? ""
         case "claude.plan":
             kind = .lifecycle
-            body = "Plan awaiting approval — " + (payload["plan"] as? String ?? "")
+            let plan = payload["plan"] as? String ?? ""
+            body = plan.isEmpty || plan == "{}" ? "Plan awaiting approval" : "Plan awaiting approval — \(plan)"
         case "supervisor.decision":
             kind = .lifecycle
             switch payload["kind"] as? String {
@@ -345,7 +362,11 @@ struct BubbleEvent: Identifiable {
         }
 
         self.seq = seq
-        self.text = String(body.replacingOccurrences(of: "\n", with: " ").prefix(280))
+        // Messages and prompts are what the user actually reads — give them real room; tool
+        // rows are summaries now and stay compact. (The flat 280 cap made every substantive
+        // entry trail off mid-sentence — the "cut off" complaint, 2026-07-16.)
+        let cap = (kind == .message || kind == .prompt) ? 700 : 280
+        self.text = String(body.replacingOccurrences(of: "\n", with: " ").prefix(cap))
         if let ts = raw["ts"] as? Double {
             time = Self.clock.string(from: Date(timeIntervalSince1970: ts / 1000))
         } else {
@@ -647,8 +668,8 @@ private struct BubbleEventRow: View {
                 .padding(.top, 1)
             Text(event.text)
                 .font(.system(size: 10.5))
-                .foregroundStyle(.white.opacity(event.kind == .message ? 0.82 : 0.6))
-                .lineLimit(4)
+                .foregroundStyle(.white.opacity(event.kind == .message || event.kind == .prompt ? 0.82 : 0.6))
+                .lineLimit(event.kind == .message || event.kind == .prompt ? 14 : 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(event.time)
                 .font(.system(size: 8.5))
@@ -662,6 +683,7 @@ private struct BubbleEventRow: View {
         case .call: return "▸"
         case .result: return "◂"
         case .message: return "●"
+        case .prompt: return "»" // the user's/Gumbo's instruction INTO the session
         case .lifecycle: return "◆"
         }
     }
@@ -671,6 +693,7 @@ private struct BubbleEventRow: View {
         case .call: return ember
         case .result: return faint
         case .message: return bay
+        case .prompt: return Tokens.gold
         case .lifecycle: return .white.opacity(0.5)
         }
     }

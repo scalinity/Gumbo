@@ -11,19 +11,45 @@ import { config } from '../config.ts';
 import { echoForInstructions } from '../audio/announce.ts';
 import type { Store } from '../events/store.ts';
 import { imagesFetch, saveImageResponse } from './generate.ts';
-import { safeImageFile } from './files.ts';
+import { imageNameHint, safeImageFile } from './files.ts';
 import { pngDimensions, sanitizeStrokes, strokeMaskPng, type Stroke } from './mask.ts';
+
+/**
+ * Frame a masked-edit prompt so gpt-image-2 actually CONFINES the change to the brushed
+ * region. Live finding (2026-07-16): with a bare instruction the model treats the mask as
+ * a weak hint and reimagines the whole scene (the user brushed the right rock to add a
+ * moose → the moose landed on the LEFT rock and the right rock vanished). An explicit
+ * "edit ONLY the selected region, keep everything else identical" wrapper fixed it in a
+ * side-by-side test — the moose landed exactly on the brushed rock with the rest
+ * preserved. gpt-image-2 still isn't pixel-strict outside the mask, but it's night-and-day.
+ * Whole-image edits (no strokes) keep the raw instruction — a global change is intended.
+ */
+export function framePromptForMask(instruction: string): string {
+  return (
+    `Edit ONLY the selected (masked) region of this image: ${instruction}. ` +
+    `Blend the change naturally with the surrounding scene's existing lighting, color, and perspective. ` +
+    `Keep everything OUTSIDE the selected region exactly identical to the original.`
+  );
+}
 
 /** Run one masked (or whole-image) edit. Returns the NEW image's bare filename. */
 export async function editImage(file: string, prompt: string, strokes?: Stroke[]): Promise<string> {
   const source = readFileSync(join(config.home.images, safeImageFile(file)));
+  const masked = !!(strokes && strokes.length > 0);
   const form = new FormData();
   form.append('model', config.models.image);
-  form.append('prompt', prompt);
+  form.append('prompt', masked ? framePromptForMask(prompt) : prompt);
+  // Highest-fidelity default (verified on a real edit): quality high. Deliberately NO
+  // input_fidelity — gpt-image-2 rejects it with a 400 ("does not support the
+  // 'input_fidelity' parameter", live failure 2026-07-16). PROBE TRAP for posterity:
+  // the invalid-value probe listed high|low because the API validates parameter VALUES
+  // before model support — enumeration proves the param exists somewhere (gpt-image-1),
+  // not that this model takes it. Only a real call proves support.
+  form.append('quality', config.images.quality);
   form.append('image', new Blob([new Uint8Array(source)], { type: 'image/png' }), file);
-  if (strokes && strokes.length > 0) {
+  if (masked) {
     const { width, height } = pngDimensions(source);
-    form.append('mask', new Blob([new Uint8Array(strokeMaskPng(width, height, strokes))], { type: 'image/png' }), 'mask.png');
+    form.append('mask', new Blob([new Uint8Array(strokeMaskPng(width, height, strokes!))], { type: 'image/png' }), 'mask.png');
   }
   const res = await imagesFetch('https://api.openai.com/v1/images/edits', {
     method: 'POST',
@@ -31,7 +57,7 @@ export async function editImage(file: string, prompt: string, strokes?: Stroke[]
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: form,
   });
-  return saveImageResponse(res);
+  return saveImageResponse(res, imageNameHint(prompt));
 }
 
 /**
@@ -53,7 +79,9 @@ export function acceptImageEditRequest(
   try {
     const file = safeImageFile(rawFile);
     const strokes = msg.strokes !== undefined ? sanitizeStrokes(msg.strokes) : undefined;
-    store.addEvent(null, 'image.edit_requested', { file, prompt, ...(strokes?.length ? { selection: true } : {}) });
+    // image.edit_requested is emitted inside runImageEdit — one emitter for BOTH the
+    // typed and voice paths (live gap 2026-07-16: voice edits skipped this function
+    // entirely, so no working orb and no viewer busy state ever showed).
     runImageEdit({ file, prompt, strokes, store, announce }).catch((err: unknown) => {
       // runImageEdit handles (and speaks) its own failures — this only guards the
       // announce path itself so nothing becomes an unhandled rejection.
@@ -78,12 +106,19 @@ export async function runImageEdit(opts: {
   store: Store;
   announce: (coldText: string, liveInstructions: string) => Promise<void>;
 }): Promise<void> {
+  const { file, prompt, strokes, store, announce } = opts;
+  // Emitted synchronously so the shell's working orb (and the viewer's busy state) pop
+  // the instant ANY edit starts — typed or voice; the boot reaper also keys on it.
+  store.addEvent(null, 'image.edit_requested', {
+    file,
+    prompt,
+    ...(strokes && strokes.length > 0 ? { selection: true } : {}),
+  });
   // Yield before the synchronous prefix (readFileSync + mask rasterization): callers
   // fire-and-forget this promise from the tool's execute / the WS handler, and without
   // the yield that sync work would run inline on THEIR turn — delaying the "instant"
   // ack and stalling the event loop that carries live voice audio (review 🟡).
   await new Promise((resolve) => setImmediate(resolve));
-  const { file, prompt, strokes, store, announce } = opts;
   const short = echoForInstructions(prompt); // quoted inside live instructions — defanged (review 🔵)
   const scoped = strokes && strokes.length > 0;
   try {

@@ -96,6 +96,19 @@ test('policy: secret paths hard-deny for the CLI file tools', () => {
   assert.equal(policyDecision('Read', { file_path: `${CWD}/src/a.ts` }, CWD).route, 'allow');
 });
 
+// Plan-mode carve-out (2026-07-16): the CLI persists its plan to ~/.claude/plans BEFORE
+// ExitPlanMode, so that one subtree must flow (no deny, no out-of-cwd confirm) while the
+// rest of ~/.claude stays hard-denied.
+test('policy: ~/.claude/plans is exempt — writable without a confirm, rest of ~/.claude still denied', () => {
+  assert.equal(policyDecision('Write', { file_path: join(CLAUDE_DIR, 'plans/spec.md') }, CWD).route, 'allow', 'plan write flows');
+  assert.equal(policyDecision('Read', { file_path: join(CLAUDE_DIR, 'plans/spec.md') }, CWD).route, 'allow', 'plan read flows');
+  assert.equal(policyDecision('Write', { file_path: '~/.claude/plans/x.md' }, CWD).route, 'allow', 'tilde form resolves to the exempt dir');
+  // Everything else under ~/.claude keeps the hard deny.
+  assert.equal(policyDecision('Write', { file_path: join(CLAUDE_DIR, 'settings.json') }, CWD).route, 'deny');
+  assert.equal(policyDecision('Read', { file_path: join(CLAUDE_DIR, 'projects/x.jsonl') }, CWD).route, 'deny');
+  assert.equal(policyDecision('Grep', { path: CLAUDE_DIR }, CWD).route, 'deny', 'a search root above the exemption still contains secrets');
+});
+
 test('describeAction renders one short line', () => {
   assert.equal(describeAction('Bash', { command: 'git  push   origin main' }), 'Run: git push origin main');
   assert.match(describeAction('Edit', { file_path: '/x/y.ts' }), /^Edit: \/x\/y\.ts$/);

@@ -23,10 +23,14 @@ final class AudioEngine {
     var onMicLevel: ((Float) -> Void)?
     var onPlaybackLevel: ((Float) -> Void)?
     var onPlaybackStateChange: ((Bool) -> Void)? // true while queued audio is draining
-    // Fraction (0–1) of this playback stream actually *heard* so far. Generation runs
-    // several× faster than speech, so transcript display must pace against this, not
-    // against delta arrival, for read-along to work on long report reads.
-    var onPlaybackProgress: ((Double) -> Void)?
+    // Absolute wire-format frame counters for the current playback stream: (played,
+    // enqueued). Generation runs several× faster than speech, so transcript display paces
+    // against these. ABSOLUTE counts, not a fraction: a fraction's denominator grows when a
+    // second response's audio lands mid-drain, which shoved the ratio below a caller's
+    // captured baseline and froze the notch transcript for most of the reply (the
+    // "transcript lags behind" bug, 2026-07-16). Counters reset to 0 on full drain/flush —
+    // callers detect the reset by the counts going backwards.
+    var onPlaybackProgress: ((Int, Int) -> Void)?
 
     /// 24 kHz mono interleaved Int16 — the Realtime API wire format both directions.
     private let wireFormat = AVAudioFormat(
@@ -206,21 +210,21 @@ final class AudioEngine {
                 guard let self else { return }
                 self.lock.lock()
                 let live = gen == self.generation
-                var progress: Double? = nil
+                var progress: (played: Int, enqueued: Int)? = nil
                 if live {
                     self.inFlight -= 1
                     self.framesPlayed += wireFrames
                     if self.framesEnqueued > 0 {
-                        progress = Double(self.framesPlayed) / Double(self.framesEnqueued)
+                        progress = (self.framesPlayed, self.framesEnqueued)
                     }
                 }
                 let drained = live && self.inFlight == 0 && self.queueIsEmpty
-                if drained { // stream over — next playback stream starts its own ratio
+                if drained { // stream over — next playback stream starts its own counters
                     self.framesEnqueued = 0
                     self.framesPlayed = 0
                 }
                 self.lock.unlock()
-                if let progress { self.onPlaybackProgress?(min(1, progress)) }
+                if let progress { self.onPlaybackProgress?(progress.played, progress.enqueued) }
                 if drained {
                     self.setDraining(false)
                 } else if live {

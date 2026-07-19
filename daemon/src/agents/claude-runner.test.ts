@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
-const { InputQueue, buildSandboxProfile, sandboxUnavailableReason } = await import('./claude-runner.ts');
+const { InputQueue, buildSandboxProfile, sandboxUnavailableReason, ClaudeRunner } = await import('./claude-runner.ts');
 const { config, secretFilePaths } = await import('../config.ts');
 const { homedir } = await import('node:os');
 
@@ -33,6 +33,39 @@ test('InputQueue wakes a pending iterator when a message arrives later', async (
   assert.equal(done, false);
   assert.equal(content(value as { message: { content: unknown } }), 'x');
   q.close();
+});
+
+// Plan capture (2026-07-16): current CLIs call ExitPlanMode with EMPTY input and persist
+// the plan to ~/.claude/plans instead — the runner captures that Write's content as the
+// fallback so the approval prompt shows a real plan, never "{}".
+test('handlePlan prefers inline plan text, falls back to the captured plan-file write', async () => {
+  const surfaced: string[] = [];
+  const recorded: string[] = [];
+  const make = () =>
+    new ClaudeRunner({
+      taskId: 't', brief: 'b', persistBrief: 'b', cwd: '/x',
+      store: {
+        addEvent: (_taskId: unknown, type: string, payload: { plan?: string }) => {
+          if (type === 'claude.plan' && payload.plan) recorded.push(payload.plan);
+        },
+      } as never,
+      supervisor: {} as never,
+      onPlanReady: async (plan: string) => {
+        surfaced.push(plan);
+        return false; // decline → park path; approval mechanics aren't under test here
+      },
+    }) as unknown as { handlePlan(input: Record<string, unknown>): Promise<unknown>; planFileContent: string | null };
+
+  const withInline = make();
+  withInline.planFileContent = '# from the plan file';
+  await withInline.handlePlan({ plan: '# inline plan' });
+
+  const emptyInput = make();
+  emptyInput.planFileContent = '# from the plan file';
+  await emptyInput.handlePlan({});
+
+  assert.deepEqual(surfaced, ['# inline plan', '# from the plan file'], 'the user is shown the real plan in both shapes');
+  assert.deepEqual(recorded, surfaced, 'the claude.plan event records what was surfaced');
 });
 
 test('buildSandboxProfile: confines writes to cwd + workspace, denies secret reads', () => {

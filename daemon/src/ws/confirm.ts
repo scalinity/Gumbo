@@ -12,7 +12,7 @@ import type { Hub } from './hub.ts';
  * timer can expire while it waits in the shell queue (rare; still fails safe to deny).
  */
 export class ConfirmBridge {
-  private pending = new Map<string, (approved: boolean) => void>();
+  private pending = new Map<string, { taskId: string; settle: (approved: boolean) => void }>();
   private hub: Hub;
   private timeoutMs: number;
 
@@ -23,7 +23,9 @@ export class ConfirmBridge {
     this.timeoutMs = timeoutMs;
   }
 
-  request(taskId: string, taskTitle: string, title: string, detail: string, signal?: AbortSignal, timeoutMs?: number): Promise<boolean> {
+  /** `body` is the optional long-form content behind the one-line title/detail — the full
+   *  plan text for a plan approval, expandable in the shell (chevron → scrollable view). */
+  request(taskId: string, taskTitle: string, title: string, detail: string, signal?: AbortSignal, timeoutMs?: number, body?: string): Promise<boolean> {
     if (!this.hub.hasRole('shell') || signal?.aborted) return Promise.resolve(false); // nobody to ask / already cancelled
     const budget = timeoutMs ?? this.timeoutMs; // plan approval passes a longer window
     const id = randomUUID().slice(0, 8);
@@ -43,15 +45,28 @@ export class ConfirmBridge {
       };
       const timer = setTimeout(() => settle(false), budget); // deny on timeout (SPEC §6)
       signal?.addEventListener('abort', onAbort, { once: true });
-      this.pending.set(id, settle);
+      this.pending.set(id, { taskId, settle });
       this.hub.broadcast(
-        { type: 'confirm_request', id, task_id: taskId, task_title: taskTitle, title, detail, timeout_ms: budget },
+        { type: 'confirm_request', id, task_id: taskId, task_title: taskTitle, title, detail, timeout_ms: budget, ...(body ? { body } : {}) },
         'shell',
       );
     });
   }
 
   handleResponse(id: string, approved: boolean) {
-    this.pending.get(id)?.(approved); // no-op for a late/duplicate answer after settle
+    this.pending.get(id)?.settle(approved); // no-op for a late/duplicate answer after settle
+  }
+
+  /** A task reached a terminal state — deny + dismiss every confirm it still has pending.
+   *  Belt-and-suspenders with the per-request abort signal: the cap-parked path (no live
+   *  runner, so no abort wired) and any future signal-less caller are covered here, and the
+   *  shell additionally self-dismisses on task removal for the daemon-restart case where
+   *  this bridge never knew the confirm existed. */
+  cancelForTask(taskId: string) {
+    for (const [id, entry] of [...this.pending]) {
+      if (entry.taskId !== taskId) continue;
+      this.hub.broadcast({ type: 'confirm_cancel', id }, 'shell');
+      entry.settle(false);
+    }
   }
 }

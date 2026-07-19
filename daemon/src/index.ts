@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { config } from './config.ts';
-import { echoForInstructions } from './audio/announce.ts';
+import { echoForInstructions, needsInputAnnounce } from './audio/announce.ts';
 import { Store } from './events/store.ts';
 import { createHttpServer } from './http.ts';
 import { Hub } from './ws/hub.ts';
@@ -10,9 +10,12 @@ import { TaskManager } from './tasks/manager.ts';
 import { Scheduler } from './schedule/scheduler.ts';
 import { applyImageContext, ImageEditContext } from './images/context.ts';
 import { acceptImageEditRequest } from './images/edit.ts';
+import { reapInterruptedImageWork } from './images/reconcile.ts';
+import { applyFileContext, FileEditContext } from './files/context.ts';
+import { acceptFileEditRequest } from './files/edit.ts';
 import { Orchestrator } from './realtime/session.ts';
 
-const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY'].filter((k) => !process.env[k]);
+const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY'].filter((k) => !process.env[k]);
 if (missing.length) {
   console.error(`Missing ${missing.join(', ')} — put them in the repo .env`);
   process.exit(1);
@@ -26,6 +29,10 @@ for (const dir of [config.home.tasks, config.home.images, config.home.notes, con
 const store = new Store(config.dbPath);
 const reaped = store.reapInterruptedTasks();
 if (reaped.length) console.log(`reaped ${reaped.length} task(s) left running by a previous run`);
+// In-flight image work dies with the process (live failure 2026-07-16: a tsx-watch
+// restart silently ate a generation — no event, no speech). Fail the orphans loudly now…
+const reapedImages = reapInterruptedImageWork(store);
+if (reapedImages.length) console.log(`failed ${reapedImages.length} image job(s) interrupted by the restart`);
 
 const server = createHttpServer(store);
 const hub = new Hub(server);
@@ -37,10 +44,15 @@ const macBridge = new MacBridge(hub);
 const manager = new TaskManager(
   store,
   (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal),
-  // Plan approval: a longer notch window (the user reads the full plan in the dashboard/bubble;
-  // the confirm shows a one-line summary). Deny/timeout parks the task — nothing is lost.
+  // Plan approval: a longer notch window. The one-line detail is a peek; the FULL plan
+  // rides as `body`, which the shell renders behind a chevron as a scrollable view —
+  // the user approves what he can actually read (live gap 2026-07-16: the prompt showed
+  // nothing but "{}"). Deny/timeout parks the task — nothing is lost.
   (taskId, taskTitle, plan, signal) =>
-    confirms.request(taskId, taskTitle, 'Approve Claude’s plan?', plan.replace(/\s+/g, ' ').slice(0, 140), signal, config.claude.planConfirmTimeoutMs),
+    confirms.request(
+      taskId, taskTitle, 'Approve Claude’s plan?', plan.replace(/\s+/g, ' ').slice(0, 140),
+      signal, config.claude.planConfirmTimeoutMs, plan.slice(0, 24_000),
+    ),
   undefined, // default ClaudeRunner factory
   macBridge, // M6: computer-use tasks execute through the shell
 );
@@ -51,7 +63,9 @@ const scheduler = new Scheduler(store, hub);
 // M5.5: the shell image viewer's live state (open image + brush selection) — what voice
 // edits resolve "this image" and "the highlighted area" against.
 const imageContext = new ImageEditContext();
-const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, macBridge, confirms);
+// The shell file viewer's open document — what an edit_file voice edit targets (2026-07-16).
+const fileContext = new FileEditContext();
+const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, fileContext, macBridge, confirms);
 scheduler.onFire = (row) =>
   orchestrator.speakProactively(
     // Cold TTS speaks the raw text verbatim; the LIVE instruction echo is defanged
@@ -75,6 +89,12 @@ store.onEvent((event) => hub.broadcast({ type: 'event', event }));
 // The shell's pulse already defers to a live session display, so always sending is safe.
 store.onEvent((event) => {
   if (event.type === 'reminder.fired') hub.broadcast({ type: 'notch_pulse', status: 'reminder' }, 'shell');
+  // M5.5 follow-up: remember the newest image so a voice edit can target "the image you
+  // just created" with no viewer open (the model itself never sees filenames).
+  if (event.type === 'image.created') {
+    const file = (event.payload as { file?: string })?.file;
+    if (file) imageContext.noteCreated(file);
+  }
 });
 
 // M3 completion presence: mirror the task lifecycle to the shell as bubbles, pulse the
@@ -89,10 +109,23 @@ store.onEvent((event) => {
   } else if (event.type === 'task.status') {
     // M4: needs_input ⇄ running flips mid-run (notch confirm pending, cap hit, resume).
     const task = store.getTask(event.task_id);
-    const status = (event.payload as { status?: string })?.status;
+    const payload = event.payload as { status?: string; reason?: string };
+    const status = payload?.status;
     if (!task || (status !== 'running' && status !== 'needs_input')) return;
     hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status }, 'shell');
+    if (status === 'needs_input') {
+      // Speak it — a paused task used to wait silently (live gap 2026-07-16: the plan
+      // approval sat unnoticed for 5 minutes because the voice session had idle-closed).
+      // Same delivery rules as every proactive path: live injection or cold TTS.
+      const reason = payload?.reason ?? 'it needs your input';
+      const { cold, live } = needsInputAnnounce(task.title, reason);
+      orchestrator.speakProactively(cold, live).catch((err: unknown) => {
+        store.addEvent(event.task_id, 'session.error', { message: `needs-input announce: ${String(err)}` });
+      });
+    }
   } else if (event.type === 'task.finished') {
+    // Any confirm this task still has pending is moot — deny it and dismiss the panel.
+    confirms.cancelForTask(event.task_id);
     const task = store.getTask(event.task_id);
     if (!task || task.status === 'running' || task.status === 'needs_input') return;
     hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status: task.status }, 'shell');
@@ -167,6 +200,21 @@ hub.onMessage((msg, role) => {
     // completion (or failure) is spoken through the same proactive announce path, and
     // acceptImageEditRequest guarantees the viewer's busy state always gets an exit event.
     acceptImageEditRequest(msg, store, (cold, live) => orchestrator.speakProactively(cold, live));
+  } else if (msg.type === 'file_context' && role === 'shell') {
+    // The file viewer's open document — a bad payload clears it (fail toward "no target").
+    applyFileContext(fileContext, msg, (detail) => {
+      store.addEvent(null, 'session.error', { message: `file_context: ${detail}` });
+    });
+  } else if (msg.type === 'file_edit_request' && role === 'shell') {
+    // Typed edit from the file viewer's composer — re-presents the edited doc + speaks the
+    // outcome through the same announce path; acceptFileEditRequest guarantees the viewer's
+    // busy state always gets an exit event (file.edited | file.edit_failed).
+    acceptFileEditRequest(
+      msg,
+      store,
+      (doc) => orchestrator.presentFileToShell(doc),
+      (cold, live) => orchestrator.speakProactively(cold, live),
+    );
   }
 });
 
@@ -176,6 +224,7 @@ hub.onClose((role) => {
   if (role === 'shell' && !hub.hasRole('shell')) {
     orchestrator.handlePlaybackState(false);
     imageContext.set(null);
+    fileContext.set(null);
   }
 });
 
@@ -184,9 +233,40 @@ hub.onBinary((frame, role) => {
   if (role === 'shell') orchestrator.handleMicFrame(frame);
 });
 
+// tsx-watch reloads SIGTERM this process constantly; close the realtime session cleanly so
+// the event log records the closure (a silent gap here masqueraded as inexplicable voice
+// amnesia, 2026-07-16) and the OpenAI socket isn't abandoned to a server-side timeout.
+// addEvent is synchronous sqlite, so the record lands before exit.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    orchestrator.shutdown();
+    // The sqlite record is already down (synchronous), but the WebSocket close frame is
+    // not — an immediate exit abandons it in the socket buffer. A short drain lets it
+    // flush so the server sees a clean close instead of a timeout.
+    const SHUTDOWN_DRAIN_MS = 150;
+    setTimeout(() => process.exit(0), SHUTDOWN_DRAIN_MS);
+  });
+}
+
 // Pending schedule rows persisted by a previous run resume here — the first sweep is one
 // poll interval in (grace for the shell to reconnect before an overdue reminder speaks).
 scheduler.start();
+
+// …and tell the user about them once the shell has had time to reconnect (same grace idea
+// as the scheduler's delayed first sweep): the silent version of this failure cost him a
+// "did the picture regenerate?" round with no honest answer available.
+if (reapedImages.length) {
+  setTimeout(() => {
+    const single = reapedImages.length === 1;
+    const what = single ? `an image ${reapedImages[0].kind}` : `${reapedImages.length} image jobs`;
+    orchestrator.speakProactively(
+      `the user, heads up — ${what} ${single ? "was interrupted by a restart and didn't" : "were interrupted by a restart and didn't"} finish. Ask me again and I'll redo ${single ? 'it' : 'them'}.`,
+      `A daemon restart interrupted ${what} before finishing (prompt: "${echoForInstructions(reapedImages[0].prompt)}"). Tell the user briefly and offer to run it again.`,
+    ).catch((err: unknown) => {
+      store.addEvent(null, 'session.error', { message: `image reap announce: ${String(err)}` });
+    });
+  }, 8_000).unref();
+}
 
 server.listen(config.port, config.host, () => {
   console.log(`gumbo daemon listening on http://${config.host}:${config.port} (ws: /ws)`);

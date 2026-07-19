@@ -73,6 +73,12 @@ export type InboundMessage =
   // shell (M5.5): a typed edit request from the viewer panel (voice edits ride the
   // realtime session + edit_image tool instead).
   | { type: 'image_edit_request'; file: string; prompt: string; strokes?: Array<{ points: Array<[number, number]>; radius: number }> }
+  // shell (2026-07-16): the file viewer's open document — what an edit_file voice edit
+  // resolves "this document" against. path null = viewer closed.
+  | { type: 'file_context'; path: string | null }
+  // shell (2026-07-16): a typed edit request from the file viewer's composer (voice edits
+  // ride the realtime session + edit_file tool instead).
+  | { type: 'file_edit_request'; path: string; prompt: string }
   // shell (M6): the executor's answer to a mac_action, matched by correlation id.
   | { type: 'mac_action_result'; id: string; result: MacActionResult }
   // shell (M6): kill switch fired — untagged HID input (the user touched the machine), the
@@ -95,7 +101,9 @@ export type OutboundMessage =
   // scheduled reminder fires (the visual cue alongside the spoken delivery).
   | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running' | 'needs_input'> | 'reminder' }
   // shell: a supervisor escalation needs the user's yes/no; deny happens daemon-side on timeout.
-  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number }
+  // `body` is optional long-form content behind the one-liner (the full plan text for a plan
+  // approval) — the shell renders it behind a chevron as a scrollable view.
+  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number; body?: string }
   // shell: dismiss a pending confirm — its task was cancelled (daemon already resolved it deny).
   | { type: 'confirm_cancel'; id: string }
   // shell (M5): mirror a scheduled reminder into Reminders.app via EventKit (OS-durable —
@@ -103,6 +111,13 @@ export type OutboundMessage =
   | { type: 'create_reminder'; id: string; text: string; fire_at: number }
   // shell (M5): best-effort removal of a cancelled reminder's Reminders.app entry.
   | { type: 'remove_reminder'; id: string; eventkit_id: string }
+  // shell (2026-07-16): present a file the user should see — a document card in the top-right
+  // stack; clicking it opens Gumbo's own renderer (markdown prettified). Content rides
+  // inline (size-capped daemon-side) so no new HTTP file-serving surface is exposed.
+  | { type: 'file_present'; title: string; file: string; path: string; content: string }
+  // shell (M5.5 follow-up): open a gallery image in the viewer/editor by voice — the
+  // open_image tool resolved the word-name daemon-side; the viewer arms the edit context.
+  | { type: 'open_image'; file: string }
   // shell (M6): execute one computer-use step (AX, script, probe) and reply
   // mac_action_result with the same id.
   | { type: 'mac_action'; id: string; action: MacAction }

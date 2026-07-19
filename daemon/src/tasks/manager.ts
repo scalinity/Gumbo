@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.ts';
@@ -333,6 +333,27 @@ export class TaskManager {
     if (!task) return null;
     try {
       return readFileSync(join(task.workspace, 'report.md'), 'utf8');
+    } catch {
+      return null;
+    }
+  }
+
+  /** The document a finished Claude session produced in its OWN workspace, for auto-present
+   *  on completion (2026-07-16 — the user shouldn't have to ask "show me the file"). Newest
+   *  document-ish file, excluding the report/supervisor logs. Returns null for a session
+   *  that worked in a real project_dir (deliverable lives there, not the workspace — those
+   *  are code edits, not a single viewable doc; the model's present_file covers that case). */
+  claudeDeliverable(id: string): string | null {
+    const task = this.store.getTask(id);
+    if (!task || task.kind !== 'claude') return null;
+    try {
+      const docs = readdirSync(task.workspace, { withFileTypes: true })
+        .filter((d) => d.isFile() && d.name !== 'report.md' && d.name !== 'supervisor.md')
+        .filter((d) => /\.(md|markdown|txt|json|ya?ml|csv|html?|xml|rtf|tsv|ini|toml|log)$/i.test(d.name))
+        .map((d) => join(task.workspace, d.name));
+      if (docs.length === 0) return null;
+      // Newest wins — the last thing the session wrote is the deliverable.
+      return docs.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
     } catch {
       return null;
     }

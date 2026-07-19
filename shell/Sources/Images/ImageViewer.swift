@@ -48,6 +48,15 @@ final class ImageViewerController {
         loadImage(file)
     }
 
+    /// image.edit_requested: an edit is running against a file — if it's the one open
+    /// here, show the busy state even when the edit was started by VOICE (live gap
+    /// 2026-07-16: only the panel's own typed submits ever set busy).
+    func handleEditRequested(file: String) {
+        guard model.file == file, !model.busy else { return }
+        model.busy = true
+        model.notice = nil
+    }
+
     /// image.edit_failed: leave the busy state with an honest notice (the daemon also
     /// speaks the failure).
     func handleEditFailed(file: String) {
@@ -77,7 +86,10 @@ final class ImageViewerController {
             panel.backgroundColor = .clear
             panel.hasShadow = true
             panel.isMovable = true
-            panel.isMovableByWindowBackground = true
+            // NOT movable-by-background: window-background drags were winning against
+            // the brush-size slider's drag (live gripe 2026-07-16 — "it drags the whole
+            // window"). The header is the explicit drag handle instead (WindowDragHandle).
+            panel.isMovableByWindowBackground = false
             panel.hidesOnDeactivate = false
             panel.isReleasedWhenClosed = false
             panel.animationBehavior = .none
@@ -166,6 +178,21 @@ private final class ImageViewerPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+/// Explicit window-move affordance for the header row. Replaces
+/// isMovableByWindowBackground, which routed drags ANYWHERE the hit view didn't claim
+/// them — including losing races against the brush-size slider (live gripe 2026-07-16).
+private struct WindowDragHandle: NSViewRepresentable {
+    final class DragView: NSView {
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
+        }
+    }
+
+    func makeNSView(context: Context) -> NSView { DragView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
 enum ViewerChrome {
     /// Header + controls + composer rows around the image area.
     static let height: CGFloat = 132
@@ -246,29 +273,44 @@ private struct ImageViewerView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "photo")
-                .font(.system(size: 11))
-                .foregroundStyle(ember)
-            Text(model.busy ? "Editing…" : "Image")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.92))
-            if model.busy {
-                ProgressView().controlSize(.small).padding(.leading, 2)
+        // The drag handle is the BOTTOM layer of a ZStack and the passive content
+        // (icon, title, notice) is marked non-hit-testing, so a mouseDown on the header
+        // reaches the NSView and starts a window drag. Only the close Button keeps its
+        // own hits. (The earlier `.background(WindowDragHandle())` never received the
+        // click — a `.contentShape(Rectangle())` above it made SwiftUI eat the mouseDown
+        // first, so the header looked draggable but wasn't — live gripe 2026-07-16.)
+        ZStack {
+            WindowDragHandle().frame(maxWidth: .infinity, maxHeight: .infinity) // fill the header (an NSView has no intrinsic size)
+            // Passive labels — non-hit-testing so mouseDown falls through to the drag view.
+            HStack(spacing: 8) {
+                Image(systemName: "photo")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ember)
+                Text(model.busy ? "Editing…" : "Image")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                if model.busy {
+                    ProgressView().controlSize(.small).padding(.leading, 2)
+                }
+                if let notice = model.notice {
+                    Text(notice)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(alarm)
+                }
+                Spacer()
             }
-            if let notice = model.notice {
-                Text(notice)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(alarm)
+            .allowsHitTesting(false)
+            // The one interactive control — kept above the drag layer.
+            HStack {
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(faint)
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
             }
-            Spacer()
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(faint)
-            }
-            .buttonStyle(.plain)
-            .pointingCursor()
         }
         .padding(.horizontal, 14)
         .frame(height: 36)
@@ -297,8 +339,8 @@ private struct ImageViewerView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(model.strokes.isEmpty && model.liveStroke == nil ? faint : gold)
             Slider(value: $model.brushRadius, in: 0.01...0.12)
-                .controlSize(.mini)
-                .frame(width: 110)
+                .controlSize(.small)
+                .frame(width: 140)
                 .help("Brush size")
             if !model.strokes.isEmpty {
                 Button("Clear") {
