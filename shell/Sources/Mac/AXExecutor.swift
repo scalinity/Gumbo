@@ -8,11 +8,15 @@ struct AXResult {
     var output: String
     var errorKind: String?
     var health: String?
+    /// act only: the settled before/after diff was empty. Structured so the daemon's stall
+    /// detector never has to grep human-readable output (screen text could spoof it).
+    var noChange: Bool = false
 
     func wire() -> [String: Any] {
         var dict: [String: Any] = ["ok": ok, "output": output]
         if let errorKind { dict["error_kind"] = errorKind }
         if let health { dict["health"] = health }
+        if noChange { dict["no_change"] = true }
         return dict
     }
 
@@ -261,7 +265,7 @@ final class AXExecutor {
         // items. An empty diff is a real "no observable change" signal the model can act on.
         let diff = diffLines(before: before, after: after)
         let body = diff.isEmpty ? "(no observable change — the action may not have taken effect)" : diff
-        return AXResult(ok: true, output: body, errorKind: nil, health: nil)
+        return AXResult(ok: true, output: body, errorKind: nil, health: nil, noChange: diff.isEmpty)
     }
 
     /// key targets no element (a shortcut to the focused app). Diff the focused window
@@ -278,7 +282,7 @@ final class AXExecutor {
         let after = describe(nil)
         let diff = diffLines(before: before, after: after)
         let body = diff.isEmpty ? "(sent \(chord); no observable change — snapshot to confirm)" : diff
-        return AXResult(ok: true, output: body, errorKind: nil, health: nil)
+        return AXResult(ok: true, output: body, errorKind: nil, health: nil, noChange: diff.isEmpty)
     }
 
     private func waitFor(role: String?, name: String?, timeoutMs: Int) -> AXResult {

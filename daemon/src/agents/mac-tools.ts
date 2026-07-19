@@ -2,8 +2,7 @@ import { tool } from '@openai/agents';
 import { z } from 'zod';
 import { config } from '../config.ts';
 import { auditMacAction } from '../mac/audit.ts';
-import { macDoDecision, describeMacDo } from '../mac/policy.ts';
-import { normalizeOsascript } from '../mac/run.ts';
+import { gateScript, describeMacDo } from '../mac/policy.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import type { MacActionResult } from '../ws/protocol.ts';
 
@@ -105,7 +104,9 @@ export function createMacTools(taskId: string, macBridge: MacBridge, signal: Abo
       );
       const summary = `${verb} ${ref ?? role ?? ''}`.trim();
       auditMacAction({ tier: 'subagent', kind: 'act', action: summary, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
-      const stalled = result.ok && result.output.includes('no observable change');
+      // Keyed on the STRUCTURED no_change flag, not output text — screen content echoed
+      // into the diff could otherwise spoof (or suppress) the stall signal (review 🔵).
+      const stalled = result.ok && result.no_change === true;
       noChangeStreak = stalled ? noChangeStreak + 1 : 0;
       if (noChangeStreak >= 3) {
         noChangeStreak = 0;
@@ -132,20 +133,17 @@ export function createMacTools(taskId: string, macBridge: MacBridge, signal: Abo
       script: z.string().describe('AppleScript source, or a shortcut name/UUID'),
     }),
     async execute({ interpreter, script: rawScript }) {
-      // Unwrap a double-wrapped `osascript -e '…'` (the model sometimes writes the CLI form
-      // even though the interpreter is already osascript) so it runs — and so the policy
-      // table below gates the real AppleScript body.
-      const script = interpreter === 'osascript' ? normalizeOsascript(rawScript) : rawScript;
-      // The sub-agent ingests untrusted on-screen text, so its shell sink is gated by the
-      // SAME policy table as hot mac_do: reversible scripts auto-run; risky ones notch-confirm
-      // (deny-on-timeout). A shortcut is opaque to the table — treat it as auto (its own
-      // per-shortcut TCC pre-auth is the gate). A declined script is audited and never runs.
-      const decision = interpreter === 'osascript' ? macDoDecision(script) : { route: 'auto' as const, reason: 'shortcut' };
+      // The sub-agent ingests untrusted on-screen text, so its shell sink goes through the
+      // SAME choke point as hot mac_do (gateScript: normalize, then decide on the string
+      // the executor will run). In this lane a Shortcut confirms too — it's an opaque,
+      // arbitrarily-destructive named action triggered off screen-read context, unlike the
+      // hot lane where the user speaks the name himself. Declined = audited, never runs.
+      const { script, decision } = gateScript(interpreter, rawScript, 'subagent');
       let gate: 'auto' | 'confirmed' | 'declined' = decision.route === 'auto' ? 'auto' : 'confirmed';
       if (decision.route === 'confirm') {
         const approved = await confirmScript(`${decision.reason}: ${describeMacDo(script)}`);
         if (!approved) {
-          auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script.slice(0, 120)}`, gate: 'declined', ok: false, error: decision.reason, taskId });
+          auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script}`, gate: 'declined', ok: false, error: decision.reason, taskId });
           return `the user didn't approve that script (${decision.reason}) — try another approach or skip it.`;
         }
       }
@@ -153,7 +151,9 @@ export function createMacTools(taskId: string, macBridge: MacBridge, signal: Abo
         { kind: 'script', interpreter, script, timeout_ms: config.mac.scriptTimeoutMs },
         { signal, timeoutMs: config.mac.scriptTimeoutMs + 2000 },
       );
-      auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script.slice(0, 120)}`, gate, ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      // Audit the FULL script like the hot lane does (drift between the two lanes' audit
+      // shapes was a review 🟡) — the JSONL writer escapes newlines, so length is the only cost.
+      auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script}`, gate, ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
       return present(result);
     },
   });

@@ -18,8 +18,8 @@ final class KillSwitch {
 
     /// Returns true if the listen-only tap was created. False means the PostEvent grant is
     /// missing — the caller MUST fail closed (refuse the task), never drive the machine
-    /// without a human-input abort.
-    @discardableResult
+    /// without a human-input abort. Deliberately NOT @discardableResult: ignoring this
+    /// Bool is exactly the fail-open bug the review caught, so make it a compiler warning.
     func arm() -> Bool {
         guard tap == nil else { return true }
         let types: [CGEventType] = [

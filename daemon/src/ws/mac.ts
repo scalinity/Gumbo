@@ -91,6 +91,7 @@ export class MacBridge {
     if (typeof r.health === 'string' && HEALTH_STATES.has(r.health)) {
       result.health = r.health as MacHealth;
     }
+    if ((r as { no_change?: unknown }).no_change === true) result.no_change = true;
     return result;
   }
 

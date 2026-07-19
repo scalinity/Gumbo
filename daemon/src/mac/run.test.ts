@@ -8,7 +8,8 @@ import { join } from 'node:path';
 // before/after deltas, and under the canonical per-file-process `npm test` it is the sole
 // writer of its own home's audit file — same isolation the search-audit tests rely on.
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
-const { executeMacDo, normalizeOsascript } = await import('./run.ts');
+const { executeMacDo } = await import('./run.ts');
+const { normalizeOsascript } = await import('./policy.ts');
 const { config } = await import('../config.ts');
 
 const auditPath = join(config.home.logs, 'mac-audit.jsonl');
@@ -138,6 +139,17 @@ test('normalizeOsascript unwraps -e bodies; leaves plain AppleScript and odd for
   assert.equal(normalizeOsascript(plain), plain, 'plain AppleScript passes through');
   const file = 'osascript myscript.scpt';
   assert.equal(normalizeOsascript(file), file, 'a file invocation with no -e is left alone');
+  assert.equal(normalizeOsascript('osascript -e "return 1"'), 'return 1', 'double-quoted -e body unwraps too');
+});
+
+test('a real maxBuffer overflow is classified script_error, never timeout (review 🟡 — the branch was dead)', async () => {
+  // Real execFile, no runBash override: emit more than config.mac.outputMaxChars (256 KiB).
+  const out = await executeMacDo('yes | head -c 400000', 'bash', {
+    macBridge: fakeBridge() as never,
+    confirm: async () => false,
+  });
+  assert.match(out, /failed \(script_error\)/, 'overflow is a script_error');
+  assert.doesNotMatch(out, /Timed out/, 'must never be mislabeled a timeout');
 });
 
 test('the gate sees the UNWRAPPED osascript body — a double-wrapped risky script still confirms', async () => {

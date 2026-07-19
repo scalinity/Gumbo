@@ -87,6 +87,9 @@ final class MacBridge {
         // Fail CLOSED: if the kill switch can't arm (PostEvent grant missing), we must not
         // let the task drive the machine with no human-input abort — tell the daemon to
         // cancel it, and don't show the ghost cursor (nothing will be driving).
+        // Ordering assumption: the abort races the task's FIRST action, but that action
+        // needs a full model turn (seconds) while this abort is one loopback frame — the
+        // daemon cancels long before any act arrives. Attended use makes the residual moot.
         guard killSwitch.arm() else {
             reply(["type": "mac_abort", "reason": "kill_switch_unavailable"])
             return

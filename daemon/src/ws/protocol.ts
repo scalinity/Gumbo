@@ -44,6 +44,10 @@ export type MacActionResult = {
   output: string;
   error_kind?: MacErrorKind;
   health?: MacHealth;
+  /** act only: the settled before/after diff was EMPTY — a structured no-op signal. The
+   *  stall detector keys on this, never on output text (on-screen content echoed into the
+   *  output could otherwise spoof or suppress it). */
+  no_change?: boolean;
 };
 
 // client → daemon

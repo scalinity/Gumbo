@@ -1,12 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
 const { createMacTools } = await import('./mac-tools.ts');
+const { config } = await import('../config.ts');
 import type { MacActionResult } from '../ws/protocol.ts';
+
+const auditPath = join(config.home.logs, 'mac-audit.jsonl');
+function lastAudit(): Record<string, unknown> | null {
+  if (!existsSync(auditPath)) return null;
+  const lines = readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean);
+  return lines.length ? JSON.parse(lines[lines.length - 1]) : null;
+}
 
 type ToolLike = { name: string; invoke: (ctx: unknown, args: string) => Promise<string> };
 
@@ -84,7 +92,8 @@ test('run_script gates a risky osascript through the notch; a declined script ne
 });
 
 test('the stall detector fires on 3 consecutive no-change acts even when the actions VARY (demo fix)', async () => {
-  const bridge = fakeBridge(() => ({ ok: true, output: '(no observable change — the action may not have taken effect)' }));
+  // no_change is the STRUCTURED flag — the detector must key on it, not on output text.
+  const bridge = fakeBridge(() => ({ ok: true, output: '(no observable change — the action may not have taken effect)', no_change: true }));
   const act = byName(tools(bridge), 'ax_act');
   // Three DIFFERENT targets — dodges the exact-match repetition guard, which is the point.
   const argsFor = (ref: string) => JSON.stringify({ verb: 'press', ref, value: null, role: null, name: null, timeout_ms: 5000 });
@@ -99,7 +108,7 @@ test('the stall detector fires on 3 consecutive no-change acts even when the act
 
 test('a real diff resets the stall streak', async () => {
   let empty = true;
-  const bridge = fakeBridge(() => ({ ok: true, output: empty ? '(no observable change — x)' : '+ Button "OK"' }));
+  const bridge = fakeBridge(() => (empty ? { ok: true, output: '(no observable change — x)', no_change: true } : { ok: true, output: '+ Button "OK"' }));
   const act = byName(tools(bridge), 'ax_act');
   const argsFor = (ref: string) => JSON.stringify({ verb: 'press', ref, value: null, role: null, name: null, timeout_ms: 5000 });
   await act.invoke({}, argsFor('g1e1'));
@@ -120,6 +129,39 @@ test('run_script unwraps a double-wrapped `osascript -e` body (demo fix)', async
   );
   assert.equal(bridge.calls.length, 1);
   assert.equal(bridge.calls[0].script, 'tell application "Google Chrome" to activate', 'the -e body, not the CLI wrapper, reaches the shell');
+});
+
+test('output TEXT saying "no observable change" cannot spoof the stall detector (structured flag only)', async () => {
+  // A web page's on-screen text could echo the phrase into a diff line — without the
+  // structured no_change flag, that must NOT count toward the stall streak.
+  const bridge = fakeBridge(() => ({ ok: true, output: '+ StaticText "no observable change here folks"' }));
+  const act = byName(tools(bridge), 'ax_act');
+  const argsFor = (ref: string) => JSON.stringify({ verb: 'press', ref, value: null, role: null, name: null, timeout_ms: 5000 });
+  const r3 = [await act.invoke({}, argsFor('a')), await act.invoke({}, argsFor('b')), await act.invoke({}, argsFor('c'))].at(-1)!;
+  assert.doesNotMatch(r3, /not making progress/i, 'text alone must never trip the detector');
+});
+
+test('run_script APPROVED path executes and audits gate=confirmed; declined audits gate=declined', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'done' }));
+  const approved = tools(bridge, async () => true);
+  await byName(approved, 'run_script').invoke({}, JSON.stringify({ interpreter: 'osascript', script: 'do shell script "rm -rf ~/Documents"' }));
+  assert.equal(bridge.calls.length, 1, 'approved risky script reaches the shell');
+  assert.equal(lastAudit()?.gate, 'confirmed');
+
+  const denied = tools(fakeBridge(() => ({ ok: true, output: 'x' })), async () => false);
+  await byName(denied, 'run_script').invoke({}, JSON.stringify({ interpreter: 'osascript', script: 'do shell script "rm -rf ~/Documents"' }));
+  assert.equal(lastAudit()?.gate, 'declined', 'the refusal itself is audited');
+});
+
+test('a Shortcut confirms in the sub-agent lane (opaque action off untrusted screen text)', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'ran' }));
+  const denied = tools(bridge, async () => false);
+  const out = await byName(denied, 'run_script').invoke({}, JSON.stringify({ interpreter: 'shortcuts', script: 'Wipe Scratch Folder' }));
+  assert.match(out, /didn't approve/i);
+  assert.equal(bridge.calls.length, 0, 'a declined shortcut never runs');
+  const allowed = tools(bridge, async () => true);
+  await byName(allowed, 'run_script').invoke({}, JSON.stringify({ interpreter: 'shortcuts', script: 'Wipe Scratch Folder' }));
+  assert.equal(bridge.calls.length, 1, 'an approved shortcut runs');
 });
 
 test('check_permissions reports the health state', async () => {

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { config, secretEnvKeys } from '../config.ts';
 import { auditMacAction } from './audit.ts';
-import { macDoDecision, describeMacDo } from './policy.ts';
+import { gateScript, describeMacDo } from './policy.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
 /** The daemon's provider keys must NEVER reach a spawned subprocess (config.ts). mac_do is
@@ -32,9 +32,12 @@ function runBashDaemonSide(script: string, timeoutMs: number): Promise<BashResul
       const output = (String(stdout ?? '') + String(stderr ?? '')).trim();
       if (err) {
         const code = (err as NodeJS.ErrnoException).code;
-        // A maxBuffer overflow ALSO sets killed=true — distinguish it from a real timeout so
-        // the model isn't told "timed out" for output that was simply too large.
-        const overflow = code === 'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER_EXCEEDED';
+        // maxBuffer overflow vs real timeout: on Node 26 overflow raises
+        // ERR_CHILD_PROCESS_STDIO_MAXBUFFER (stdout AND stderr, killed=undefined) while a
+        // timeout has code null + killed=true — but older/newer Nodes have used per-stream
+        // *_MAXBUFFER_EXCEEDED codes and set killed on overflow, so match the family
+        // (review 🟡: the previous exact-string check missed the real constant = dead branch).
+        const overflow = typeof code === 'string' && code.startsWith('ERR_CHILD_PROCESS_') && code.includes('MAXBUFFER');
         const killed = (err as NodeJS.ErrnoException & { killed?: boolean }).killed && !overflow;
         resolvePromise({
           ok: false,
@@ -46,18 +49,6 @@ function runBashDaemonSide(script: string, timeoutMs: number): Promise<BashResul
       }
     });
   });
-}
-
-/** The model sometimes double-wraps: interpreter 'osascript' AND a script of
- *  `osascript -e '…'` — which then fails as AppleScript (live demo, 2026-07-16). Unwrap the
- *  `-e` bodies into plain AppleScript source. Anything else passes through untouched. */
-export function normalizeOsascript(script: string): string {
-  const trimmed = script.trim();
-  if (!/^osascript\b/.test(trimmed)) return trimmed;
-  const bodies = [...trimmed.matchAll(/-e\s+(?:'([^']*)'|"([^"]*)")/g)]
-    .map((m) => m[1] ?? m[2])
-    .filter((b) => b !== undefined && b !== '');
-  return bodies.length > 0 ? bodies.join('\n') : trimmed;
 }
 
 export interface MacDoDeps {
@@ -79,12 +70,11 @@ export async function executeMacDo(
   interpreter: MacInterpreter,
   deps: MacDoDeps,
 ): Promise<string> {
-  // Normalize BEFORE gating so the policy patterns see the real AppleScript body, not an
-  // `osascript -e` wrapper the bash-shaped patterns weren't written for.
-  const trimmed = interpreter === 'osascript' ? normalizeOsascript(script) : script.trim();
+  // gateScript is the shared choke point (also used by the sub-agent's run_script): it
+  // normalizes FIRST so the policy patterns and the executor see the same string.
+  const { script: trimmed, decision } = gateScript(interpreter, script, 'hot');
   if (!trimmed) return 'Empty command — nothing to run.';
 
-  const decision = macDoDecision(trimmed);
   let gate: 'auto' | 'confirmed' | 'declined' = decision.route === 'auto' ? 'auto' : 'confirmed';
 
   if (decision.route === 'confirm') {
