@@ -118,6 +118,27 @@ test('concurrent session on the same project_dir is refused (#7)', async () => {
   assert.ok(manager.spawnClaudeSession('Third', 'elsewhere', other));
 });
 
+test('M6: only one computer-use task may drive the Mac at a time (demo fix)', async () => {
+  // A macBridge whose taskStarted throws makes runSubagent reject BEFORE any model/network
+  // call — deterministic, and the spawn bookkeeping (aborts map, kind 'computer') is all
+  // laid down synchronously before that rejection can settle.
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'gumbo-mgr-db-')), 'gumbo.db');
+  const store = new Store(dbPath);
+  const macBridge = { taskStarted: () => { throw new Error('stub — no live run in tests'); }, taskFinished: () => {} };
+  const manager = new TaskManager(store, async () => false, async () => false, fakeFactory(async () => ({ parked: false, report: '' })) as never, macBridge as never);
+
+  const first = manager.spawnSubagent('Change wallpaper', 'do it', 'mac');
+  assert.equal(store.getTask(first.id)?.kind, 'computer');
+  // Second concurrent mac task: refused synchronously, no task row created.
+  assert.throws(() => manager.spawnSubagent('Also wallpaper', 'me too', 'mac'), /already driving the Mac/);
+  // Research tasks are NOT blocked by a running computer task (different resource).
+  await settle(); // let the stubbed rejection settle the first task to failed
+  assert.equal(store.getTask(first.id)?.status, 'failed');
+  // …and once the first task is terminal, a new computer task may spawn again.
+  const third = manager.spawnSubagent('Retry wallpaper', 'again', 'mac');
+  assert.ok(third.id);
+});
+
 test('plan approval: approved plan proceeds, denied plan parks (plan-mode)', async () => {
   // Behavior simulates the runner: call onPlanReady; approved → complete, denied → park.
   const behavior = async (opts: RunnerOpts): Promise<RunResult> => {

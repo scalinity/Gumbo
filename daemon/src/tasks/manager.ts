@@ -52,6 +52,17 @@ export class TaskManager {
    *  default web/writing agent. */
   spawnSubagent(title: string, brief: string, taskType: SubagentKind = 'research'): TaskRow {
     if (taskType === 'mac' && !this.macBridge) throw new Error('Mac control is unavailable (no shell bridge wired).');
+    // One computer task at a time: there is ONE screen/keyboard — concurrent tasks fight
+    // over the same apps (live demo: three overlapping wallpaper tasks drove System
+    // Settings against each other). Same spirit as assertCwdFree for Claude sessions.
+    if (taskType === 'mac') {
+      for (const otherId of this.aborts.keys()) {
+        const other = this.store.getTask(otherId);
+        if (other?.kind === 'computer') {
+          throw new Error(`a computer-use task ("${other.title}") is already driving the Mac; wait for it to finish or cancel it first`);
+        }
+      }
+    }
     const id = randomUUID().slice(0, 8);
     const workspace = join(config.home.tasks, id);
     mkdirSync(workspace, { recursive: true });

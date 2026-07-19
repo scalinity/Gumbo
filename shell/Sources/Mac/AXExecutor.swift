@@ -301,7 +301,17 @@ final class AXExecutor {
             }
             Thread.sleep(forTimeInterval: 0.15)
         } while Date() < deadline
-        return AXResult.failure("timeout", "Waited \(timeoutMs) ms; no element matched role=\(role ?? "*") name=\(name ?? "*").")
+        // A bare "timeout" leaves the model blind — it guessed a role/name that never came
+        // (live demo: 4 dead 30 s waits on slightly-wrong roles). Return what IS on screen so
+        // it can re-target immediately. diffLine() (no refs — these nodes aren't registered;
+        // a fresh ax_snapshot is required before acting on any of them).
+        var current: [AXNode] = []
+        var truncated = false
+        walk(focusedWindow(of: appElement) ?? appElement, pid: app.pid, depth: 0, into: &current, cap: 40, truncated: &truncated)
+        let context = current.isEmpty
+            ? "The window shows no interactive elements."
+            : "The window currently shows (take ax_snapshot for actionable refs):\n" + current.map { $0.diffLine() }.joined(separator: "\n")
+        return AXResult.failure("timeout", "Waited \(timeoutMs) ms; no element matched role=\(role ?? "*") name=\(name ?? "*"). \(context)")
     }
 
     // MARK: dispatch ladder rungs

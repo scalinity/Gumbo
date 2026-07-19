@@ -8,14 +8,30 @@ import QuartzCore
 /// the kill switch honest: anything the real pointer does is the user's.
 final class GhostCursor {
     private var window: NSWindow?
-    private var dot: CALayer?
+    private var cursor: CAShapeLayer?
     private var ring: CAShapeLayer?
     // The overlay spans the UNION of all displays so the fake cursor can fly to a target on
     // any screen; layer positions are converted into this frame's coordinate space.
     private var overlayFrame: CGRect = .zero
 
-    // Warm ember tone matching the notch/confirm palette.
+    // Warm ember tone matching the notch/confirm palette — used for the bloom + pulse ring.
     private let emberColor = NSColor(calibratedRed: 0.95, green: 0.45, blue: 0.15, alpha: 1)
+
+    /// The classic macOS arrow-pointer outline (tip at top-left), in y-UP layer coordinates,
+    /// bounds ≈ 13×20 pt — real-cursor proportions so it reads instantly as a pointer, not a
+    /// blob. The layer's anchorPoint puts the TIP (the hotspot) on the target coordinate.
+    private static func arrowPath() -> CGPath {
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 0, y: 19.4)) // tip
+        path.addLine(to: CGPoint(x: 0, y: 2.9)) // straight left edge down
+        path.addLine(to: CGPoint(x: 4.4, y: 6.6)) // notch in
+        path.addLine(to: CGPoint(x: 7.3, y: 0)) // tail outer
+        path.addLine(to: CGPoint(x: 9.9, y: 1.1)) // tail tip
+        path.addLine(to: CGPoint(x: 7.0, y: 7.5)) // tail inner
+        path.addLine(to: CGPoint(x: 12.5, y: 7.5)) // diagonal shoulder
+        path.closeSubpath()
+        return path
+    }
 
     func show() {
         guard window == nil, !NSScreen.screens.isEmpty else { return }
@@ -34,16 +50,23 @@ final class GhostCursor {
         content.wantsLayer = true
         win.contentView = content
 
-        let dot = CALayer()
-        dot.bounds = CGRect(x: 0, y: 0, width: 14, height: 14)
-        dot.cornerRadius = 7
-        dot.backgroundColor = emberColor.cgColor
-        dot.shadowColor = emberColor.cgColor
-        dot.shadowOpacity = 0.9
-        dot.shadowRadius = 10
-        dot.shadowOffset = .zero
-        dot.position = CGPoint(x: frame.width / 2, y: frame.height / 2)
-        content.layer?.addSublayer(dot)
+        // A real arrow pointer: black fill + white outline (the system cursor's own scheme,
+        // so it reads as a cursor at a glance) with a slight ember bloom so it's still
+        // unmistakably Gumbo's hand, not the user's.
+        let cursor = CAShapeLayer()
+        cursor.path = Self.arrowPath()
+        cursor.bounds = CGRect(x: 0, y: 0, width: 12.5, height: 19.4)
+        cursor.fillColor = NSColor.black.cgColor
+        cursor.strokeColor = NSColor.white.cgColor
+        cursor.lineWidth = 1.5
+        cursor.lineJoin = .round
+        cursor.shadowColor = emberColor.cgColor
+        cursor.shadowOpacity = 0.85
+        cursor.shadowRadius = 6 // the "slight bloom"
+        cursor.shadowOffset = .zero
+        cursor.anchorPoint = CGPoint(x: 0, y: 1) // the TIP is the hotspot
+        cursor.position = CGPoint(x: frame.width / 2, y: frame.height / 2)
+        content.layer?.addSublayer(cursor)
 
         let ring = CAShapeLayer()
         let ringRect = CGRect(x: -16, y: -16, width: 32, height: 32)
@@ -52,11 +75,11 @@ final class GhostCursor {
         ring.strokeColor = emberColor.withAlphaComponent(0.85).cgColor
         ring.lineWidth = 2
         ring.opacity = 0
-        ring.position = dot.position
+        ring.position = cursor.position
         content.layer?.addSublayer(ring)
 
         self.window = win
-        self.dot = dot
+        self.cursor = cursor
         self.ring = ring
         win.alphaValue = 0
         win.orderFrontRegardless()
@@ -66,7 +89,7 @@ final class GhostCursor {
     func hide() {
         guard let win = window else { return }
         window = nil
-        dot = nil
+        cursor = nil
         ring = nil
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.2
@@ -79,13 +102,13 @@ final class GhostCursor {
     /// Fly to an element's AXFrame (top-left screen coords) and pulse the highlight ring —
     /// called just before the action fires so the user's eye arrives with the agent's.
     func move(to axFrame: CGRect) {
-        guard let dot, let ring else { return }
+        guard let cursor, let ring else { return }
         let target = convert(axCenter: CGPoint(x: axFrame.midX, y: axFrame.midY))
 
         CATransaction.begin()
         CATransaction.setAnimationDuration(0.28)
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
-        dot.position = target
+        cursor.position = target // anchorPoint puts the arrow TIP on the target
         ring.position = target
         CATransaction.commit()
 

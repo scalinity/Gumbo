@@ -48,6 +48,18 @@ function runBashDaemonSide(script: string, timeoutMs: number): Promise<BashResul
   });
 }
 
+/** The model sometimes double-wraps: interpreter 'osascript' AND a script of
+ *  `osascript -e '…'` — which then fails as AppleScript (live demo, 2026-07-16). Unwrap the
+ *  `-e` bodies into plain AppleScript source. Anything else passes through untouched. */
+export function normalizeOsascript(script: string): string {
+  const trimmed = script.trim();
+  if (!/^osascript\b/.test(trimmed)) return trimmed;
+  const bodies = [...trimmed.matchAll(/-e\s+(?:'([^']*)'|"([^"]*)")/g)]
+    .map((m) => m[1] ?? m[2])
+    .filter((b) => b !== undefined && b !== '');
+  return bodies.length > 0 ? bodies.join('\n') : trimmed;
+}
+
 export interface MacDoDeps {
   macBridge: Pick<MacBridge, 'request'>;
   /** Notch confirm for a risky script; resolves false on deny/timeout (fail safe). */
@@ -67,7 +79,9 @@ export async function executeMacDo(
   interpreter: MacInterpreter,
   deps: MacDoDeps,
 ): Promise<string> {
-  const trimmed = script.trim();
+  // Normalize BEFORE gating so the policy patterns see the real AppleScript body, not an
+  // `osascript -e` wrapper the bash-shaped patterns weren't written for.
+  const trimmed = interpreter === 'osascript' ? normalizeOsascript(script) : script.trim();
   if (!trimmed) return 'Empty command — nothing to run.';
 
   const decision = macDoDecision(trimmed);

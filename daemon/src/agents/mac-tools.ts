@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { config } from '../config.ts';
 import { auditMacAction } from '../mac/audit.ts';
 import { macDoDecision, describeMacDo } from '../mac/policy.ts';
+import { normalizeOsascript } from '../mac/run.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import type { MacActionResult } from '../ws/protocol.ts';
 
@@ -32,6 +33,11 @@ function present(result: MacActionResult): string {
 export function createMacTools(taskId: string, macBridge: MacBridge, signal: AbortSignal, confirmScript: ConfirmScript) {
   let lastActKey = '';
   let repeatCount = 0;
+  // Goal-level stall detector (live demo, 2026-07-16): the exact-match repetition guard is
+  // dodged by VARYING the action each time while making zero progress (the System Settings
+  // flail — different refs/scripts, every diff empty). Count consecutive no-change acts
+  // regardless of target; three in a row = stalled, say so.
+  let noChangeStreak = 0;
 
   const axSnapshot = tool({
     name: 'ax_snapshot',
@@ -99,6 +105,17 @@ export function createMacTools(taskId: string, macBridge: MacBridge, signal: Abo
       );
       const summary = `${verb} ${ref ?? role ?? ''}`.trim();
       auditMacAction({ tier: 'subagent', kind: 'act', action: summary, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      const stalled = result.ok && result.output.includes('no observable change');
+      noChangeStreak = stalled ? noChangeStreak + 1 : 0;
+      if (noChangeStreak >= 3) {
+        noChangeStreak = 0;
+        return (
+          present(result) +
+          '\n\nNOTE: your last 3 actions all produced no observable change — you are not making progress. ' +
+          'Take a fresh ax_snapshot and switch strategy (a different element, a keyboard path, or run_script); ' +
+          "if this app can't be driven this way, stop and report that instead of continuing to try."
+        );
+      }
       return present(result);
     },
   });
@@ -114,7 +131,11 @@ export function createMacTools(taskId: string, macBridge: MacBridge, signal: Abo
       interpreter: z.enum(['osascript', 'shortcuts']),
       script: z.string().describe('AppleScript source, or a shortcut name/UUID'),
     }),
-    async execute({ interpreter, script }) {
+    async execute({ interpreter, script: rawScript }) {
+      // Unwrap a double-wrapped `osascript -e '…'` (the model sometimes writes the CLI form
+      // even though the interpreter is already osascript) so it runs — and so the policy
+      // table below gates the real AppleScript body.
+      const script = interpreter === 'osascript' ? normalizeOsascript(rawScript) : rawScript;
       // The sub-agent ingests untrusted on-screen text, so its shell sink is gated by the
       // SAME policy table as hot mac_do: reversible scripts auto-run; risky ones notch-confirm
       // (deny-on-timeout). A shortcut is opaque to the table — treat it as auto (its own

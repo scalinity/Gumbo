@@ -54,6 +54,10 @@ HOW TO WORK:
 - Start every task by checking whether it is ALREADY DONE (idempotency), and stop as soon as it is.
 - Prefer a keyboard shortcut (ax_act verb "key", e.g. "cmd+n") or run_script (AppleScript / a Shortcut)
   when it is more reliable than clicking — especially in browsers, which are poor Accessibility terrain.
+- NEVER navigate to a URL by typing into a browser's address bar: autocomplete can silently rewrite
+  what you typed into a different previously-visited URL (live demo failure, 2026-07-16). Navigate with
+  run_script instead — osascript 'open location "https://…"' or 'tell application "Google Chrome" to
+  open location "https://…"' — which loads exactly the URL you give it.
 - If an act keeps failing, take a fresh snapshot and check for a dialog or sheet blocking you (dismiss
   with Escape if it is safe). Do not flail forward; return to a known state.
 - A login prompt, a permission prompt, or anything asking for a password is a STOP: do not try to get

@@ -83,6 +83,45 @@ test('run_script gates a risky osascript through the notch; a declined script ne
   assert.equal(confirmConsulted, false, 'a reversible script must not consult the notch');
 });
 
+test('the stall detector fires on 3 consecutive no-change acts even when the actions VARY (demo fix)', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: '(no observable change — the action may not have taken effect)' }));
+  const act = byName(tools(bridge), 'ax_act');
+  // Three DIFFERENT targets — dodges the exact-match repetition guard, which is the point.
+  const argsFor = (ref: string) => JSON.stringify({ verb: 'press', ref, value: null, role: null, name: null, timeout_ms: 5000 });
+  const r1 = await act.invoke({}, argsFor('g1e1'));
+  const r2 = await act.invoke({}, argsFor('g1e2'));
+  const r3 = await act.invoke({}, argsFor('g1e3'));
+  assert.doesNotMatch(r1, /not making progress/i);
+  assert.doesNotMatch(r2, /not making progress/i);
+  assert.match(r3, /not making progress/i, 'third consecutive empty diff must warn');
+  assert.equal(bridge.calls.length, 3, 'the warning rides the result — no act is blocked');
+});
+
+test('a real diff resets the stall streak', async () => {
+  let empty = true;
+  const bridge = fakeBridge(() => ({ ok: true, output: empty ? '(no observable change — x)' : '+ Button "OK"' }));
+  const act = byName(tools(bridge), 'ax_act');
+  const argsFor = (ref: string) => JSON.stringify({ verb: 'press', ref, value: null, role: null, name: null, timeout_ms: 5000 });
+  await act.invoke({}, argsFor('g1e1'));
+  await act.invoke({}, argsFor('g1e2'));
+  empty = false;
+  await act.invoke({}, argsFor('g1e3')); // real diff — resets
+  empty = true;
+  const r4 = await act.invoke({}, argsFor('g1e4'));
+  assert.doesNotMatch(r4, /not making progress/i, 'streak restarted after the real diff');
+});
+
+test('run_script unwraps a double-wrapped `osascript -e` body (demo fix)', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'ok' }));
+  const list = tools(bridge, async () => false);
+  await byName(list, 'run_script').invoke(
+    {},
+    JSON.stringify({ interpreter: 'osascript', script: `osascript -e 'tell application "Google Chrome" to activate'` }),
+  );
+  assert.equal(bridge.calls.length, 1);
+  assert.equal(bridge.calls[0].script, 'tell application "Google Chrome" to activate', 'the -e body, not the CLI wrapper, reaches the shell');
+});
+
 test('check_permissions reports the health state', async () => {
   const list = tools(fakeBridge(() => ({ ok: false, output: 'stale cache — relaunch', error_kind: 'ax_unavailable', health: 'stale_cache' })));
   const out = await byName(list, 'check_permissions').invoke({}, JSON.stringify({}));

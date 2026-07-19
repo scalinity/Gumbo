@@ -8,7 +8,7 @@ import { join } from 'node:path';
 // before/after deltas, and under the canonical per-file-process `npm test` it is the sole
 // writer of its own home's audit file — same isolation the search-audit tests rely on.
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
-const { executeMacDo } = await import('./run.ts');
+const { executeMacDo, normalizeOsascript } = await import('./run.ts');
 const { config } = await import('../config.ts');
 
 const auditPath = join(config.home.logs, 'mac-audit.jsonl');
@@ -122,6 +122,34 @@ test('the REAL bash lane strips provider secrets from the child env but keeps ot
     delete process.env.OPENAI_API_KEY;
     delete process.env.MAC_TEST_SENTINEL;
   }
+});
+
+test('normalizeOsascript unwraps -e bodies; leaves plain AppleScript and odd forms alone (demo fix)', () => {
+  assert.equal(
+    normalizeOsascript(`osascript -e 'tell application "Google Chrome" to quit'`),
+    'tell application "Google Chrome" to quit',
+  );
+  assert.equal(
+    normalizeOsascript(`osascript -e 'set x to 1' -e 'return x'`),
+    'set x to 1\nreturn x',
+    'multiple -e chunks join as lines',
+  );
+  const plain = 'tell application "Notes" to activate';
+  assert.equal(normalizeOsascript(plain), plain, 'plain AppleScript passes through');
+  const file = 'osascript myscript.scpt';
+  assert.equal(normalizeOsascript(file), file, 'a file invocation with no -e is left alone');
+});
+
+test('the gate sees the UNWRAPPED osascript body — a double-wrapped risky script still confirms', async () => {
+  const bridge = fakeBridge();
+  let consulted = false;
+  const out = await executeMacDo(`osascript -e 'tell application "Finder" to empty trash'`, 'osascript', {
+    macBridge: bridge as never,
+    confirm: async () => { consulted = true; return false; },
+  });
+  assert.equal(consulted, true, 'the risky class inside the wrapper must reach the confirm');
+  assert.match(out, /didn't approve/i);
+  assert.equal(bridge.calls.length, 0, 'declined — nothing reaches the shell');
 });
 
 test('an empty command runs nothing and writes no audit line', async () => {
