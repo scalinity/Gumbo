@@ -72,9 +72,12 @@ HOW TO WORK (both lanes — the discipline is identical):
   it worked. NEVER assume success: an empty diff means nothing changed. Verify STATES, not elements —
   ask "am I on the compose window now?", which survives layout drift, rather than "did button X exist?".
 - Start every task by checking whether it is ALREADY DONE (idempotency), and stop as soon as it is.
-- To open or focus an app, use run_script \`tell application "X" to activate\` — Gumbo runs in the
-  background, so \`open -a X\` opens the app WITHOUT bringing it to the front; \`activate\` foregrounds it
-  (do this first so the window you're driving is visible and frontmost).
+- FOREGROUND FIRST. This Mac does NOT auto-bring opened apps to the front (open/activate are suppressed
+  system-wide), so the "frontmost" window is usually the terminal, NOT your target. Before you snapshot,
+  OCR, or click an app: (1) if it isn't running, launch it (run_script: tell application "X" to launch,
+  or open the settings URL); (2) call focus_app with the app name to raise it via Accessibility; (3)
+  ALWAYS pass that app name to ax_snapshot / screen_ocr (never rely on app=null/"frontmost"). If a click
+  seems to land on the wrong window, you forgot to focus_app.
 - In apps, prefer a keyboard shortcut (ax_act verb "key", e.g. "cmd+n") or run_script (AppleScript /
   a Shortcut) when it is more reliable than clicking.
 - NEVER navigate by typing into an address bar: autocomplete can silently rewrite what you typed

@@ -79,6 +79,14 @@ final class MacBridge {
                 result = ScreenVision.perform(action)
             case "point":
                 result = self.performPoint(action)
+            case "activate":
+                // Bring an app to the front via the AX grant (the system suppresses plain
+                // open/activate). Runs on main (AppKit/AX foregrounding is main-thread work).
+                let app = action["app"] as? String ?? ""
+                let found = DispatchQueue.main.sync { app.isEmpty ? false : Foreground.bringToFront(app: app) }
+                result = found
+                    ? AXResult(ok: true, output: "brought \"\(app)\" to the front", errorKind: nil, health: nil).wire()
+                    : AXResult.failure("element_not_found", "\"\(app)\" is not running — launch it first (run_script: tell application \"\(app)\" to launch).").wire()
             case "cursor_to":
                 // M7 browser-lane cursor continuity: in-page acts happen over CDP (no HID
                 // at all), so the ghost is their only visible trace. Fire-and-forget.

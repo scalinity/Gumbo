@@ -58,6 +58,14 @@ enum ScreenVision {
     }
 
     private static func capture(app: String?, region: CGRect?) -> CaptureOutcome {
+        // Bring the target app to the FRONT before capturing: click_point clicks global
+        // coordinates, so the window we OCR must be the one actually on top or the click
+        // lands on whatever occludes it (it was clicking Terminal). The system doesn't
+        // auto-foreground, so we raise via the AX grant. Small settle for the raise.
+        if let app, !app.isEmpty {
+            DispatchQueue.main.sync { _ = Foreground.bringToFront(app: app) }
+            usleep(250_000)
+        }
         // Content discovery triggers the Screen Recording prompt on first use.
         let contentResult: Result<SCShareableContent, Error> = wait { done in
             SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in

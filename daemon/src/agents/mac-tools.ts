@@ -311,6 +311,23 @@ export function createMacTools(
     },
   });
 
+  const focusApp = tool({
+    name: 'focus_app',
+    description:
+      'Bring an app to the FRONT and make it the active window. This Mac does NOT auto-foreground ' +
+      'opened apps (plain `open`/`activate` are suppressed system-wide), so ALWAYS call this on the ' +
+      'target app before you snapshot, OCR, or click it — otherwise you will read and click whatever ' +
+      'window happens to be on top (often the terminal). Gumbo raises it via the Accessibility grant. ' +
+      'If the app is not running yet, launch it first (run_script: tell application "X" to launch), then ' +
+      'focus_app. After focusing, snapshot to confirm the right window is frontmost.',
+    parameters: z.object({ app: z.string().describe('App name to bring to the front, e.g. "System Settings"') }),
+    async execute({ app }) {
+      const result = await macBridge.request({ kind: 'activate', app }, { signal });
+      auditMacAction({ tier: 'subagent', kind: 'act', action: `activate ${app}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      return present(result);
+    },
+  });
+
   const checkPermissions = tool({
     name: 'check_permissions',
     description:
@@ -324,5 +341,5 @@ export function createMacTools(
     },
   });
 
-  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, screenOcr, screenLook, clickPoint, requestHandoff];
+  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, focusApp, screenOcr, screenLook, clickPoint, requestHandoff];
 }

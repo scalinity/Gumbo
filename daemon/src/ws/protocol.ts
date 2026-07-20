@@ -33,7 +33,8 @@ export type MacAction =
   | { kind: 'ocr'; app: string | null; region: [number, number, number, number] | null } // on-device Vision OCR → text lines w/ global point centers
   | { kind: 'screenshot'; app: string | null; region: [number, number, number, number] | null; out_path: string } // PNG to a daemon-supplied workspace path
   | { kind: 'point'; verb: 'click' | 'double_click' | 'right_click'; x: number; y: number } // vision-lane action at global point coords
-  | { kind: 'cursor_to'; x: number; y: number }; // pure visualization: fly the ghost cursor (browser-lane acts ride CDP, not HID — the ghost is their only visible trace)
+  | { kind: 'cursor_to'; x: number; y: number } // pure visualization: fly the ghost cursor (browser-lane acts ride CDP, not HID — the ghost is their only visible trace)
+  | { kind: 'activate'; app: string }; // bring an app to the FRONT via the shell's AX grant (the system suppresses plain open/activate — Foreground.swift)
 
 /** SPEC §M6 typed errors (mirrors SearchError.kind — callers branch on kind, never message
  *  strings). The lane-level ones: secure_field is the executor's hard refusal,
