@@ -52,9 +52,12 @@ final class Recorder {
     private let queue = DispatchQueue(label: "ai.scalinity.gumbo.recorder")
     private var active = false
 
-    /// A typing burst: consecutive keystrokes into one focused field, resolved ONCE at
-    /// burst start. isSecure freezes at burst start too — content of a secure burst is
-    /// never accumulated at all.
+    /// A typing burst: consecutive keystrokes into one focused field. The field is
+    /// RE-RESOLVED on every keystroke (the frozen-at-start decision was the review's 🔴:
+    /// programmatic focus moves leaked content under the old field's sensitivity): a
+    /// resolved focus change flushes and re-decides; an unresolvable read drops that
+    /// keystroke's content without touching the burst. isSecure only ever reflects a
+    /// RESOLVED field, and content of a secure burst is never accumulated at all.
     private struct Burst {
         var text: String
         let isSecure: Bool
@@ -161,11 +164,20 @@ final class Recorder {
         // burst-start-only decision failed open when focus moved programmatically
         // mid-burst — auto-advancing forms (card number → CVV) shift focus with no
         // click/Tab/idle, so keystrokes kept accumulating under the ORIGINAL field's
-        // sensitivity and label. Sensitivity fails CLOSED: an unresolvable focused
-        // element while typing is treated as secure (content dropped; the compiled step
-        // becomes a handoff), never as plain text.
+        // sensitivity and label.
         let field = executor.focusedFieldInfo()
-        let secureNow = field == nil ? true : (field!.isSecure || Self.isSecretLabel(field!.name))
+        // nil = UNCERTAIN, not "secure" (fix-delta review 🟡, corroborated): treating a
+        // transiently failed AX read as a secure field fragmented ordinary sentences and
+        // minted a phantom secure_input → a bogus handoff on replay. Content still fails
+        // CLOSED — this keystroke is dropped — but burst identity and sensitivity only
+        // ever change on a RESOLVED field. Residual (accepted): an app whose focus NEVER
+        // resolves records no typing at all — an honest gap in the demonstration, never
+        // a leak (its clicks/scrolls still record).
+        guard let field else {
+            if burst != nil { burst!.lastAt = now } // keep the burst alive; the char is dropped
+            return
+        }
+        let secureNow = field.isSecure || Self.isSecretLabel(field.name)
         let idle = burst == nil || now - (burst?.lastAt ?? 0) > Self.burstIdleSeconds
         let moved = burst != nil && !Self.sameField(burst!.field, field)
         let escalated = burst != nil && secureNow && !burst!.isSecure
@@ -184,10 +196,12 @@ final class Recorder {
         burst = b
     }
 
-    /// Field identity for the mid-burst focus-move check. Descriptor equality is the best
-    /// AX offers (element refs aren't stable identities across reads); two ADJACENT
-    /// identical-descriptor fields would merge bursts, but the per-key `escalated` check
-    /// still catches any secure transition between them.
+    /// Field identity for the mid-burst focus-move check. Descriptor equality is the
+    /// best AX offers (element refs aren't stable identities across reads). Two ADJACENT
+    /// identical-descriptor fields merge bursts — safe, because identical descriptors
+    /// necessarily share sensitivity (it derives from subrole+name, both compared here).
+    /// That same fact makes `escalated` fire only alongside `moved` today; it stays as a
+    /// belt in case this comparison is ever loosened.
     private static func sameField(_ a: AXHitInfo?, _ b: AXHitInfo?) -> Bool {
         guard let a, let b else { return a == nil && b == nil }
         return a.appName == b.appName && a.windowTitle == b.windowTitle && a.role == b.role

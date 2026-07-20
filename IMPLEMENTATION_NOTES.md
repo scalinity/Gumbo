@@ -2487,3 +2487,24 @@ non-obvious and worth keeping:
   tool invokes (fire → queue → replay → gated run_script → parked escalate → done) — the M6
   "test through the tool" lesson at pipeline scale. `config.teach`/`config.routines` values are
   mutated+restored in tests (no injectable-config idiom exists; keep the restore in finally).
+
+### M8 review flow — /review-2 → /address → /review-2 on the fix delta (2026-07-20)
+
+- First pass (2 Fable-run Opus agents): 1 🔴 + 5 🟡 + 4 🔵, all addressed. The 🔴 was
+  CORROBORATED and genuine: the recorder froze secure-field sensitivity at burst START, so a
+  programmatic mid-burst focus move (auto-advancing card→CVV forms) leaked content under the
+  old field's label — past BOTH the shell gate and the daemon belt. The debugger's other
+  standout: self-heal recompiled from a trace missing the deterministically-replayed prefix
+  (engine invokes bypass the Agent stream), so a healed procedure LOST its login/navigation
+  steps — fixed by having the engine write the same tool.call/tool.result events the runner
+  streams (dashboard replay visibility came free).
+- Second pass on the fix delta re-earned the discipline's keep A THIRD time: both agents
+  independently found that the 🔴 fix OVER-corrected — treating a transiently-nil AX focus
+  read as "secure" fragmented ordinary sentences and minted a phantom secure_input → bogus
+  handoff on replay. Refined: nil = UNCERTAIN (drop that keystroke's content, keep the burst;
+  fail closed on content, never on burst identity); only a RESOLVED secure field re-bursts.
+  Residual on record: an app whose focus NEVER resolves records no typing at all (honest gap,
+  never a leak). The recurring lesson, now three-for-three: the address pass's own fix is
+  where the next bug lives — always re-review the delta.
+- Final: daemon 426/1-skip, shell builds. Merge gate: the user's live demos
+  (teach → replay → schedule → unattended pause).
