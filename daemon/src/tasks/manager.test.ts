@@ -7,7 +7,7 @@ import { join } from 'node:path';
 // Set GUMBO_HOME before importing config so task workspaces land in a temp dir.
 process.env.GUMBO_HOME = mkdtempSync(join(tmpdir(), 'gumbo-mgr-'));
 const { Store } = await import('../events/store.ts');
-const { TaskManager } = await import('./manager.ts');
+const { TaskManager, makeStandDown } = await import('./manager.ts');
 const { config } = await import('../config.ts');
 for (const dir of [config.home.tasks]) mkdirSync(dir, { recursive: true });
 
@@ -223,4 +223,46 @@ test('sendToSession refuses a finished computer task with a clear message', () =
   const now = Date.now();
   store.createTask({ id: 'mac2', kind: 'computer', title: 'drive', status: 'done', workspace: '/tmp/x', created_at: now, updated_at: now });
   assert.throws(() => manager.sendToSession('mac2', 'hello'), /already finished/);
+});
+
+// ——— kill-switch stand-down around notch confirms (live-demo Catch-22) ———
+// Answering ANY notch prompt takes the user's mouse — the tap must read that as the
+// answer, not an abort. Pinned after the browser host confirm died to the kill switch
+// the moment he moved toward Approve.
+
+test('makeStandDown brackets a confirm with setHandoff true→false and passes the result through', async () => {
+  const calls: boolean[] = [];
+  const standDown = makeStandDown({ setHandoff: (a: boolean) => calls.push(a) });
+  const result = await standDown(async () => {
+    assert.deepEqual(calls, [true], 'stood down BEFORE the confirm runs');
+    return 'approved';
+  });
+  assert.equal(result, 'approved');
+  assert.deepEqual(calls, [true, false], 're-armed after the confirm resolved');
+});
+
+test('makeStandDown keeps the tap down until the LAST overlapping confirm resolves (counter, not boolean)', async () => {
+  const calls: boolean[] = [];
+  const standDown = makeStandDown({ setHandoff: (a: boolean) => calls.push(a) });
+  let releaseA!: () => void;
+  let releaseB!: () => void;
+  const a = standDown(() => new Promise<void>((r) => { releaseA = r; }));
+  const b = standDown(() => new Promise<void>((r) => { releaseB = r; }));
+  releaseA();
+  await a;
+  assert.ok(!calls.includes(false), 'first confirm resolving must NOT re-arm under the second');
+  releaseB();
+  await b;
+  assert.equal(calls.at(-1), false, 're-armed once the last confirm resolved');
+  assert.equal(calls.filter((c) => c === false).length, 1, 'exactly one re-arm');
+});
+
+test('makeStandDown re-arms even when the confirm throws, and the error propagates', async () => {
+  const calls: boolean[] = [];
+  const standDown = makeStandDown({ setHandoff: (a: boolean) => calls.push(a) });
+  await assert.rejects(
+    () => standDown(async () => { throw new Error('hub gone'); }),
+    /hub gone/,
+  );
+  assert.deepEqual(calls, [true, false], 'a throwing confirm must not leave the kill switch soft');
 });

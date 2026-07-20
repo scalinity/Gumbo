@@ -18,6 +18,27 @@ export type ApprovePlanFn = (taskId: string, taskTitle: string, plan: string, si
 /** Builds the runner for a Claude session — swapped for a fake in tests (no live query()). */
 export type RunnerFactory = (opts: ClaudeRunnerOpts) => ClaudeSessionRunner;
 
+/** Stand the kill switch down while the user answers something. EVERY notch prompt during a
+ *  computer task needs his cursor/keys, so reaching Approve must not itself abort the task
+ *  (live demo: the browser host confirm died to the tap the moment he moved the mouse —
+ *  only the handoff path had the bracket). Counter, not boolean: the model can issue
+ *  parallel tool calls whose confirms overlap, and the first to resolve must not re-arm
+ *  the tap under the one still pending. Re-arms on throw; one task drives at a time, so a
+ *  single counter per task is enough. */
+export function makeStandDown(bridge: Pick<MacBridge, 'setHandoff'>) {
+  let pending = 0;
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    pending += 1;
+    bridge.setHandoff(true);
+    try {
+      return await fn();
+    } finally {
+      pending -= 1;
+      if (pending === 0) bridge.setHandoff(false);
+    }
+  };
+}
+
 export class TaskManager {
   private aborts = new Map<string, AbortController>();
   private finished = new Set<string>();
@@ -78,13 +99,16 @@ export class TaskManager {
 
     const abort = new AbortController();
     this.aborts.set(id, abort);
-    // Risky sub-agent scripts route to the same notch confirm as everything else (deny on
-    // timeout / no shell). Only computer-use tasks use it; research tasks pass undefined.
+    // ALL of a computer task's notch prompts (risky-script confirms, browser host
+    // approvals, submit gates, the handoff itself) ride standDown: answering a prompt
+    // takes the user's mouse, so the kill switch must treat that input as the answer, not
+    // an abort. Deny on timeout / no shell as always; research tasks pass undefined.
+    const standDown = taskType === 'mac' ? makeStandDown(this.macBridge!) : undefined;
     // M7: the browser lane labels its own confirms via the optional title param.
     const confirmScript =
       taskType === 'mac'
         ? (detail: string, confirmTitle = 'Allow this Mac script?', rememberHost?: string) =>
-            this.escalate(id, title, { title: confirmTitle, detail, rememberHost }, abort.signal)
+            standDown!(() => this.escalate(id, title, { title: confirmTitle, detail, rememberHost }, abort.signal))
         : undefined;
     // M7 cooperative handoff: pause (needs_input announces it aloud), stand the kill
     // switch down so the user's own typing IS the handoff, wait for his notch "Done"
@@ -94,15 +118,13 @@ export class TaskManager {
       taskType === 'mac'
         ? async (reason: string) => {
             this.setTaskStatus(id, 'needs_input', reason);
-            this.macBridge!.setHandoff(true);
             try {
-              return await this.escalate(
+              return await standDown!(() => this.escalate(
                 id, title,
                 { title: 'Your turn — tap Done when finished', detail: reason, timeoutMs: config.mac.handoffTimeoutMs },
                 abort.signal,
-              );
+              ));
             } finally {
-              this.macBridge!.setHandoff(false);
               // Restore 'running' only if the task is still live. On a kill-switch/cancel
               // DURING the handoff, escalate resolves false and finish() hasn't run yet, so
               // finished.has(id) is still false — the abort check (mirroring reviewPlan)

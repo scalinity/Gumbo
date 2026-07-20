@@ -108,9 +108,12 @@ export class MacBridge {
     if (this.activeTasks === 0) this.hub.broadcast({ type: 'mac_task', active: false }, 'shell');
   }
 
-  /** M7 cooperative handoff: while active, the shell's kill switch treats the user's input
-   *  as the handoff (not an abort) and the ghost cursor hides. Edge-triggered like
-   *  mac_task; single flag — one computer task drives at a time by construction. */
+  /** "the user's input is expected": while active, the shell's kill switch treats his input
+   *  as the answer (not an abort) and the ghost cursor hides. Covers the M7 cooperative
+   *  handoff AND every notch confirm a computer task raises (host approvals, risky
+   *  scripts, submit gates) — reaching the Approve button takes his mouse (live-demo
+   *  Catch-22; manager.makeStandDown is the one bracket). Edge-triggered like mac_task;
+   *  single flag — one computer task drives at a time by construction. */
   setHandoff(active: boolean) {
     if (this.handoffActive === active) return;
     this.handoffActive = active;
