@@ -157,13 +157,21 @@ final class Recorder {
             return
         }
         let now = CFAbsoluteTimeGetCurrent()
-        if burst == nil || now - (burst?.lastAt ?? 0) > Self.burstIdleSeconds {
-            flushBurst()
-            // Resolve the focused field ONCE per burst — and decide sensitivity NOW,
-            // before a single character is looked at.
-            let field = executor.focusedFieldInfo()
-            let secure = (field?.isSecure ?? false) || Self.isSecretLabel(field?.name)
-            burst = Burst(text: "", isSecure: secure, field: field, lastAt: now)
+        // Re-resolve the focused field on EVERY keystroke (review 🔴, corroborated): a
+        // burst-start-only decision failed open when focus moved programmatically
+        // mid-burst — auto-advancing forms (card number → CVV) shift focus with no
+        // click/Tab/idle, so keystrokes kept accumulating under the ORIGINAL field's
+        // sensitivity and label. Sensitivity fails CLOSED: an unresolvable focused
+        // element while typing is treated as secure (content dropped; the compiled step
+        // becomes a handoff), never as plain text.
+        let field = executor.focusedFieldInfo()
+        let secureNow = field == nil ? true : (field!.isSecure || Self.isSecretLabel(field!.name))
+        let idle = burst == nil || now - (burst?.lastAt ?? 0) > Self.burstIdleSeconds
+        let moved = burst != nil && !Self.sameField(burst!.field, field)
+        let escalated = burst != nil && secureNow && !burst!.isSecure
+        if idle || moved || escalated {
+            flushBurst() // emit what the PREVIOUS field legitimately received…
+            burst = Burst(text: "", isSecure: secureNow, field: field, lastAt: now) // …then re-decide
             scheduleIdleFlush()
         }
         burst?.lastAt = now
@@ -174,6 +182,16 @@ final class Recorder {
             b.text += raw.chars
         }
         burst = b
+    }
+
+    /// Field identity for the mid-burst focus-move check. Descriptor equality is the best
+    /// AX offers (element refs aren't stable identities across reads); two ADJACENT
+    /// identical-descriptor fields would merge bursts, but the per-key `escalated` check
+    /// still catches any secure transition between them.
+    private static func sameField(_ a: AXHitInfo?, _ b: AXHitInfo?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        return a.appName == b.appName && a.windowTitle == b.windowTitle && a.role == b.role
+            && a.subrole == b.subrole && a.identifier == b.identifier && a.name == b.name
     }
 
     /// Emit the pending typing burst as one step. Secure bursts become a content-free

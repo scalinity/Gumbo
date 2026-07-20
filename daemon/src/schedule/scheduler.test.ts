@@ -261,3 +261,23 @@ test('M8: cancelling a recurring routine\'s pending row ends the whole series', 
   await drainMicrotasks();
   assert.equal(fired.length, 0);
 });
+
+test('M8 fix: a CORRUPT recurrence string still marks fired (at-most-once) and ends the chain loudly', async () => {
+  const { store, scheduler, fired, events } = setup();
+  // Write a routine row whose recurrence is not JSON (only reachable via corruption —
+  // the guard is defense-in-depth; an unguarded throw here rolled back mark-fired and
+  // re-fired the row every poll forever).
+  store.createSchedule({
+    id: 'corrupt1', fire_at: Date.now() - 1000, kind: 'routine', text: '{"procedure":"x"}',
+    status: 'pending', eventkit_id: null, created_at: Date.now(), recurrence: 'not json', series_id: 'corrupt1',
+  });
+  assert.doesNotThrow(() => scheduler.sweepNow());
+  await drainMicrotasks();
+  assert.equal(fired.length, 1, 'the occurrence still fires');
+  assert.equal(store.getSchedule('corrupt1')?.status, 'fired', 'mark-fired survives the bad recurrence');
+  assert.ok(events.some((e) => e.type === 'session.error' && /recurrence/.test(String((e.payload as { message?: string }).message))), 'the chain-end is loud');
+  fired.length = 0;
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(fired.length, 0, 'no re-fire loop — at-most-once holds');
+});

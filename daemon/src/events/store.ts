@@ -120,6 +120,12 @@ export class Store {
     `);
     this.migrateMemoryTable();
     this.migrateScheduleColumns();
+    // M8 procedure readers (getProcedure/saveProcedure/listProcedures) filter kind+query
+    // on a table that grows unbounded with page-sized search bodies — without this they
+    // full-scan on voice-latency paths (review 🟡). Created AFTER the migration: it
+    // references the version column, which a pre-M8 table doesn't have yet (creating it
+    // in the main exec block threw before the migration could run).
+    this.db.exec('CREATE INDEX IF NOT EXISTS memory_kind_query ON memory(kind, query, version)');
   }
 
   /** M8 additive columns on a pre-M8 schedule table (ALTER ADD COLUMN is non-breaking —

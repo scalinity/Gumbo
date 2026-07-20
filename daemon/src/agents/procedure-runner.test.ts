@@ -68,6 +68,7 @@ function harness(opts: {
   return {
     calls,
     browserActs,
+    store,
     run: (procedure: Procedure) =>
       replayProcedure({
         taskId: 'rp1',
@@ -245,4 +246,17 @@ test('fallbackBrief carries the skeleton, the drift point, and the do-not-redo r
   assert.match(brief, /✓ 1\. Click New Note/);
   assert.match(brief, /1\. \[ax\] Click New Note/);
   assert.match(brief, /do NOT redo the completed steps/);
+});
+
+test('replayed steps land in the tool.call/tool.result trace (self-heal must see the replayed prefix)', async () => {
+  const h = harness({
+    bridge: (a) => (a.kind === 'resolve' ? { ok: true, output: 'g1e7' } : { ok: true, output: '+ changed' }),
+  });
+  const result = await h.run(AX_PROC);
+  assert.equal(result.outcome, 'completed');
+  const calls = h.store.listEvents({ taskId: 'rp1' }).filter((e) => e.type === 'tool.call');
+  const results = h.store.listEvents({ taskId: 'rp1' }).filter((e) => e.type === 'tool.result');
+  assert.ok(calls.some((e) => (e.payload as { name?: string }).name === 'ax_act'), 'engine acts appear in the trace');
+  assert.ok(calls.some((e) => (e.payload as { name?: string }).name === 'focus_app'), 'engine focus appears in the trace');
+  assert.equal(calls.length, results.length, 'every call has its result');
 });

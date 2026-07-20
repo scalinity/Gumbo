@@ -16,6 +16,7 @@ import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
 import { computeNextFire, describeRecurrence, parseRecurrence } from '../schedule/recurrence.ts';
+import { validateProcedure } from '../agents/procedures.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import { executeMacDo } from '../mac/run.ts';
 
@@ -617,10 +618,15 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         }
         if (action === 'save_last_run') {
           if (!deps.procedures) return 'Procedure saving is not wired up right now.';
+          // Replay/routine runs are excluded (review 🔵): "save that" means the ORIGINAL
+          // run, not a re-distillation of a replay's own trace (they carry a
+          // procedure.replay event; teaching sessions are excluded by title).
           const last = store
             .listTasks(50)
-            .find((t) => t.kind === 'computer' && t.status === 'done' && !t.title.startsWith('Teaching:'));
-          if (!last) return 'No finished computer task to save — Gumbo has to complete one first.';
+            .find((t) =>
+              t.kind === 'computer' && t.status === 'done' && !t.title.startsWith('Teaching:')
+              && store.getLatestEventPayload(t.id, 'procedure.replay') === null);
+          if (!last) return 'No finished computer task to save — Gumbo has to complete one first (replays of already-saved procedures don\'t count).';
           const saved = await deps.procedures.saveFromTask(last.id, name?.trim() || last.title);
           return `Saved "${saved.name}" (version ${saved.version}, ${saved.stepCount} steps) as a reusable procedure.`;
         }
@@ -659,14 +665,20 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
           const saved = store.listProcedures(5).map((p) => `"${p.name}"`).join(', ');
           return `No saved procedure matches "${query}". ${saved ? `Saved procedures: ${saved}.` : 'Nothing has been saved yet.'} Offer to do it as a normal task instead (spawn_subagent) — don't guess.`;
         }
-        const parsed = JSON.parse(row.body) as { goal?: string };
+        // Validate on READ like the routine path does (review 🟡, corroborated): both
+        // entry points to the replay engine share one guard, and a schema-drifted or
+        // corrupted row gets a clean refusal instead of reaching the engine raw.
+        let procedure = null;
+        try {
+          procedure = validateProcedure(JSON.parse(row.body), row.name);
+        } catch { /* fall through to the guard below */ }
+        if (!procedure) {
+          return `The saved procedure "${row.name}" is corrupt or from an incompatible version — teach it again or save it from a fresh run.`;
+        }
         const brief =
-          `Replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${parsed.goal ?? row.title}.` +
+          `Replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${procedure.goal}.` +
           (notes ? ` Run-specific notes from the user: ${notes}` : '');
-        const task = manager.spawnSubagent(row.name, brief, 'mac', {
-          procedure: JSON.parse(row.body),
-          notes: notes ?? null,
-        });
+        const task = manager.spawnSubagent(row.name, brief, 'mac', { procedure, notes: notes ?? null });
         return `Running the saved procedure "${row.name}" (internal task_id ${task.id} — never say it aloud). You will be told when it finishes.`;
       } catch (err) {
         return `Could not start that: ${err instanceof Error ? err.message : String(err)}`;

@@ -412,6 +412,7 @@ test('M8: save_last_run distills the newest finished computer task (never a teac
       { id: 'run9', kind: 'computer', status: 'done', title: 'Check invoices' },
       { id: 'old', kind: 'computer', status: 'done', title: 'Older run' },
     ],
+    getLatestEventPayload: () => null, // none of these are replay runs
   };
   const tools = createOrchestratorTools(
     manager as never,
@@ -530,4 +531,59 @@ test('M8: schedule_routine is registered; known procedures schedule, unknown one
   const bad = await sched.invoke({}, JSON.stringify({ procedure: 'file expenses', fire_at: null, recurrence: { freq: 'weekly', hour: 9, minute: 0, weekday: null, nth: null, day: null } }));
   assert.match(bad, /incomplete/);
   assert.equal(scheduled.length, 1);
+});
+
+test('M8 fix: run_procedure refuses a corrupt/schema-drifted body instead of feeding the engine raw JSON', async () => {
+  const manager = { spawnSubagent: () => { throw new Error('must not spawn'); } };
+  const store = {
+    getProcedure: () => ({ name: 'broken', version: 1, title: 'broken — x', body: '{"goal":"x","steps":[{"lane":"teleport","desc":"zap"}]}' }),
+    searchProcedures: () => [],
+    listProcedures: () => [],
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+  });
+  const runProc = tools.find((t) => (t as { name: string }).name === 'run_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  const out = await runProc.invoke({}, JSON.stringify({ procedure: 'broken', notes: null }));
+  assert.match(out, /corrupt or from an incompatible version/);
+});
+
+test('M8 fix: save_last_run skips replay/routine runs — "save that" means the ORIGINAL run', async () => {
+  const saved: string[] = [];
+  const manager = { startTeaching: async () => ({}), stopTeaching: async () => ({ name: '', stepCount: 0 }), cancelTeaching: () => false };
+  const store = {
+    listTasks: () => [
+      { id: 'replay1', kind: 'computer', status: 'done', title: 'Check invoices' }, // newest — but a replay
+      { id: 'orig1', kind: 'computer', status: 'done', title: 'Check invoices' },
+    ],
+    getLatestEventPayload: (taskId: string, type: string) =>
+      taskId === 'replay1' && type === 'procedure.replay' ? { outcome: 'completed' } : null,
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+    procedures: {
+      saveFromTask: async (taskId: string, name: string) => { saved.push(taskId); return { name, version: 1, stepCount: 2 }; },
+    } as never,
+  });
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  await teach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'check invoices' }));
+  assert.deepEqual(saved, ['orig1'], 'the replay run must be skipped in favor of the original');
 });

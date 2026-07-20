@@ -19,6 +19,11 @@ import type { BrowserSurface } from './browser-tools.ts';
 import type { ToolObservation } from './mac-tools.ts';
 import { completeOnce, type CompleteFn, type Procedure, type ProcedureStep } from './procedures.ts';
 
+/** The SDK tool surface the engine drives. CONTRACT (review 🔵): the ctx argument is
+ *  passed as `{}` — Gumbo's mac/browser tools never read the SDK RunContext (the same
+ *  assumption wrapSteering/wrapUnattendedApps make, pinned by the suite calling
+ *  invoke({}, …) throughout). A future ctx-reading tool must not join the replay
+ *  toolset without extending this seam. */
 type InvokableTool = { name: string; invoke: (ctx: unknown, args: string) => Promise<unknown> };
 
 export interface ReplayDeps {
@@ -65,7 +70,16 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
   const invoke = async (name: string, args: Record<string, unknown>): Promise<ToolObservation | null> => {
     const t = tools.get(name);
     if (!t) throw new Error(`replay needs tool ${name} but it is not in the toolset`);
-    await t.invoke({}, JSON.stringify(args));
+    // Record the SAME tool.call/tool.result trace the Agent loop's stream emits (review
+    // 🟡): the engine bypasses the runner, and without these events a post-drift
+    // self-heal recompiled from ONLY the fallback continuation — the healed version lost
+    // its replayed prefix (e.g. "navigate + log in") and degraded on the next run. Also
+    // gives the dashboard live replay visibility for free.
+    const limit = config.activityLogMaxChars;
+    const argsJson = JSON.stringify(args);
+    deps.store.addEvent(deps.taskId, 'tool.call', { name, args: argsJson.slice(0, limit) });
+    const out = await t.invoke({}, argsJson);
+    deps.store.addEvent(deps.taskId, 'tool.result', { output: String(out ?? '').slice(0, limit) });
     lastObs = deps.takeObservation();
     return lastObs;
   };
@@ -255,7 +269,10 @@ async function checkpointPass(
   const toolObj = deps.tools.find((x) => x.name === snapTool);
   let state = '';
   if (toolObj) {
-    const out = await toolObj.invoke({}, JSON.stringify(t));
+    const argsJson = JSON.stringify(t);
+    deps.store.addEvent(deps.taskId, 'tool.call', { name: snapTool, args: argsJson.slice(0, config.activityLogMaxChars) });
+    const out = await toolObj.invoke({}, argsJson);
+    deps.store.addEvent(deps.taskId, 'tool.result', { output: String(out ?? '').slice(0, config.activityLogMaxChars) });
     deps.takeObservation(); // consume — checkpoints must not leave a stale observation behind
     state = typeof out === 'string' ? out.slice(0, 6000) : '';
   }

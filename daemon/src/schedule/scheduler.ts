@@ -69,7 +69,16 @@ export class Scheduler {
         const eventType = row.kind === 'routine' ? 'routine.fired' : 'reminder.fired';
         this.store.addEvent(null, eventType, { id: row.id, kind: row.kind, text: row.text, fire_at: row.fire_at });
         if (row.recurrence) {
-          const rec = parseRecurrence(JSON.parse(row.recurrence));
+          // Guarded parse (review 🟡, corroborated): a non-JSON recurrence would THROW
+          // here, roll back the mark-fired (breaking at-most-once — the row would
+          // re-fire every poll forever) and escape the interval timer. A corrupt row
+          // degrades to the same loud chain-end as a schema-invalid one.
+          let rec = null;
+          try {
+            rec = parseRecurrence(JSON.parse(row.recurrence));
+          } catch {
+            rec = null;
+          }
           if (rec) {
             this.store.createSchedule({
               id: randomUUID().slice(0, 8),

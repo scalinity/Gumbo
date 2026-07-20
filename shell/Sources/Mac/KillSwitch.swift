@@ -90,6 +90,9 @@ final class KillSwitch {
         // adjacent to some interaction of the user's (an unattended routine RE-arming the
         // instant he clicks Approve on its parked confirm is the sharp case: his trailing
         // mouse drift must not abort the resuming task). Steady-state stays hair-trigger.
+        // Accepted residual (review 🔵, documented-and-kept): an ATTENDED fresh arm gets
+        // the same 1.5 s window — the shell can't distinguish the cases (mac_task is one
+        // message), and no synthetic act can land inside one model turn anyway.
         handoffEndedAt = CFAbsoluteTimeGetCurrent()
         return true
     }

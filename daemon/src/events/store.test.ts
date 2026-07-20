@@ -210,3 +210,27 @@ test('M8: eventsSince + latestPayloadOf drive the away-items watermark', () => {
   assert.deepEqual(since.map((e) => e.type), ['routine.paused', 'announce.pending'], 'only items after the watermark, oldest first');
   assert.deepEqual(s.eventsSince([], 0), [], 'empty type list is a no-op');
 });
+
+test('M8 fix: the memory_kind_query index exists on fresh DBs AND survives the rebuild migration', () => {
+  const hasIndex = (db: InstanceType<typeof DatabaseSync>) =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='memory_kind_query' AND tbl_name='memory'").all()).length === 1;
+  assert.ok(hasIndex(raw), 'fresh DB carries the procedure-reader index');
+
+  const oldPath = join(mkdtempSync(join(tmpdir(), 'gumbo-idx-migrate-')), 'gumbo.db');
+  const old = new DatabaseSync(oldPath);
+  old.exec(`
+    CREATE TABLE memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INT, task_id TEXT,
+      kind TEXT CHECK(kind IN ('search_result','task_output')),
+      provider TEXT, query TEXT, url TEXT, title TEXT, body TEXT
+    );
+    CREATE VIRTUAL TABLE memory_fts USING fts5(title, body, content='memory', content_rowid='id');
+    CREATE TRIGGER memory_fts_insert AFTER INSERT ON memory BEGIN
+      INSERT INTO memory_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+    END;
+  `);
+  old.close();
+  new Store(oldPath); // triggers the rebuild — the index must be recreated on the NEW table
+  const raw3 = new DatabaseSync(oldPath);
+  assert.ok(hasIndex(raw3), 'the rebuild migration must recreate the index (the rename carried the old one to memory_old and the drop killed it)');
+});
