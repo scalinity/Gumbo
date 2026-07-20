@@ -62,6 +62,23 @@ export function hostAllowed(url: string): boolean {
 export function rememberHost(host: string) {
   const set = load();
   set.add(normalizeHost(host));
+  persist(set);
+}
+
+/** Drop a remembered host (dashboard management). Config-base entries are code-owned and
+ *  not removable here. */
+export function forgetHost(host: string) {
+  const set = load();
+  set.delete(normalizeHost(host));
+  persist(set);
+}
+
+/** For /api/hosts + the dashboard section: what flows freely and why. */
+export function listHosts(): { base: string[]; remembered: string[] } {
+  return { base: config.browser.allowedHosts.map(normalizeHost), remembered: [...load()].sort() };
+}
+
+function persist(set: Set<string>) {
   mkdirSync(config.home.browser, { recursive: true });
   writeFileSync(hostsFile(), JSON.stringify([...set].sort(), null, 2) + '\n');
 }

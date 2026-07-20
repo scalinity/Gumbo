@@ -4,6 +4,7 @@ import { auditMacAction } from '../mac/audit.ts';
 import { hostAllowed, hostOf } from '../mac/hosts.ts';
 import { browserActDecision } from '../mac/policy.ts';
 import type { BrowserActInput, BrowserResult } from '../browser/client.ts';
+import type { MacBridge } from '../ws/mac.ts';
 import type { ConfirmScript } from './mac-tools.ts';
 
 /** The slice of BrowserClient the tools need — structural, so tests inject a plain fake
@@ -18,6 +19,8 @@ export interface BrowserSurface {
   refInfo(ref: string): { role: string; name: string | null } | null;
   formMethod(ref: string | null): Promise<string | null>;
   currentUrl(): string | null;
+  /** Global-screen center of a ref's element — the ghost cursor's target (null = don't fly). */
+  screenPointForRef(ref: string): Promise<{ x: number; y: number } | null>;
 }
 
 /** Same presentation contract as the AX lane: raw output on success, the typed kind up
@@ -41,19 +44,21 @@ function present(result: BrowserResult): string {
  * (snapshot, tab list) don't. All of it is sub-agent-only — the realtime registry never
  * sees these tools (tools.test.ts pins that).
  */
-export function createBrowserTools(taskId: string, surface: BrowserSurface, signal: AbortSignal, confirmScript: ConfirmScript) {
+export function createBrowserTools(taskId: string, surface: BrowserSurface, signal: AbortSignal, confirmScript: ConfirmScript, macBridge?: MacBridge) {
   // Hosts the user approved for THIS task (deny is not memoized — he may change his mind).
   const approvedHosts = new Set<string>();
   let lastActKey = '';
   let repeatCount = 0;
   let noChangeStreak = 0;
 
-  /** null = approved (or not a web host at all); otherwise the refusal message. */
+  /** null = approved (or not a web host at all); otherwise the refusal message. The
+   *  notch panel carries a "Remember <host>" toggle (rememberHost) — with it, approval
+   *  writes through to the allowlist and the site never asks again. */
   async function ensureHostApproved(url: string | null, what: string): Promise<string | null> {
     if (!url) return null;
     const host = hostOf(url);
     if (!host || hostAllowed(url) || approvedHosts.has(host)) return null;
-    const approved = await confirmScript(`${what} ${host} — allow this site for the current task?`, 'Open this website?');
+    const approved = await confirmScript(`${what} ${host} — allow this site for the current task?`, 'Open this website?', host);
     if (approved) {
       approvedHosts.add(host);
       return null;
@@ -131,6 +136,13 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
         gate = 'confirmed';
       }
 
+      // Cursor continuity (pure visualization): in-page acts ride CDP — no HID at all —
+      // so fly the ghost to the element first. Fire-and-forget; never delays the act.
+      if (ref && macBridge) {
+        void surface.screenPointForRef(ref).then((pt) => {
+          if (pt) void macBridge.request({ kind: 'cursor_to', x: pt.x, y: pt.y }, { timeoutMs: 2000 });
+        }).catch(() => {});
+      }
       const result = await surface.act({ verb, ref, value, role, name, timeout_ms });
       auditMacAction({ tier: 'subagent', kind: 'browser', action: `${verb} ${info?.name ?? ref ?? role ?? ''}`.trim(), gate, ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url });
       const stalled = result.ok && result.no_change === true;

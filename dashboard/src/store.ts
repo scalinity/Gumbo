@@ -34,6 +34,13 @@ export interface ScheduleItem {
   status: 'pending' | 'fired' | 'cancelled';
 }
 
+// M7: the computer-use host allowlist (browser lane + script-lane URL gate). base is
+// config-owned (read-only here); remembered is managed via /api/hosts.
+export interface HostList {
+  base: string[];
+  remembered: string[];
+}
+
 interface GumboStore {
   connected: boolean;
   sessionState: SessionState;
@@ -41,11 +48,13 @@ interface GumboStore {
   tasks: Task[];
   images: GalleryImage[];
   schedules: ScheduleItem[];
+  hosts: HostList;
   streamingText: string;
   selectedTaskId: string | null;
   setConnected: (connected: boolean) => void;
   setSessionState: (state: SessionState) => void;
   bootstrap: (tasks: Task[], events: EventRow[], images: GalleryImage[], schedules: ScheduleItem[]) => void;
+  setHosts: (hosts: HostList) => void;
   addEvent: (event: EventRow) => void;
   appendStreaming: (delta: string) => void;
   selectTask: (id: string | null) => void;
@@ -82,10 +91,12 @@ export const useStore = create<GumboStore>((set) => ({
   tasks: [],
   images: [],
   schedules: [],
+  hosts: { base: [], remembered: [] },
   streamingText: '',
   selectedTaskId: null,
   setConnected: (connected) => set({ connected }),
   setSessionState: (sessionState) => set({ sessionState }),
+  setHosts: (hosts) => set({ hosts }),
   bootstrap: (tasks, events, images, schedules) =>
     set((s) => ({
       tasks: mergeBy([...tasks, ...s.tasks], [], (t) => t.id).slice(0, TASK_CAP),

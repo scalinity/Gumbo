@@ -79,6 +79,9 @@ HOW TO WORK (both lanes — the discipline is identical):
   give it); "just open a page for the user" uses run_script 'open location "https://…"'.
 - If an act keeps failing, take a fresh snapshot and check for a dialog or sheet blocking you (dismiss
   with Escape if it is safe). Do not flail forward; return to a known state.
+- Scrolling: keyboard beats mouse emulation. In apps, click/focus the list or pane first, then
+  ax_act key "pagedown"/"pageup" (or arrow keys for fine steps); on web pages, browser_act scroll
+  (to a ref, or "down"/"up"). One press, then re-snapshot — never scroll repeatedly blind.
 - A login prompt, a 2FA/permission dialog, a captcha, or anything asking for a password is THE USER'S
   step, not yours: call request_handoff describing exactly what he should do, and wait. On "done",
   VERIFY the state advanced (fresh snapshot — e.g. the login form is gone) before continuing; on
@@ -432,7 +435,7 @@ export async function runSubagent(opts: {
             // A login the user just performed becomes replayable browser state immediately.
             onHandoffDone: () => browser!.captureState(),
           }),
-          ...createBrowserTools(taskId, browser!, signal, confirmScript!),
+          ...createBrowserTools(taskId, browser!, signal, confirmScript!, macBridge),
         ]
       : null;
     // Steering wraps EVERY computer tool — guidance lands at the model's next attention

@@ -108,3 +108,33 @@ test('per-request timeoutMs overrides the default (plan approval gets a longer w
   bridge.handleResponse(req!.id!, true);
   assert.equal(await p, true, 'answered within the overridden window, not auto-denied at the default');
 });
+
+// ——— M7: "Remember <host>" write-through on host confirms ———
+
+test('remember_host rides the request; approve+remember fires onRemember; deny+remember does not', async () => {
+  const { hub, sent } = fakeHub(true);
+  const bridge = new ConfirmBridge(hub, 1000);
+  const remembered: string[] = [];
+  bridge.onRemember = (host) => remembered.push(host);
+
+  const p1 = bridge.request('t', 'Task', 'Open this website?', 'x', undefined, undefined, undefined, 'github.com');
+  const req1 = sent.at(-1) as { id: string; remember_host?: string };
+  assert.equal(req1.remember_host, 'github.com', 'the toggle label rides the wire');
+  bridge.handleResponse(req1.id, true, true);
+  assert.equal(await p1, true);
+  assert.deepEqual(remembered, ['github.com']);
+
+  const p2 = bridge.request('t', 'Task', 'Open this website?', 'x', undefined, undefined, undefined, 'evil.example');
+  const req2 = sent.at(-1) as { id: string };
+  bridge.handleResponse(req2.id, false, true);
+  assert.equal(await p2, false);
+  assert.deepEqual(remembered, ['github.com'], 'remember-on-deny is meaningless and ignored');
+
+  // A request WITHOUT remember_host cannot write anything through, even if the shell lies.
+  const p3 = bridge.request('t', 'Task', 'Allow this Mac script?', 'sudo x');
+  const req3 = sent.at(-1) as { id: string; remember_host?: string };
+  assert.equal(req3.remember_host, undefined);
+  bridge.handleResponse(req3.id, true, true);
+  assert.equal(await p3, true);
+  assert.deepEqual(remembered, ['github.com'], 'no rememberHost on the request → no write-through');
+});

@@ -133,9 +133,12 @@ final class GumboController {
             self?.imageViewer.resendContext()
             self?.fileViewer.resendContext()
         }
-        // M4: notch confirms answer supervisor escalations (deny happens daemon-side on timeout).
-        confirm.onRespond = { [weak self] id, approved in
-            self?.ws.sendJSON(["type": "confirm_response", "id": id, "approved": approved])
+        // M4: notch confirms answer supervisor escalations (deny happens daemon-side on
+        // timeout). M7: `remember` rides host approvals — allowlist write-through.
+        confirm.onRespond = { [weak self] id, approved, remember in
+            var msg: [String: Any] = ["type": "confirm_response", "id": id, "approved": approved]
+            if remember { msg["remember"] = true }
+            self?.ws.sendJSON(msg)
         }
         // Quick text: ⌃Space opens the box; a submission rides the existing debug_text path,
         // so it drives the orchestrator identically to a spoken turn (no daemon changes).
@@ -248,7 +251,8 @@ final class GumboController {
                         title: msg["title"] as? String ?? "Allow this action?",
                         detail: msg["detail"] as? String ?? "",
                         body: msg["body"] as? String ?? "",
-                        timeoutMs: msg["timeout_ms"] as? Double ?? 60_000)
+                        timeoutMs: msg["timeout_ms"] as? Double ?? 60_000,
+                        rememberHost: msg["remember_host"] as? String ?? "")
                 }
             case "confirm_cancel":
                 if let id = msg["id"] as? String {

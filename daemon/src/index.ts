@@ -14,6 +14,7 @@ import { reapInterruptedImageWork } from './images/reconcile.ts';
 import { applyFileContext, FileEditContext } from './files/context.ts';
 import { acceptFileEditRequest } from './files/edit.ts';
 import { shutdownBrowser } from './browser/client.ts';
+import { rememberHost } from './mac/hosts.ts';
 import { Orchestrator } from './realtime/session.ts';
 
 const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY'].filter((k) => !process.env[k]);
@@ -39,12 +40,15 @@ const server = createHttpServer(store);
 const hub = new Hub(server);
 // M4: supervisor escalations resolve through the notch (deny on timeout / no shell).
 const confirms = new ConfirmBridge(hub);
+// M7: an approved host confirm with "remember" writes through to the allowlist —
+// the next task (and the script lanes) skip the ask.
+confirms.onRemember = rememberHost;
 // M6: computer-use actions execute in the shell (it owns the TCC grants); this bridge
 // is the daemon's hands. Fails safe to typed errors — never hangs a waiting loop.
 const macBridge = new MacBridge(hub);
 const manager = new TaskManager(
   store,
-  (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal, req.timeoutMs),
+  (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal, req.timeoutMs, undefined, req.rememberHost),
   // Plan approval: a longer notch window. The one-line detail is a peek; the FULL plan
   // rides as `body`, which the shell renders behind a chevron as a scrollable view —
   // the user approves what he can actually read (live gap 2026-07-16: the prompt showed
@@ -180,7 +184,7 @@ hub.onMessage((msg, role) => {
   } else if (msg.type === 'confirm_response' && role === 'shell' && typeof msg.id === 'string') {
     // Role is self-asserted at hello, so this inherits the existing loopback trust model
     // (any local client can claim 'shell') rather than widening it — track for M4.1 auth.
-    confirms.handleResponse(msg.id, msg.approved === true);
+    confirms.handleResponse(msg.id, msg.approved === true, msg.remember === true);
   } else if (msg.type === 'reminder_created' && role === 'shell' && typeof msg.id === 'string') {
     // M5: EventKit's answer to create_reminder — store the Reminders.app id on the row.
     scheduler.handleReminderCreated(msg.id, typeof msg.eventkit_id === 'string' ? msg.eventkit_id : null);

@@ -472,3 +472,50 @@ body {
   .app { grid-template-columns: 1fr; grid-template-areas: 'header' 'main'; }
   .rail { display: none; }
 }
+
+/* M7: host allowlist management (Allowed sites rail section) */
+.host-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 16px 5px 20px;
+  font-size: 12.5px;
+}
+.host-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-kind { color: var(--faint); font-size: 10.5px; }
+.host-remove {
+  background: none;
+  border: none;
+  color: var(--faint);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.host-remove:hover { color: var(--alarm, #e66); }
+.host-empty { color: var(--faint); font-size: 11.5px; padding: 4px 16px 4px 20px; }
+.host-add {
+  display: flex;
+  gap: 6px;
+  padding: 7px 16px 0 20px;
+}
+.host-add input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.host-add button {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: inherit;
+  font-size: 11.5px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.host-add button:disabled { opacity: 0.4; cursor: default; }

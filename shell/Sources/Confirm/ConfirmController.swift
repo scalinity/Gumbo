@@ -6,7 +6,9 @@ import SwiftUI
 /// queue. The daemon is the authority on timeouts (deny after confirm_timeout); the
 /// shell's countdown just dismisses the UI so a stale prompt can't outlive its request.
 final class ConfirmController {
-    var onRespond: ((String, Bool) -> Void)?
+    /// (id, approved, remember) — remember is true only when the request carried a
+    /// remember_host and the user left the toggle on (M7 host confirms).
+    var onRespond: ((String, Bool, Bool) -> Void)?
 
     private struct Request {
         let id: String
@@ -16,6 +18,7 @@ final class ConfirmController {
         let detail: String
         let body: String // long-form content (the full plan) behind the chevron
         let timeoutMs: Double
+        let rememberHost: String // non-empty → show the "Remember <host>" toggle (M7)
     }
 
     private var queue: [Request] = []
@@ -26,8 +29,8 @@ final class ConfirmController {
     private var currentId: String?
     private var currentTaskId: String?
 
-    func present(id: String, taskId: String, taskTitle: String, title: String, detail: String, body: String, timeoutMs: Double) {
-        queue.append(Request(id: id, taskId: taskId, taskTitle: taskTitle, title: title, detail: detail, body: body, timeoutMs: timeoutMs))
+    func present(id: String, taskId: String, taskTitle: String, title: String, detail: String, body: String, timeoutMs: Double, rememberHost: String = "") {
+        queue.append(Request(id: id, taskId: taskId, taskTitle: taskTitle, title: title, detail: detail, body: body, timeoutMs: timeoutMs, rememberHost: rememberHost))
         if !showing { showNext() }
     }
 
@@ -59,22 +62,28 @@ final class ConfirmController {
             title: request.title,
             detail: request.detail,
             body: request.body,
+            rememberHost: request.rememberHost,
             deadline: Date().addingTimeInterval(request.timeoutMs / 1000),
             totalSeconds: request.timeoutMs / 1000)
         model.onAnswer = { [weak self] approved in
             self?.answer(request.id, approved: approved)
         }
+        // The remember toggle adds a row — the panel and the SwiftUI frame must agree on
+        // the taller base size or the buttons clip (same coupling as the chevron below).
+        let baseSize = request.rememberHost.isEmpty
+            ? ConfirmView.size
+            : NSSize(width: ConfirmView.size.width, height: ConfirmView.size.height + ConfirmView.rememberRowHeight)
         // The chevron grows the panel in place (top edge pinned under the notch); the
         // SwiftUI frame and the NSPanel frame must move together or the content clips.
         model.onExpandChange = { [weak self] expanded in
             guard let self, let panel = self.panel else { return }
-            self.position(panel, size: expanded ? ConfirmView.expandedSize : ConfirmView.size)
+            self.position(panel, size: expanded ? ConfirmView.expandedSize : baseSize)
         }
         self.model = model
 
         let panel = ensurePanel()
         panel.contentView = ConfirmFirstMouseView(rootView: ConfirmView(model: model))
-        position(panel)
+        position(panel, size: baseSize)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         panel.animator().alphaValue = 1
@@ -95,7 +104,7 @@ final class ConfirmController {
         currentTaskId = nil
         expireWork?.cancel()
         expireWork = nil
-        if let approved { onRespond?(id, approved) }
+        if let approved { onRespond?(id, approved, approved && model?.remember == true) }
         if let panel {
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.18
@@ -159,17 +168,21 @@ final class ConfirmModel: ObservableObject {
     let title: String
     let detail: String
     let body: String // long-form content (the full plan); empty → no chevron
+    let rememberHost: String // non-empty → the "Remember <host>" toggle (M7)
     let deadline: Date
     let totalSeconds: Double
     @Published var expanded = false
+    /// Default OFF: remembering forever is the bigger action — the user opts in per site.
+    @Published var remember = false
     var onAnswer: ((Bool) -> Void)?
     var onExpandChange: ((Bool) -> Void)?
 
-    init(taskTitle: String, title: String, detail: String, body: String, deadline: Date, totalSeconds: Double) {
+    init(taskTitle: String, title: String, detail: String, body: String, rememberHost: String = "", deadline: Date, totalSeconds: Double) {
         self.taskTitle = taskTitle
         self.title = title
         self.detail = detail
         self.body = body
+        self.rememberHost = rememberHost
         self.deadline = deadline
         self.totalSeconds = max(1, totalSeconds)
     }
@@ -177,12 +190,19 @@ final class ConfirmModel: ObservableObject {
 
 struct ConfirmView: View {
     static let size = NSSize(width: 380, height: 132)
+    /// Extra height when the "Remember <host>" toggle row shows (M7 host confirms).
+    static let rememberRowHeight: CGFloat = 26
     /// Chevron-expanded: the full plan in a scrollable view (top edge stays pinned).
     static let expandedSize = NSSize(width: 480, height: 520)
 
     @ObservedObject var model: ConfirmModel
 
-    private var panelSize: NSSize { model.expanded ? Self.expandedSize : Self.size }
+    private var panelSize: NSSize {
+        if model.expanded { return Self.expandedSize }
+        return model.rememberHost.isEmpty
+            ? Self.size
+            : NSSize(width: Self.size.width, height: Self.size.height + Self.rememberRowHeight)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -236,6 +256,16 @@ struct ConfirmView: View {
                 }
                 .buttonStyle(.plain)
                 .pointingCursor()
+            }
+            if !model.rememberHost.isEmpty {
+                // M7: opt-in write-through to the allowlist — this site never asks again.
+                Toggle(isOn: $model.remember) {
+                    Text("Remember \(model.rememberHost) — don't ask again")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Tokens.faint)
+                }
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
             }
             HStack(spacing: 8) {
                 countdown

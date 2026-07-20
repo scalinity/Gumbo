@@ -12,9 +12,12 @@ import type { Hub } from './hub.ts';
  * timer can expire while it waits in the shell queue (rare; still fails safe to deny).
  */
 export class ConfirmBridge {
-  private pending = new Map<string, { taskId: string; settle: (approved: boolean) => void }>();
+  private pending = new Map<string, { taskId: string; rememberHost?: string; settle: (approved: boolean) => void }>();
   private hub: Hub;
   private timeoutMs: number;
+  /** M7: invoked when the user approves WITH the "remember" toggle on a host confirm —
+   *  index.ts wires it to the allowlist write-through (mac/hosts.rememberHost). */
+  onRemember: (host: string) => void = () => {};
 
   // No parameter properties: daemon tests run node --test in strip-only mode. timeoutMs is
   // injectable so tests don't wait the full 60 s to exercise deny-on-timeout.
@@ -24,8 +27,9 @@ export class ConfirmBridge {
   }
 
   /** `body` is the optional long-form content behind the one-line title/detail — the full
-   *  plan text for a plan approval, expandable in the shell (chevron → scrollable view). */
-  request(taskId: string, taskTitle: string, title: string, detail: string, signal?: AbortSignal, timeoutMs?: number, body?: string): Promise<boolean> {
+   *  plan text for a plan approval, expandable in the shell (chevron → scrollable view).
+   *  `rememberHost` labels a "Remember <host>" toggle on the panel (M7 host confirms). */
+  request(taskId: string, taskTitle: string, title: string, detail: string, signal?: AbortSignal, timeoutMs?: number, body?: string, rememberHost?: string): Promise<boolean> {
     if (!this.hub.hasRole('shell') || signal?.aborted) return Promise.resolve(false); // nobody to ask / already cancelled
     const budget = timeoutMs ?? this.timeoutMs; // plan approval passes a longer window
     const id = randomUUID().slice(0, 8);
@@ -45,16 +49,31 @@ export class ConfirmBridge {
       };
       const timer = setTimeout(() => settle(false), budget); // deny on timeout (SPEC §6)
       signal?.addEventListener('abort', onAbort, { once: true });
-      this.pending.set(id, { taskId, settle });
+      this.pending.set(id, { taskId, rememberHost, settle });
       this.hub.broadcast(
-        { type: 'confirm_request', id, task_id: taskId, task_title: taskTitle, title, detail, timeout_ms: budget, ...(body ? { body } : {}) },
+        {
+          type: 'confirm_request', id, task_id: taskId, task_title: taskTitle, title, detail, timeout_ms: budget,
+          ...(body ? { body } : {}),
+          ...(rememberHost ? { remember_host: rememberHost } : {}),
+        },
         'shell',
       );
     });
   }
 
-  handleResponse(id: string, approved: boolean) {
-    this.pending.get(id)?.settle(approved); // no-op for a late/duplicate answer after settle
+  handleResponse(id: string, approved: boolean, remember = false) {
+    const entry = this.pending.get(id);
+    if (!entry) return; // late/duplicate answer after settle — no-op
+    // Write-through BEFORE settling: the waiting caller may immediately re-check the
+    // allowlist (memoization aside), and remember-on-deny is meaningless.
+    if (approved && remember && entry.rememberHost) {
+      try {
+        this.onRemember(entry.rememberHost);
+      } catch (err) {
+        console.error('confirm remember write-through failed:', err);
+      }
+    }
+    entry.settle(approved);
   }
 
   /** A task reached a terminal state — deny + dismiss every confirm it still has pending.

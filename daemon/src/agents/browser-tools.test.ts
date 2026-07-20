@@ -41,7 +41,7 @@ function fakeSurface(overrides: Partial<BrowserSurface> & { actResult?: BrowserR
   return surface as unknown as BrowserSurface & { acts: Array<Record<string, unknown>> };
 }
 
-function tools(surface: BrowserSurface, confirm: (detail: string, title?: string) => Promise<boolean> = async () => false) {
+function tools(surface: BrowserSurface, confirm: (detail: string, title?: string, rememberHost?: string) => Promise<boolean> = async () => false) {
   return createBrowserTools('bt1', surface, new AbortController().signal, confirm) as unknown as ToolLike[];
 }
 function byName(list: ToolLike[], name: string) {
@@ -115,10 +115,11 @@ test('Enter in a POST form confirms; in a GET form it stays auto', async () => {
 test('acting on an unlisted host asks once per task, memoizes approval, and refuses on deny', async () => {
   const surface = fakeSurface({ currentUrl: () => 'https://unlisted.example/x' });
   let asked = 0;
-  const approveOnce = tools(surface, async (detail, title) => {
+  const approveOnce = tools(surface, async (detail, title, rememberHost) => {
     asked += 1;
     assert.equal(title, 'Open this website?');
     assert.match(detail, /unlisted\.example/);
+    assert.equal(rememberHost, 'unlisted.example', 'the notch gets the host for its Remember toggle');
     return true;
   });
   await byName(approveOnce, 'browser_act').invoke({}, actArgs());

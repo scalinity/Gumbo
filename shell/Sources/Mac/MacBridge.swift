@@ -79,6 +79,13 @@ final class MacBridge {
                 result = ScreenVision.perform(action)
             case "point":
                 result = self.performPoint(action)
+            case "cursor_to":
+                // M7 browser-lane cursor continuity: in-page acts happen over CDP (no HID
+                // at all), so the ghost is their only visible trace. Fire-and-forget.
+                if let x = (action["x"] as? NSNumber)?.doubleValue, let y = (action["y"] as? NSNumber)?.doubleValue {
+                    DispatchQueue.main.async { self.ghost.move(to: CGRect(x: x - 2, y: y - 2, width: 4, height: 4)) }
+                }
+                result = AXResult(ok: true, output: "", errorKind: nil, health: nil).wire()
             default:
                 // For an act, fly the ghost cursor to the target frame first (pure
                 // visualization — the AX/pid rungs don't move the real pointer).

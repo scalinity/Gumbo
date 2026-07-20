@@ -126,6 +126,25 @@ export class BrowserClient {
     }
   }
 
+  /** Global-screen center of a ref's element, for the ghost cursor (pure visualization).
+   *  Viewport CSS px + the window's content origin — both in points on macOS, matching
+   *  the ghost's AXFrame coordinate space. The origin formula is the classic
+   *  outer/inner-delta approximation: exact for a plain headed window, slightly off with
+   *  devtools docked — acceptable for a cosmetic overlay. null = don't fly (never guess). */
+  async screenPointForRef(ref: string): Promise<{ x: number; y: number } | null> {
+    try {
+      const box = await this.locatorFor(ref).boundingBox({ timeout: 1500 });
+      if (!box) return null;
+      const origin = await this.requirePage().evaluate(() => ({
+        x: window.screenX + (window.outerWidth - window.innerWidth) / 2,
+        y: window.screenY + (window.outerHeight - window.innerHeight) - (window.outerWidth - window.innerWidth) / 2,
+      }));
+      return { x: Math.round(origin.x + box.x + box.width / 2), y: Math.round(origin.y + box.y + box.height / 2) };
+    } catch {
+      return null; // stale ref / closed page — the act itself will surface the real error
+    }
+  }
+
   /** Observe: ai-mode aria snapshot with generation-scoped refs + url/title/tab header. */
   async snapshot(): Promise<BrowserResult> {
     await this.open();

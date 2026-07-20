@@ -1,6 +1,6 @@
 import { memo, useRef, useState } from 'react';
 import { useStore, type EventRow } from './store';
-import { sendDebugText, cancelTask } from './ws';
+import { sendDebugText, cancelTask, mutateHost } from './ws';
 
 function stamp(ts: number) {
   return new Date(ts).toLocaleTimeString('en-US', { hour12: false });
@@ -108,12 +108,62 @@ function GallerySection() {
   );
 }
 
+// M7: the computer-use host allowlist. Sites here flow without a notch confirm (browser
+// lane + script-lane URL gate); everything else asks per task. base entries are
+// config-owned (shown, not removable); remembered ones manage via /api/hosts.
+function AllowlistSection() {
+  const hosts = useStore((s) => s.hosts);
+  const [draft, setDraft] = useState('');
+  const add = () => {
+    const host = draft.trim().toLowerCase();
+    if (!host || /[\s/:]/.test(host)) return; // bare hostnames only — same rule as the API
+    void mutateHost('POST', host);
+    setDraft('');
+  };
+  return (
+    <div className="rail-section">
+      <div className="rail-heading">Allowed sites</div>
+      {hosts.base.map((h) => (
+        <div key={`base-${h}`} className="host-row" title="from config (allowedHosts)">
+          <span className="host-name">{h}</span>
+          <span className="host-kind">config</span>
+        </div>
+      ))}
+      {hosts.remembered.map((h) => (
+        <div key={h} className="host-row">
+          <span className="host-name">{h}</span>
+          <button className="host-remove" title={`forget ${h}`} onClick={() => void mutateHost('DELETE', h)}>
+            ×
+          </button>
+        </div>
+      ))}
+      {hosts.base.length === 0 && hosts.remembered.length === 0 && (
+        <div className="host-empty">none yet — sites ask via the notch, or add one here</div>
+      )}
+      <div className="host-add">
+        <input
+          value={draft}
+          placeholder="example.com"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') add();
+          }}
+        />
+        <button onClick={add} disabled={!draft.trim()}>
+          allow
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Rail() {
   return (
     <nav className="rail">
       <TasksSection />
       <RemindersSection />
       <GallerySection />
+      <AllowlistSection />
     </nav>
   );
 }

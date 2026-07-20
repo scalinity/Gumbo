@@ -113,5 +113,8 @@ enum SyntheticInput {
         "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46,
         "return": 36, "enter": 36, "tab": 48, "space": 49, "delete": 51, "backspace": 51,
         "escape": 53, "esc": 53, "left": 123, "right": 124, "down": 125, "up": 126,
+        // M7 scrolling heuristic: Page-Down/-Up beat mouse-wheel emulation for reliable,
+        // verifiable scrolling (one keypress = one screenful = one clean diff).
+        "pagedown": 121, "pageup": 116, "home": 115, "end": 119,
     ]
 }

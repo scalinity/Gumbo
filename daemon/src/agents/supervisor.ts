@@ -223,6 +223,9 @@ export interface EscalationRequest {
   detail: string;
   /** Override the notch confirm window (M7 handoffs wait minutes, not seconds). */
   timeoutMs?: number;
+  /** M7 host confirms: label a "Remember <host>" toggle that writes the approval through
+   *  to the allowlist (mac/hosts) so the site never asks again. */
+  rememberHost?: string;
 }
 
 // Mirrors the SDK's PermissionResult without importing its types into every caller.

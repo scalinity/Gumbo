@@ -32,7 +32,8 @@ export type MacAction =
   | { kind: 'script'; interpreter: 'osascript' | 'shortcuts'; script: string; timeout_ms: number }
   | { kind: 'ocr'; app: string | null; region: [number, number, number, number] | null } // on-device Vision OCR → text lines w/ global point centers
   | { kind: 'screenshot'; app: string | null; region: [number, number, number, number] | null; out_path: string } // PNG to a daemon-supplied workspace path
-  | { kind: 'point'; verb: 'click' | 'double_click' | 'right_click'; x: number; y: number }; // vision-lane action at global point coords
+  | { kind: 'point'; verb: 'click' | 'double_click' | 'right_click'; x: number; y: number } // vision-lane action at global point coords
+  | { kind: 'cursor_to'; x: number; y: number }; // pure visualization: fly the ghost cursor (browser-lane acts ride CDP, not HID — the ghost is their only visible trace)
 
 /** SPEC §M6 typed errors (mirrors SearchError.kind — callers branch on kind, never message
  *  strings). The lane-level ones: secure_field is the executor's hard refusal,
@@ -72,8 +73,10 @@ export type InboundMessage =
   // daemon needs this to keep session_state 'speaking' (and the session alive) until
   // the user actually stops hearing Gumbo.
   | { type: 'playback_state'; draining: boolean }
-  // shell: the user answered a notch confirm (M4 supervisor escalation).
-  | { type: 'confirm_response'; id: string; approved: boolean }
+  // shell: the user answered a notch confirm (M4 supervisor escalation). M7: `remember`
+  // rides an approval whose request carried remember_host — write the host through to
+  // the allowlist so this site never asks again.
+  | { type: 'confirm_response'; id: string; approved: boolean; remember?: boolean }
   // shell: EventKit accepted (or failed) a create_reminder — eventkit_id is null on failure.
   // The daemon stores it on the schedule row so cancel can remove the Reminders.app entry.
   | { type: 'reminder_created'; id: string; eventkit_id: string | null }
@@ -114,7 +117,8 @@ export type OutboundMessage =
   // shell: a supervisor escalation needs the user's yes/no; deny happens daemon-side on timeout.
   // `body` is optional long-form content behind the one-liner (the full plan text for a plan
   // approval) — the shell renders it behind a chevron as a scrollable view.
-  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number; body?: string }
+  // M7: remember_host labels the "Remember <host>" toggle on host-approval confirms.
+  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number; body?: string; remember_host?: string }
   // shell: dismiss a pending confirm — its task was cancelled (daemon already resolved it deny).
   | { type: 'confirm_cancel'; id: string }
   // shell (M5): mirror a scheduled reminder into Reminders.app via EventKit (OS-durable —

@@ -11,8 +11,10 @@ import type { MacActionResult } from '../ws/protocol.ts';
 /** Notch confirm for a risky sub-agent action; resolves false on deny/timeout (fail safe).
  *  Deny-on-timeout means an UNATTENDED risky action blocks then refuses — intended.
  *  `title` labels the notch prompt (default: the Mac-script wording); the M7 browser lane
- *  passes its own ("Allow this browser action?", "Open this website?"). */
-export type ConfirmScript = (detail: string, title?: string) => Promise<boolean>;
+ *  passes its own ("Allow this browser action?", "Open this website?"). `rememberHost`
+ *  puts a "Remember <host>" toggle on the panel — an approval with it writes the host
+ *  through to the allowlist. */
+export type ConfirmScript = (detail: string, title?: string, rememberHost?: string) => Promise<boolean>;
 
 /** Format a shell result for the model: the raw output on success; on failure the typed
  *  kind up front so the model branches on it (never on the message text). */

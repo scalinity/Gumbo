@@ -83,7 +83,8 @@ export class TaskManager {
     // M7: the browser lane labels its own confirms via the optional title param.
     const confirmScript =
       taskType === 'mac'
-        ? (detail: string, confirmTitle = 'Allow this Mac script?') => this.escalate(id, title, { title: confirmTitle, detail }, abort.signal)
+        ? (detail: string, confirmTitle = 'Allow this Mac script?', rememberHost?: string) =>
+            this.escalate(id, title, { title: confirmTitle, detail, rememberHost }, abort.signal)
         : undefined;
     // M7 cooperative handoff: pause (needs_input announces it aloud), stand the kill
     // switch down so the user's own typing IS the handoff, wait for his notch "Done"

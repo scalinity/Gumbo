@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { config } from './config.ts';
+import { forgetHost, listHosts, rememberHost } from './mac/hosts.ts';
 import type { Store } from './events/store.ts';
 
 const MIME: Record<string, string> = {
@@ -47,6 +48,43 @@ export function createHttpServer(store: Store) {
         return;
       }
       res.end(JSON.stringify(task));
+      return;
+    }
+
+    // M7: the computer-use host allowlist (browser lane + script-lane URL gate). GET
+    // lists base (config-owned) + remembered; POST/DELETE manage the remembered set —
+    // {"host": "example.com"} — matching the notch confirm's "remember" write-through.
+    // Loopback-only server, same trust model as every other /api route.
+    if (url.pathname === '/api/hosts') {
+      res.setHeader('Content-Type', 'application/json');
+      if (req.method === 'GET') {
+        res.end(JSON.stringify(listHosts()));
+        return;
+      }
+      if (req.method === 'POST' || req.method === 'DELETE') {
+        let body = '';
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', () => {
+          let host = '';
+          try {
+            host = String((JSON.parse(body || '{}') as { host?: unknown }).host ?? '').trim();
+          } catch {
+            // fall through to the empty-host 400
+          }
+          // A bare hostname, not a URL — reject anything with a scheme/slash/space.
+          if (!host || /[\s/:]/.test(host)) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: 'pass {"host":"example.com"} (bare hostname)' }));
+            return;
+          }
+          if (req.method === 'POST') rememberHost(host);
+          else forgetHost(host);
+          res.end(JSON.stringify(listHosts()));
+        });
+        return;
+      }
+      res.statusCode = 405;
+      res.end(JSON.stringify({ error: 'GET, POST or DELETE' }));
       return;
     }
 

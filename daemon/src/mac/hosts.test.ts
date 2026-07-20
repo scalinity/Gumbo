@@ -50,3 +50,12 @@ test('a corrupt hosts file degrades to empty, not a crash', async () => {
   const onDisk = JSON.parse(readFileSync(join(config.home.browser, 'hosts.json'), 'utf8'));
   assert.ok(onDisk.includes('repaired.io'));
 });
+
+test('forgetHost removes a remembered entry; listHosts reports base + remembered', async () => {
+  const { forgetHost, listHosts } = await import('./hosts.ts');
+  rememberHost('temp.example');
+  assert.ok(listHosts().remembered.includes('temp.example'));
+  forgetHost('TEMP.example');
+  assert.ok(!listHosts().remembered.includes('temp.example'), 'normalized removal');
+  assert.equal(hostAllowed('https://temp.example/'), false, 'forgetting really revokes');
+});
