@@ -49,7 +49,7 @@ confirms.onRemember = rememberHost;
 const macBridge = new MacBridge(hub);
 const manager = new TaskManager(
   store,
-  (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal, req.timeoutMs, undefined, req.rememberHost, req.confirmLabel, req.denyLabel),
+  (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal, req.timeoutMs, undefined, req.rememberHost, req.confirmLabel, req.denyLabel, req.waitForShell ? { waitForShell: true } : undefined),
   // Plan approval: a longer notch window. The one-line detail is a peek; the FULL plan
   // rides as `body`, which the shell renders behind a chevron as a scrollable view —
   // the user approves what he can actually read (live gap 2026-07-16: the prompt showed
@@ -78,13 +78,30 @@ manager.distillProcedure = (name, steps, taskId) => procedures.distillTeaching(n
 // Self-heal: a replay that drifted but whose fallback run succeeded becomes version+1.
 manager.healProcedure = (name, taskId) => procedures.saveFromTask(taskId, name, 'healed');
 const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, fileContext, macBridge, confirms, procedures);
-scheduler.onFire = (row) =>
-  orchestrator.speakProactively(
+scheduler.onFire = (row) => {
+  // M8: routine rows spawn a computer task (queued/skipped-with-notice when the Mac is
+  // busy) — NEVER read aloud as a reminder (their text is a JSON payload).
+  if (row.kind === 'routine') {
+    manager.runRoutine(row);
+    return;
+  }
+  return orchestrator.speakProactively(
     // Cold TTS speaks the raw text verbatim; the LIVE instruction echo is defanged
     // (review 🔵 — the M3 neutralization precedent applied to short echoes).
     `the user, reminder: ${row.text}.`,
     `A reminder the user set has just come due: "${echoForInstructions(row.text, 200)}". Deliver it to him now — brief and direct, one sentence. Do not mention ids or the scheduler.`,
   );
+};
+// M8 Law 5 — a routine that can't run is a LOUD skip: spoken (or cold-TTS'd into the
+// room), pulsed, and already recorded as routine.skipped for the away-items catch-up.
+manager.onRoutineSkipped = (name, reason) => {
+  orchestrator.speakProactively(
+    `the user, the scheduled routine "${name}" was skipped: ${reason}.`,
+    `The scheduled routine "${echoForInstructions(name, 80)}" could not run (${echoForInstructions(reason, 160)}). Tell the user briefly.`,
+  ).catch((err: unknown) => {
+    store.addEvent(null, 'session.error', { message: `routine-skip announce: ${String(err)}` });
+  });
+};
 manager.onFinished = (task) => {
   // Floating promise: an unexpected sync throw (dead transport, store failure) would
   // otherwise become an unhandled rejection and take the whole daemon down.
@@ -126,6 +143,10 @@ store.onEvent((event) => {
     if (!task || (status !== 'running' && status !== 'needs_input')) return;
     hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status }, 'shell');
     if (status === 'needs_input') {
+      // M8: pulse the notch too — a PAUSED unattended routine must be visible on the
+      // machine, not only spoken into a possibly-empty room (the reviewed gap: nothing
+      // pulsed on needs_input at all).
+      hub.broadcast({ type: 'notch_pulse', status: 'needs_input' }, 'shell');
       // Speak it — a paused task used to wait silently (live gap 2026-07-16: the plan
       // approval sat unnoticed for 5 minutes because the voice session had idle-closed).
       // Same delivery rules as every proactive path: live injection or cold TTS.
@@ -173,6 +194,10 @@ hub.onHello((role) => {
   // M6: a shell that (re)connects while a computer-use task runs must arm its kill
   // switch + ghost cursor immediately.
   macBridge.resync();
+  // M8: re-present still-pending confirms with their remaining window — the shell's
+  // panel state died with it, and an hour-scale unattended pause (or one parked waiting
+  // for a shell) would otherwise sit invisible until auto-deny.
+  confirms.resync();
 });
 
 hub.onMessage((msg, role) => {

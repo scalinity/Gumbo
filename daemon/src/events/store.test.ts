@@ -172,3 +172,41 @@ test('M8: pre-M8 memory table is rebuilt once — rows/ids preserved, FTS reinde
   const again = new Store(oldPath);
   assert.equal(again.getProcedure('migrated proc')?.version, 1);
 });
+
+test('M8: schedule table gains recurrence/series_id additively (old DBs migrate, new rows carry them)', () => {
+  // The main-store DB in this file was created with the NEW schema; prove an OLD-schema
+  // schedule table migrates too.
+  const oldPath = join(mkdtempSync(join(tmpdir(), 'gumbo-sched-migrate-')), 'gumbo.db');
+  const old = new DatabaseSync(oldPath);
+  old.exec(`
+    CREATE TABLE schedule (
+      id TEXT PRIMARY KEY, fire_at INT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending','fired','cancelled')),
+      eventkit_id TEXT, created_at INT NOT NULL
+    );
+    INSERT INTO schedule VALUES ('old1', 123, 'reminder', 'water plants', 'pending', NULL, 1);
+  `);
+  old.close();
+  const store2 = new Store(oldPath);
+  const migrated = store2.getSchedule('old1');
+  assert.ok(migrated);
+  assert.equal(migrated.recurrence ?? null, null, 'old rows read null recurrence');
+  store2.createSchedule({
+    id: 'new1', fire_at: 456, kind: 'routine', text: '{"procedure":"x"}', status: 'pending',
+    eventkit_id: null, created_at: 2, recurrence: '{"freq":"daily","hour":9,"minute":0}', series_id: 'new1',
+  });
+  assert.equal(store2.getSchedule('new1')?.recurrence, '{"freq":"daily","hour":9,"minute":0}');
+});
+
+test('M8: eventsSince + latestPayloadOf drive the away-items watermark', () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'gumbo-away-')), 'gumbo.db');
+  const s = new Store(dbPath);
+  s.addEvent(null, 'routine.skipped', { name: 'a', reason: 'busy' });
+  const marker = s.addEvent(null, 'announce.consumed', { upTo: 999 });
+  s.addEvent(null, 'routine.paused', { reason: 'confirm' });
+  s.addEvent('t9', 'announce.pending', { title: 'Late task' });
+  assert.deepEqual(s.latestPayloadOf('announce.consumed'), { upTo: 999 });
+  const since = s.eventsSince(['routine.skipped', 'routine.paused', 'announce.pending'], marker.seq);
+  assert.deepEqual(since.map((e) => e.type), ['routine.paused', 'announce.pending'], 'only items after the watermark, oldest first');
+  assert.deepEqual(s.eventsSince([], 0), [], 'empty type list is a no-op');
+});

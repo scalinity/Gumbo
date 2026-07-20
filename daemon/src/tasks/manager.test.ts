@@ -441,3 +441,124 @@ test('M8 teaching: the distill seam lands the procedure summary in ONE report; f
   assert.match(report2, /Procedure NOT saved — distillation failed: model returned garbage/);
   assert.match(report2, /1 step recorded/, 'steps survive a failed distill');
 });
+
+// ——— M8 scheduled routines: fire → queue → spawn/skip + the unattended policy ———
+
+const PROC_BODY = JSON.stringify({
+  goal: 'run the admin script',
+  preconditions: [],
+  apps: ['Notes'],
+  steps: [{ lane: 'script', desc: 'Run the gated script', verb: 'osascript', value: 'do shell script "true" with administrator privileges' }],
+});
+
+function routineManager(opts: {
+  bridge?: ReturnType<typeof teachBridge>;
+  escalate?: (taskId: string, title: string, req: Record<string, unknown>, signal?: AbortSignal) => Promise<boolean>;
+} = {}) {
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'gumbo-mgr-db-')), 'gumbo.db');
+  const store = new Store(dbPath);
+  const escalations: Array<Record<string, unknown>> = [];
+  const bridge = opts.bridge ?? teachBridge();
+  const manager = new TaskManager(
+    store,
+    async (taskId, title, req, signal) => {
+      escalations.push({ taskId, ...req });
+      return opts.escalate ? opts.escalate(taskId, title, req as never, signal) : true;
+    },
+    async () => false,
+    fakeFactory(async () => ({ parked: false, report: '' })) as never,
+    bridge as never,
+  );
+  const skipped: Array<{ name: string; reason: string }> = [];
+  manager.onRoutineSkipped = (name, reason) => skipped.push({ name, reason });
+  return { store, manager, bridge, skipped, escalations };
+}
+
+test('M8 routines: an unknown procedure is a LOUD skip, never a throw (the row is already fired)', () => {
+  const { store, manager, skipped } = routineManager();
+  manager.runRoutine({ id: 'r1', text: JSON.stringify({ procedure: 'never taught' }) });
+  assert.deepEqual(skipped.map((s) => s.name), ['never taught']);
+  assert.ok(store.listEvents({}).some((e) => e.type === 'routine.skipped'), 'the durable Law-5 record');
+  manager.runRoutine({ id: 'r2', text: 'not json' });
+  assert.equal(skipped.length, 2, 'unreadable payloads skip loudly too');
+});
+
+test('M8 routines: a fire while the Mac is busy QUEUES, starts after the task finishes, and expiry skips loudly', async () => {
+  const { store, manager, skipped } = routineManager();
+  store.saveProcedure({ taskId: null, name: 'file expenses', title: 'file expenses — run', body: PROC_BODY, provider: 'taught' });
+
+  // Occupy the Mac with a live computer task (its stubbed runner fails after settle).
+  const blocker = manager.spawnSubagent('Blocker', 'drive', 'mac');
+  manager.runRoutine({ id: 'r1', text: JSON.stringify({ procedure: 'file expenses' }) });
+  assert.equal(skipped.length, 0, 'queued, not skipped');
+  assert.ok(!store.listTasks().some((t) => t.title === 'file expenses'), 'not started while busy');
+
+  await settle(); // the blocker settles to failed → finish() drains the queue
+  await settle();
+  assert.ok(store.listTasks().some((t) => t.title === 'file expenses'), 'the queued routine started once the Mac freed up');
+  assert.equal(store.getTask(blocker.id)?.status, 'failed');
+  assert.ok(store.listEvents({}).some((e) => e.type === 'routine.started'));
+
+  // Expiry: a queued routine past the window skips WITH notice.
+  const { manager: manager2, store: store2, skipped: skipped2 } = routineManager();
+  store2.saveProcedure({ taskId: null, name: 'late routine', title: 'late — run', body: PROC_BODY, provider: 'taught' });
+  manager2.spawnSubagent('Blocker2', 'drive', 'mac');
+  const original = config.routines.queueWindowMs;
+  (config.routines as { queueWindowMs: number }).queueWindowMs = -1; // already expired
+  try {
+    manager2.runRoutine({ id: 'r2', text: JSON.stringify({ procedure: 'late routine' }) });
+    assert.deepEqual(skipped2.map((s) => s.name), ['late routine']);
+    assert.match(skipped2[0].reason, /busy/);
+  } finally {
+    (config.routines as { queueWindowMs: number }).queueWindowMs = original;
+  }
+});
+
+test('M8 unattended policy: a would-be-confirm parks (long window + waitForShell + park bracket), pauses, and nothing is auto-approved', async () => {
+  // The replay engine runs the gated script step THROUGH the real run_script tool: the
+  // gate fires, the escalate carries the unattended shape, and the tap PARKS (mac_task
+  // refcount drop) instead of standing down for the window.
+  const bridge = teachBridge();
+  const bridgeCalls: string[] = [];
+  (bridge as { taskStarted: () => void }).taskStarted = () => { bridgeCalls.push('taskStarted'); };
+  (bridge as { taskFinished: () => void }).taskFinished = () => { bridgeCalls.push('taskFinished'); };
+  (bridge as { setHandoff: (a: boolean) => void }).setHandoff = (a: boolean) => { bridgeCalls.push(`setHandoff:${a}`); };
+  let escalated: Record<string, unknown> | null = null;
+  const { store, manager } = (() => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'gumbo-mgr-db-')), 'gumbo.db');
+    const s = new Store(dbPath);
+    const m = new TaskManager(
+      s,
+      async (_taskId, _title, req) => {
+        escalated = req as Record<string, unknown>;
+        bridgeCalls.push('escalate');
+        return true; // the user eventually answers Approve
+      },
+      async () => false,
+      fakeFactory(async () => ({ parked: false, report: '' })) as never,
+      bridge as never,
+    );
+    return { store: s, manager: m };
+  })();
+  store.saveProcedure({ taskId: null, name: 'gated routine', title: 'gated — run', body: PROC_BODY, provider: 'taught' });
+  manager.runRoutine({ id: 'r1', text: JSON.stringify({ procedure: 'gated routine' }) });
+  // The replay engine runs async inside runSubagent — give it ticks to finish.
+  for (let i = 0; i < 20 && !escalated; i += 1) await settle();
+  assert.ok(escalated, 'the gated script escalated');
+  assert.equal((escalated as { timeoutMs?: number }).timeoutMs, config.routines.pauseTimeoutMs, 'unattended confirms get the pause window');
+  assert.equal((escalated as { waitForShell?: boolean }).waitForShell, true, 'no shell = park, never insta-deny');
+  const parkStart = bridgeCalls.indexOf('taskFinished');
+  const escalateAt = bridgeCalls.indexOf('escalate');
+  const rearm = bridgeCalls.lastIndexOf('taskStarted');
+  assert.ok(parkStart !== -1 && parkStart < escalateAt && escalateAt < rearm, `park brackets the escalate (got ${bridgeCalls.join(',')})`);
+  assert.ok(!bridgeCalls.some((c) => c === 'setHandoff:true'), 'unattended pause must NOT hold the stand-down (kill-switch inversion)');
+
+  const task = store.listTasks().find((t) => t.title === 'gated routine');
+  assert.ok(task, 'the routine task exists');
+  for (let i = 0; i < 40 && store.getTask(task!.id)?.status === 'running'; i += 1) await settle();
+  assert.equal(store.getTask(task!.id)?.status, 'done', 'approved → the replay completes');
+  const paused = store.listEvents({ taskId: task!.id }).filter((e) => e.type === 'routine.paused');
+  assert.equal(paused.length, 1, 'the pause is a durable away-item');
+  const statuses = store.listEvents({ taskId: task!.id }).filter((e) => e.type === 'task.status').map((e) => (e.payload as { status: string }).status);
+  assert.ok(statuses.includes('needs_input'), 'the pause flips needs_input (spoken + pulsed)');
+});

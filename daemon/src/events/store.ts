@@ -20,17 +20,25 @@ export interface EventRow {
   payload: unknown;
 }
 
-// M5: one row per scheduled action. `kind` is the extensibility seam (only 'reminder'
-// exists today; future kinds — recurring digests, timed task spawns — reuse the table and
-// the poll loop, not a new mechanism). `text` is the kind's payload.
+// M5: one row per scheduled action. `kind` is the extensibility seam — M8 shipped its
+// designed second consumer, kind:'routine' (text = {"procedure": name} JSON). `text` is
+// the kind's payload.
 export interface ScheduleRow {
   id: string;
   fire_at: number; // epoch-ms
   kind: string;
   text: string;
   status: 'pending' | 'fired' | 'cancelled';
-  eventkit_id: string | null; // Reminders.app twin, set when the shell replies reminder_created
+  eventkit_id: string | null; // Reminders.app twin, set when the shell replies reminder_created (reminders only — routines have no twin)
   created_at: number;
+  /** M8 recurrence DSL (JSON, schedule/recurrence.ts) — null for one-shots. On fire, a
+   *  recurring row marks fired and INSERTS the next pending occurrence (chain-of-rows:
+   *  preserves mark-fired-before-deliver at-most-once; cancelling the pending row ends
+   *  the chain). */
+  recurrence: string | null;
+  /** Stable identity across a recurring chain (the FIRST row's id) — display/history;
+   *  cancellation targets the current pending row. */
+  series_id: string | null;
 }
 
 // M8: one saved procedure VERSION. Insert-only versioning by design: an update is a NEW
@@ -106,11 +114,24 @@ export class Store {
       CREATE TABLE IF NOT EXISTS schedule (
         id TEXT PRIMARY KEY, fire_at INT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL,
         status TEXT NOT NULL CHECK(status IN ('pending','fired','cancelled')),
-        eventkit_id TEXT, created_at INT NOT NULL
+        eventkit_id TEXT, created_at INT NOT NULL, recurrence TEXT, series_id TEXT
       );
       CREATE INDEX IF NOT EXISTS schedule_due ON schedule(status, fire_at);
     `);
     this.migrateMemoryTable();
+    this.migrateScheduleColumns();
+  }
+
+  /** M8 additive columns on a pre-M8 schedule table (ALTER ADD COLUMN is non-breaking —
+   *  existing rows read null, `SELECT *` consumers ignore the extras). */
+  private migrateScheduleColumns() {
+    const cols = this.db.prepare('PRAGMA table_info(schedule)').all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'recurrence')) {
+      this.db.exec('ALTER TABLE schedule ADD COLUMN recurrence TEXT');
+    }
+    if (!cols.some((c) => c.name === 'series_id')) {
+      this.db.exec('ALTER TABLE schedule ADD COLUMN series_id TEXT');
+    }
   }
 
   /**
@@ -155,8 +176,8 @@ export class Store {
 
   createSchedule(row: ScheduleRow) {
     this.db
-      .prepare('INSERT INTO schedule (id, fire_at, kind, text, status, eventkit_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(row.id, row.fire_at, row.kind, row.text, row.status, row.eventkit_id, row.created_at);
+      .prepare('INSERT INTO schedule (id, fire_at, kind, text, status, eventkit_id, created_at, recurrence, series_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(row.id, row.fire_at, row.kind, row.text, row.status, row.eventkit_id, row.created_at, row.recurrence ?? null, row.series_id ?? null);
   }
 
   getSchedule(id: string): ScheduleRow | undefined {
@@ -375,6 +396,25 @@ export class Store {
       role: r.type === 'transcript.user' ? 'user' as const : 'assistant' as const,
       text: (JSON.parse(r.payload) as { text?: string } | null)?.text ?? '',
     }));
+  }
+
+  /** M8 away-items: newest payload of an event type regardless of task scoping —
+   *  getLatestEventPayload is task-keyed, and the announce.consumed marker is global. */
+  latestPayloadOf(type: string): unknown {
+    const row = this.db
+      .prepare('SELECT payload FROM events WHERE type = ? ORDER BY seq DESC LIMIT 1')
+      .get(type) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) : null;
+  }
+
+  /** M8 away-items: events of the given types strictly after a seq, oldest first. */
+  eventsSince(types: string[], afterSeq: number, limit = 50): EventRow[] {
+    if (types.length === 0) return [];
+    const placeholders = types.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(`SELECT * FROM events WHERE type IN (${placeholders}) AND seq > ? ORDER BY seq LIMIT ?`)
+      .all(...types, afterSeq, limit) as Array<Omit<EventRow, 'payload'> & { payload: string }>;
+    return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) }));
   }
 
   /** Newest event payload of one type for a task, by direct SQL — a bounded listEvents

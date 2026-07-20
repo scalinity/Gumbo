@@ -12,6 +12,7 @@ import { getBrowserClient } from '../browser/client.ts';
 import { wrapSteering } from './steering.ts';
 import { visionQuery } from './vision.ts';
 import { fallbackBrief, replayProcedure } from './procedure-runner.ts';
+import { wrapUnattendedApps } from './unattended.ts';
 import type { CompleteFn, Procedure } from './procedures.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
@@ -459,6 +460,10 @@ export async function runSubagent(opts: {
     notes: string | null;
     steeringPending: () => boolean;
     complete?: CompleteFn;
+    /** M8 routines: unattended runs restrict app targeting to procedure.apps (out-of-set
+     *  apps ride the parked confirm) and skip the handoff bounce — a login wall
+     *  unattended is ONE clean pause, never a pause/deny/bounce/pause loop. */
+    unattended?: boolean;
   };
 }): Promise<string> {
   const { taskId, brief: originalBrief, store, signal, kind = 'research', macBridge, confirmScript, requestHandoff, takeSteering } = opts;
@@ -487,7 +492,7 @@ export async function runSubagent(opts: {
     // result strings (screen text could spoof any textual signal). Inert outside replay.
     let lastObservation: ToolObservation | null = null;
     const observe = (obs: ToolObservation) => { lastObservation = obs; };
-    const macToolset = isMac
+    let macToolset = isMac
       ? [
           // A login the user performs during a handoff is durable the moment he types it —
           // the persistent automation profile is Chrome's own disk state (no capture step).
@@ -495,6 +500,12 @@ export async function runSubagent(opts: {
           ...createBrowserTools(taskId, browser!, signal, confirmScript!, macBridge, observe),
         ]
       : null;
+    // M8 unattended app boundary: wrap FIRST (mutating, like wrapSteering) so it governs
+    // the replay engine AND the fallback loop alike; out-of-set apps ride the parked
+    // confirm, and an approval admits the app for the rest of the task.
+    if (macToolset && opts.procedure?.unattended) {
+      macToolset = macToolset.map((t) => wrapUnattendedApps(t, opts.procedure!.procedure.apps, confirmScript!));
+    }
 
     // M8 deterministic replay: runs on the UNWRAPPED toolset (wrapSteering mutates
     // invoke in place — wrapping first would drain steering into results nobody reads).
@@ -565,7 +576,7 @@ export async function runSubagent(opts: {
     // HOMEPAGE has none). So the exit itself is guarded: a login-shaped inability ending
     // with no handoff asked gets bounced ONCE with an explicit order. history-concat is
     // the SDK's documented multi-turn continuation.
-    if (isMac && trackedHandoff && !handoffAsked && needsHandoffBounce(final)) {
+    if (isMac && trackedHandoff && !handoffAsked && !opts.procedure?.unattended && needsHandoffBounce(final)) {
       store.addEvent(taskId, 'subagent.message', { text: '[bounce] login-shaped ending without request_handoff — ordering the handoff' });
       const retry = await run(
         agent,

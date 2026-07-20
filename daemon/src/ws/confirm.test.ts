@@ -156,3 +156,54 @@ test('button-label overrides ride the wire only when given (handoff says Done/Ca
   bridge.handleResponse(String(req2.id), false);
   assert.equal(await plain, false);
 });
+
+// ——— M8: pending-confirm resync + park-for-shell ———
+
+// A hub whose shell presence can FLIP mid-test (the park case: no shell at request time,
+// one connects later).
+function flippableHub() {
+  const sent: Array<{ type: string; id?: string; timeout_ms?: number }> = [];
+  let hasShell = false;
+  const hub = {
+    hasRole: (r: string) => hasShell && r === 'shell',
+    broadcast: (msg: { type: string; id?: string }) => sent.push(msg as (typeof sent)[number]),
+  };
+  return { hub: hub as never, sent, setShell: (v: boolean) => { hasShell = v; } };
+}
+
+test('M8: resync re-presents a pending confirm with its REMAINING window', async () => {
+  const { hub, sent } = fakeHub(true);
+  const bridge = new ConfirmBridge(hub, 5_000);
+  const p = bridge.request('t1', 'Routine', 'Allow?', 'a parked step', undefined, 5_000);
+  assert.equal(sent.filter((m) => m.type === 'confirm_request').length, 1);
+  await new Promise((r) => setTimeout(r, 40));
+  bridge.resync();
+  const re = sent.filter((m) => m.type === 'confirm_request') as Array<{ id: string; timeout_ms: number }>;
+  assert.equal(re.length, 2, 'the pending confirm re-broadcasts on hello');
+  assert.ok(re[1].timeout_ms < 5_000 && re[1].timeout_ms > 3_000, `remaining window rides the re-send (got ${re[1].timeout_ms})`);
+  bridge.handleResponse(re[1].id, true);
+  assert.equal(await p, true, 'answering the re-presented confirm settles the original');
+});
+
+test('M8: waitForShell parks with NO shell — broadcast on resync, answerable, deny-on-timeout intact', async () => {
+  const { hub, sent, setShell } = flippableHub();
+  const bridge = new ConfirmBridge(hub, 200);
+  const p = bridge.request('t1', 'Routine', 'Allow?', 'unattended step', undefined, 200, undefined, undefined, undefined, undefined, { waitForShell: true });
+  assert.equal(sent.length, 0, 'nothing broadcast into a shell-less hub');
+  setShell(true);
+  bridge.resync();
+  const req = sent.find((m) => m.type === 'confirm_request');
+  assert.ok(req?.id, 'the parked confirm surfaces on the next hello');
+  bridge.handleResponse(req!.id!, true);
+  assert.equal(await p, true);
+
+  // …and with nobody ever answering, the standing deny still fires.
+  const q = bridge.request('t2', 'Routine', 'Allow?', 'never answered', undefined, 50, undefined, undefined, undefined, undefined, { waitForShell: true });
+  assert.equal(await q, false, 'deny-on-timeout survives the park');
+});
+
+test('M8: withOUT waitForShell, a shell-less request still insta-denies (the M4 contract)', async () => {
+  const { hub } = fakeHub(false);
+  const bridge = new ConfirmBridge(hub, 1_000);
+  assert.equal(await bridge.request('t1', 'Task', 'Allow?', 'x'), false);
+});

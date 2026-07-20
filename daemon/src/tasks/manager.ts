@@ -9,7 +9,7 @@ import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import { sanitizeTeachStep, teachingReport, type TeachStep } from './teach.ts';
-import type { Procedure } from '../agents/procedures.ts';
+import { validateProcedure, type Procedure } from '../agents/procedures.ts';
 
 /** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod).
  *  The signal fires if the task is cancelled while the confirm is pending. */
@@ -84,7 +84,7 @@ export class TaskManager {
     title: string,
     brief: string,
     taskType: SubagentKind = 'research',
-    replay?: { procedure: Procedure; notes: string | null },
+    replay?: { procedure: Procedure; notes: string | null; unattended?: boolean },
   ): TaskRow {
     if (taskType === 'mac' && !this.macBridge) throw new Error('Mac control is unavailable (no shell bridge wired).');
     if (taskType === 'mac') this.assertMacFree();
@@ -104,11 +104,37 @@ export class TaskManager {
     // takes the user's mouse, so the kill switch must treat that input as the answer, not
     // an abort. Deny on timeout / no shell as always; research tasks pass undefined.
     const standDown = taskType === 'mac' ? makeStandDown(this.macBridge!) : undefined;
+    const unattended = replay?.unattended === true;
+    // M8 unattended PARK bracket: while a routine waits on the user, the task is NOT
+    // driving — the tap DISARMS (mac_task refcount) instead of standing down. Holding
+    // setHandoff(true) for an hour-scale window would suppress the kill switch while
+    // the user uses his Mac normally, then resume driving under his hands on timeout-deny
+    // (the reviewed inversion). Re-arm happens on answer; the shell's arm-time grace
+    // covers his trailing input from clicking Approve.
+    const park = unattended
+      ? async <T>(fn: () => Promise<T>): Promise<T> => {
+          this.macBridge!.taskFinished();
+          try {
+            return await fn();
+          } finally {
+            this.macBridge!.taskStarted();
+          }
+        }
+      : undefined;
+    const bracket = unattended ? park! : standDown!;
     // M7: the browser lane labels its own confirms via the optional title param.
+    // M8 unattended: every would-be-confirm PAUSES the task (needs_input + routine.paused
+    // + pulse via index.ts) with the long window + park-for-shell; deny-on-timeout stays —
+    // NOTHING is ever auto-approved in absentia.
     const confirmScript =
       taskType === 'mac'
-        ? (detail: string, confirmTitle = 'Allow this Mac script?', rememberHost?: string) =>
-            standDown!(() => this.escalate(id, title, { title: confirmTitle, detail, rememberHost }, abort.signal))
+        ? (detail: string, confirmTitle = 'Allow this Mac script?', rememberHost?: string) => {
+            const req: EscalationRequest = unattended
+              ? { title: confirmTitle, detail, rememberHost, timeoutMs: config.routines.pauseTimeoutMs, waitForShell: true }
+              : { title: confirmTitle, detail, rememberHost };
+            if (!unattended) return bracket(() => this.escalate(id, title, req, abort.signal));
+            return this.pauseForAnswer(id, detail, () => bracket(() => this.escalate(id, title, req, abort.signal)));
+          }
         : undefined;
     // M7 cooperative handoff: pause (needs_input announces it aloud), stand the kill
     // switch down so the user's own typing IS the handoff, wait for his notch "Done"
@@ -118,6 +144,7 @@ export class TaskManager {
       taskType === 'mac'
         ? async (reason: string) => {
             this.setTaskStatus(id, 'needs_input', reason);
+            if (unattended) this.store.addEvent(id, 'routine.paused', { reason });
             // the user closing the automation browser mid-handoff IS his answer (live-demo
             // polish): decline promptly (confirm_cancel dismisses the notch panel) instead
             // of letting the prompt linger to its multi-minute timeout. Local controller:
@@ -127,11 +154,16 @@ export class TaskManager {
             abort.signal.addEventListener('abort', onTaskAbort, { once: true });
             const unsubBrowser = getBrowserClient().onContextClosed(() => local.abort());
             try {
-              return await standDown!(() => this.escalate(
+              // M8 unattended: handoffs get the pause semantics too (long window +
+              // park-for-shell) — a login wall at 6 AM waits for the user, one clean pause,
+              // instead of a 5-minute deny into an empty room.
+              return await bracket(() => this.escalate(
                 id, title,
                 {
                   title: 'Your turn — tap Done when finished', detail: reason,
-                  timeoutMs: config.mac.handoffTimeoutMs, confirmLabel: 'Done', denyLabel: 'Cancel',
+                  timeoutMs: unattended ? config.routines.pauseTimeoutMs : config.mac.handoffTimeoutMs,
+                  confirmLabel: 'Done', denyLabel: 'Cancel',
+                  ...(unattended ? { waitForShell: true } : {}),
                 },
                 local.signal,
               ));
@@ -153,7 +185,7 @@ export class TaskManager {
       macBridge: this.macBridge, confirmScript, requestHandoff,
       takeSteering: taskType === 'mac' ? () => this.takeSteering(id) : undefined,
       procedure: replay
-        ? { procedure: replay.procedure, notes: replay.notes, steeringPending: () => this.hasSteering(id) }
+        ? { procedure: replay.procedure, notes: replay.notes, steeringPending: () => this.hasSteering(id), unattended }
         : undefined,
     }).then(
       (report) => {
@@ -188,6 +220,110 @@ export class TaskManager {
    *  the loop's wrapped tools may consume it. */
   hasSteering(id: string): boolean {
     return (this.steering.get(id)?.length ?? 0) > 0;
+  }
+
+  /** M8 unattended pause bookkeeping: needs_input (spoken + pulsed via index.ts) +
+   *  routine.paused (the away-items surface) around the parked confirm; status restores
+   *  on answer unless the task ended meanwhile. */
+  private async pauseForAnswer(id: string, reason: string, run: () => Promise<boolean>): Promise<boolean> {
+    this.setTaskStatus(id, 'needs_input', `paused unattended: ${reason}`);
+    this.store.addEvent(id, 'routine.paused', { reason });
+    try {
+      return await run();
+    } finally {
+      if (!this.finished.has(id) && !this.aborts.get(id)?.signal.aborted) {
+        this.setTaskStatus(id, 'running', 'answered');
+      }
+    }
+  }
+
+  // ——— M8 scheduled routines: fire → queue → spawn (or skip LOUDLY) ———
+  private routineQueue: Array<{ name: string; firstTriedAt: number }> = [];
+  private routineRetryTimer: NodeJS.Timeout | null = null;
+  /** Loud-skip seam (Law 5: never a silent skip) — wired in index.ts to a spoken/pulsed
+   *  notification; the routine.skipped event is the durable record either way. */
+  onRoutineSkipped: (name: string, reason: string) => void = () => {};
+
+  /** A routine schedule row fired. NEVER throws — the row is already marked fired, so an
+   *  exception here would be a silently lost occurrence (onFire errors are swallowed
+   *  into session.error). KNOWN procedures only, validated at fire time. */
+  runRoutine(row: { id: string; text: string }) {
+    try {
+      const payload = JSON.parse(row.text) as { procedure?: string };
+      const name = typeof payload.procedure === 'string' ? payload.procedure.trim() : '';
+      if (!name) {
+        this.skipRoutine(row.id, 'the routine row carries no procedure name');
+        return;
+      }
+      this.routineQueue.push({ name, firstTriedAt: Date.now() });
+      this.drainRoutineQueue();
+    } catch (err) {
+      this.skipRoutine(row.id, `unreadable routine payload: ${String(err)}`);
+    }
+  }
+
+  /** Start queued routines when the Mac frees up — called on fire, on every task finish,
+   *  and on a retry timer while blocked. A routine that can't start inside the window is
+   *  skipped WITH notice. Public so tests drive it without timers. */
+  drainRoutineQueue() {
+    while (this.routineQueue.length > 0) {
+      const item = this.routineQueue[0];
+      if (Date.now() - item.firstTriedAt > config.routines.queueWindowMs) {
+        this.routineQueue.shift();
+        this.skipRoutine(item.name, 'the Mac stayed busy past the retry window');
+        continue;
+      }
+      const row = this.store.getProcedure(item.name);
+      if (!row) {
+        this.routineQueue.shift();
+        this.skipRoutine(item.name, 'no saved procedure by that name');
+        continue;
+      }
+      let procedure: Procedure | null = null;
+      try {
+        procedure = validateProcedure(JSON.parse(row.body), row.name);
+      } catch { /* fall through to the guard below */ }
+      if (!procedure) {
+        this.routineQueue.shift();
+        this.skipRoutine(item.name, 'the saved procedure failed validation');
+        continue;
+      }
+      try {
+        this.spawnSubagent(
+          row.name,
+          `Scheduled routine: replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${procedure.goal}. ` +
+            'This run is UNATTENDED — the user may not be at the Mac. Anything that needs his answer pauses and waits; never improvise around a pause.',
+          'mac',
+          { procedure, notes: null, unattended: true },
+        );
+        this.routineQueue.shift();
+        this.store.addEvent(null, 'routine.started', { name: row.name, version: row.version });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (/already driving the Mac/.test(message)) {
+          this.scheduleRoutineRetry(); // busy — keep it queued, try again shortly
+          return;
+        }
+        this.routineQueue.shift();
+        this.skipRoutine(item.name, message);
+      }
+    }
+  }
+
+  private scheduleRoutineRetry() {
+    if (this.routineRetryTimer) return;
+    this.routineRetryTimer = setTimeout(() => {
+      this.routineRetryTimer = null;
+      this.drainRoutineQueue();
+    }, config.routines.retryIntervalMs);
+    this.routineRetryTimer.unref();
+  }
+
+  private skipRoutine(name: string, reason: string) {
+    this.store.addEvent(null, 'routine.skipped', { name, reason });
+    try {
+      this.onRoutineSkipped(name, reason);
+    } catch { /* announce is best-effort; the event is the durable record */ }
   }
 
   /**
@@ -420,6 +556,9 @@ export class TaskManager {
     this.store.addEvent(id, 'task.finished', { status, ...(payload as object) });
     const task = this.store.getTask(id);
     if (task) this.onFinished(task);
+    // M8: a finished computer task may unblock a queued routine — try now, off this tick
+    // (finish() must stay synchronous for the kill-switch label race).
+    if (this.routineQueue.length > 0) setImmediate(() => this.drainRoutineQueue());
   }
 
   /** One computer task at a time: there is ONE screen/keyboard — concurrent tasks fight

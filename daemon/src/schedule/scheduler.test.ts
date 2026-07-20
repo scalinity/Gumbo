@@ -197,3 +197,67 @@ test('listSchedules orders upcoming (soonest first) before past (newest first) a
   assert.deepEqual(order, [soon.id, later.id, firedRow.id]);
   assert.deepEqual(store.listSchedules(2).map((r) => r.id), [soon.id, later.id], 'limit truncates from the tail');
 });
+
+// ——— M8 scheduled routines ———
+
+test('M8: a recurring routine re-arms as a NEW pending row in the fire transaction (chain-of-rows)', async () => {
+  const { store, scheduler, fired } = setup();
+  const rec = { freq: 'daily' as const, hour: 3, minute: 0 };
+  const row = scheduler.scheduleRoutine('file expenses', Date.now() - 1000, rec);
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(fired.length, 1);
+  assert.equal(fired[0].kind, 'routine');
+
+  const rows = store.listSchedules().filter((r) => r.kind === 'routine');
+  assert.equal(rows.length, 2, 'fired occurrence + the fresh pending one');
+  const pending = rows.find((r) => r.status === 'pending')!;
+  assert.ok(pending, 'the chain re-armed');
+  assert.notEqual(pending.id, row.id, 'each occurrence is a fresh row');
+  assert.equal(pending.series_id, row.id, 'series identity is the first row\'s id');
+  assert.ok(pending.fire_at > Date.now(), 'next fire is in the future');
+  assert.equal(pending.recurrence, JSON.stringify(rec));
+
+  // The fresh future row must NOT fire in the same (or an immediate) sweep.
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(fired.length, 1, 'the re-armed occurrence stays pending until due');
+});
+
+test('M8: a one-shot routine fires once and ends (no chain), with a routine.fired event — never reminder.fired', async () => {
+  const { store, scheduler, fired, events } = setup();
+  scheduler.scheduleRoutine('one off', Date.now() - 1000, null);
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(fired.length, 1);
+  assert.ok(events.some((e) => e.type === 'routine.fired'), 'routines fire their own event type');
+  assert.ok(!events.some((e) => e.type === 'reminder.fired'), 'a routine must never pulse/speak as a reminder');
+  assert.equal(store.listSchedules().filter((r) => r.kind === 'routine' && r.status === 'pending').length, 0);
+});
+
+test('M8: routines are EXCLUDED from the EventKit mirror (no Reminders.app spam per occurrence)', () => {
+  const { hub, scheduler } = setup();
+  scheduler.scheduleRoutine('quiet routine', Date.now() + 60_000, { freq: 'daily', hour: 9, minute: 0 });
+  const creates = () => hub.sent.filter((m) => (m.msg as { type?: string }).type === 'create_reminder').length;
+  assert.equal(creates(), 0, 'scheduling a routine sends no EventKit create');
+  scheduler.resyncEventKit();
+  assert.equal(creates(), 0, 'resync must skip routine rows (every re-arm has a null twin id)');
+});
+
+test('M8: cancelling a recurring routine\'s pending row ends the whole series', async () => {
+  const { store, scheduler, fired } = setup();
+  const row = scheduler.scheduleRoutine('cancel me', Date.now() - 1000, { freq: 'daily', hour: 3, minute: 0 });
+  scheduler.sweepNow(); // fires + re-arms
+  await drainMicrotasks();
+  const pending = store.listSchedules().find((r) => r.kind === 'routine' && r.status === 'pending')!;
+  assert.ok(pending && pending.series_id === row.id);
+  const cancelled = scheduler.cancelReminder(pending.id);
+  assert.equal(cancelled?.kind, 'routine');
+  // Nothing pending remains, and future sweeps fire nothing — the chain only advances at
+  // fire time, so cancelling the pending occurrence IS cancelling the series.
+  assert.equal(store.listSchedules().filter((r) => r.kind === 'routine' && r.status === 'pending').length, 0);
+  fired.length = 0;
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.equal(fired.length, 0);
+});

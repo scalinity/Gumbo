@@ -10,6 +10,7 @@
 // presence when awake. Both together = complete.
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.ts';
+import { computeNextFire, describeRecurrence, parseRecurrence, type Recurrence } from './recurrence.ts';
 import type { ScheduleRow, Store } from '../events/store.ts';
 import type { Hub } from '../ws/hub.ts';
 
@@ -58,9 +59,34 @@ export class Scheduler {
       // reminder is lost — EventKit still notified at the OS level. Marking after would
       // re-fire a throwing row every poll, forever. Mark + event share a transaction so
       // a crash between them can't consume a fire without its audit trace (review 🔵).
+      // M8: a RECURRING row also inserts its next pending occurrence in the SAME
+      // transaction (chain-of-rows — mutating fire_at in place would leave the row
+      // pending across delivery and break at-most-once). Next fire computes from NOW, so
+      // a slept-through Mac never causes a catch-up storm; duePendingSchedules was
+      // prefetched, so the fresh future row can't be swept in this same pass.
       this.store.transaction(() => {
         this.store.updateScheduleStatus(row.id, 'fired');
-        this.store.addEvent(null, 'reminder.fired', { id: row.id, kind: row.kind, text: row.text, fire_at: row.fire_at });
+        const eventType = row.kind === 'routine' ? 'routine.fired' : 'reminder.fired';
+        this.store.addEvent(null, eventType, { id: row.id, kind: row.kind, text: row.text, fire_at: row.fire_at });
+        if (row.recurrence) {
+          const rec = parseRecurrence(JSON.parse(row.recurrence));
+          if (rec) {
+            this.store.createSchedule({
+              id: randomUUID().slice(0, 8),
+              fire_at: computeNextFire(rec, Date.now()),
+              kind: row.kind,
+              text: row.text,
+              status: 'pending',
+              eventkit_id: null,
+              created_at: Date.now(),
+              recurrence: row.recurrence,
+              series_id: row.series_id ?? row.id,
+            });
+          } else {
+            // A corrupt recurrence must not silently end the chain (Law 5) — say so.
+            this.store.addEvent(null, 'session.error', { message: `schedule ${row.id}: unparseable recurrence — the chain ends here` });
+          }
+        }
       });
       Promise.resolve()
         .then(() => this.onFire({ ...row, status: 'fired' }))
@@ -85,10 +111,39 @@ export class Scheduler {
       status: 'pending',
       eventkit_id: null,
       created_at: Date.now(),
+      recurrence: null,
+      series_id: null,
     };
     this.store.createSchedule(row);
     this.store.addEvent(null, 'reminder.set', { id: row.id, kind: row.kind, text, fire_at: fireAtMs });
     this.hub.broadcast({ type: 'create_reminder', id: row.id, text, fire_at: fireAtMs }, 'shell');
+    return row;
+  }
+
+  /**
+   * M8: schedule a saved procedure — one-shot or recurring. NO EventKit twin by design:
+   * Reminders.app can't run a computer task, and the resync repair loop would otherwise
+   * mint one Reminders.app entry per re-armed occurrence forever. Daemon-only firing is
+   * the honest M5 stance (fires late on wake); the tool description says so.
+   */
+  scheduleRoutine(procedureName: string, fireAtMs: number, recurrence: Recurrence | null): ScheduleRow {
+    const id = randomUUID().slice(0, 8);
+    const row: ScheduleRow = {
+      id,
+      fire_at: fireAtMs,
+      kind: 'routine',
+      text: JSON.stringify({ procedure: procedureName }),
+      status: 'pending',
+      eventkit_id: null,
+      created_at: Date.now(),
+      recurrence: recurrence ? JSON.stringify(recurrence) : null,
+      series_id: id,
+    };
+    this.store.createSchedule(row);
+    this.store.addEvent(null, 'routine.scheduled', {
+      id, procedure: procedureName, fire_at: fireAtMs,
+      ...(recurrence ? { recurrence: describeRecurrence(recurrence) } : {}),
+    });
     return row;
   }
 
@@ -122,6 +177,10 @@ export class Scheduler {
    */
   resyncEventKit() {
     for (const row of this.store.listSchedules(200)) {
+      // M8: routines are EXCLUDED from the mirror — every re-armed occurrence is a fresh
+      // pending row with a null eventkit_id, so this repair loop would otherwise create
+      // one Reminders.app entry per occurrence on every shell hello, forever.
+      if (row.kind !== 'reminder') continue;
       if (row.status === 'pending' && !row.eventkit_id) {
         this.hub.broadcast({ type: 'create_reminder', id: row.id, text: row.text, fire_at: row.fire_at }, 'shell');
       } else if (row.status === 'cancelled' && row.eventkit_id) {

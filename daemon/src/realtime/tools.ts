@@ -15,6 +15,7 @@ import type { FileEditContext } from '../files/context.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
+import { computeNextFire, describeRecurrence, parseRecurrence } from '../schedule/recurrence.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import { executeMacDo } from '../mac/run.ts';
 
@@ -418,14 +419,25 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   const listReminders = tool({
     name: 'list_reminders',
     description:
-      "List the user's reminders — upcoming first, then recently fired/cancelled. Use it to answer " +
-      '"what are my reminders" and to find the id for cancel_reminder.',
+      "List the user's reminders AND scheduled routines — upcoming first, then recently " +
+      'fired/cancelled. Use it to answer "what are my reminders / what\'s scheduled" and to find ' +
+      'the id for cancel_reminder.',
     parameters: z.object({}),
     execute: async () => {
       const rows = deps.scheduler.listReminders();
-      if (rows.length === 0) return 'No reminders.';
+      if (rows.length === 0) return 'No reminders or scheduled routines.';
       return rows
-        .map((r) => `${r.id} · ${r.status} · ${fireAtLabel(r.fire_at)} · ${r.text}`)
+        .map((r) => {
+          let label = r.text;
+          if (r.kind === 'routine') {
+            try {
+              label = `routine: "${(JSON.parse(r.text) as { procedure?: string }).procedure ?? '?'}"`;
+            } catch {
+              label = 'routine';
+            }
+          }
+          return `${r.id} · ${r.status} · ${fireAtLabel(r.fire_at)} · ${label}${r.recurrence ? ' · recurring' : ''}`;
+        })
         .join('\n');
     },
   });
@@ -433,14 +445,84 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   const cancelReminder = tool({
     name: 'cancel_reminder',
     description:
-      'Cancel a pending reminder (removes it from both the scheduler and Reminders.app). Get the ' +
-      'id from list_reminders; ids are internal — never say one aloud.',
+      'Cancel a pending reminder (removes it from both the scheduler and Reminders.app) OR a ' +
+      'scheduled routine — cancelling a recurring routine\'s pending occurrence ends the whole ' +
+      'series. Get the id from list_reminders; ids are internal — never say one aloud.',
     parameters: z.object({ reminder_id: z.string() }),
     execute: async ({ reminder_id }) => {
       const row = deps.scheduler.cancelReminder(reminder_id);
-      return row
-        ? `Cancelled the reminder "${row.text}".`
-        : `No pending reminder with that id — it may have fired or been cancelled already. Check list_reminders.`;
+      if (!row) return `No pending entry with that id — it may have fired or been cancelled already. Check list_reminders.`;
+      if (row.kind === 'routine') {
+        return `Cancelled the scheduled routine${row.recurrence ? ' (the whole recurring series ends here)' : ''}.`;
+      }
+      return `Cancelled the reminder "${row.text}".`;
+    },
+  });
+
+  // M8 scheduled routines: the M5 scheduler's kind seam, second consumer. KNOWN
+  // procedures only; unattended runs pause at every would-be-confirm (never auto-approve).
+  const scheduleRoutine = tool({
+    name: 'schedule_routine',
+    description:
+      'Schedule a SAVED procedure to run by itself — once, or recurring ("every day at 9", "every ' +
+      'Monday at 8:30", "the first Monday of each month at 9"). Only saved procedures can be ' +
+      'scheduled (teach one or save one first — run_procedure without a match lists what exists). ' +
+      'Unattended runs NEVER auto-approve anything: a step that would ask the user pauses the run ' +
+      'and waits for him. Runs fire only while this Mac is awake with Gumbo running (no ' +
+      'Reminders.app entry) — for a spoken reminder use set_reminder instead. For one-shots ' +
+      'resolve fire_at yourself like set_reminder; for recurring pass recurrence and fire_at null.',
+    parameters: z.object({
+      procedure: z.string().describe('The saved procedure name (or the user\'s description of it)'),
+      fire_at: z
+        .string()
+        .nullable()
+        .describe('One-shot run time — absolute LOCAL ISO date-time like 2026-07-21T09:00:00; null when recurrence is given'),
+      recurrence: z
+        .object({
+          freq: z.enum(['daily', 'weekly', 'monthly']),
+          hour: z.number().int().min(0).max(23),
+          minute: z.number().int().min(0).max(59),
+          weekday: z.number().int().min(0).max(6).nullable().describe('0=Sunday … 6=Saturday; required for weekly, and for monthly-nth'),
+          nth: z.number().int().min(1).max(4).nullable().describe('monthly: the nth weekday (1=first Monday etc.)'),
+          day: z.number().int().min(1).max(28).nullable().describe('monthly alternative: a fixed day of the month'),
+        })
+        .nullable()
+        .describe('Recurring schedule; null for a one-shot'),
+    }),
+    execute: async ({ procedure: query, fire_at, recurrence }) => {
+      const row = store.getProcedure(query.trim()) ?? store.searchProcedures(query, 1)[0];
+      if (!row) {
+        const saved = store.listProcedures(5).map((p) => `"${p.name}"`).join(', ');
+        return `No saved procedure matches "${query}" — only saved procedures can be scheduled. ${saved ? `Saved: ${saved}.` : 'Nothing is saved yet — teach one first.'}`;
+      }
+      const rec = recurrence
+        ? parseRecurrence({
+            freq: recurrence.freq, hour: recurrence.hour, minute: recurrence.minute,
+            ...(recurrence.weekday !== null ? { weekday: recurrence.weekday } : {}),
+            ...(recurrence.nth !== null ? { nth: recurrence.nth } : {}),
+            ...(recurrence.day !== null ? { day: recurrence.day } : {}),
+          })
+        : null;
+      if (recurrence && !rec) {
+        return 'That recurrence is incomplete — weekly needs a weekday; monthly needs either a day of month or weekday+nth. Fix it and call again.';
+      }
+      let fireAtMs: number;
+      if (rec) {
+        fireAtMs = computeNextFire(rec, Date.now());
+      } else {
+        if (!fire_at) return 'A one-shot routine needs fire_at (or pass a recurrence).';
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(fire_at) || /(z|[+-]\d{2}:?\d{2})$/i.test(fire_at)) {
+          return `fire_at must be a LOCAL date-time like 2026-07-21T09:00:00. Got "${fire_at}"; re-resolve and call again.`;
+        }
+        fireAtMs = Date.parse(fire_at);
+        if (Number.isNaN(fireAtMs)) return `Could not parse "${fire_at}".`;
+        if (fireAtMs <= Date.now()) {
+          return `${fireAtLabel(fireAtMs)} is in the past — it is now ${fireAtLabel(Date.now())}. Re-resolve and call again.`;
+        }
+      }
+      const scheduled = deps.scheduler.scheduleRoutine(row.name, fireAtMs, rec);
+      const when = rec ? `${describeRecurrence(rec)} (first run ${fireAtLabel(scheduled.fire_at)})` : fireAtLabel(scheduled.fire_at);
+      return `Scheduled "${row.name}" to run ${when} (internal id ${scheduled.id} — never say it aloud). It runs only while this Mac is awake with Gumbo on; anything risky will pause and wait for the user.`;
     },
   });
 
@@ -634,7 +716,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
 
   return [
     spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, xLookupTool, macDo,
-    teachProcedure, runProcedure,
+    teachProcedure, runProcedure, scheduleRoutine,
     generateImage, editImageTool, openImage, setReminder, listReminders, cancelReminder,
     listTasks, getTaskStatus, cancelTask, readReport, saveNote, presentFileTool, editFileTool,
   ];

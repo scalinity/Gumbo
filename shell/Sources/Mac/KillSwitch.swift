@@ -86,6 +86,11 @@ final class KillSwitch {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        // M8: arming gets the same grace as a handoff end — a fresh arm is always
+        // adjacent to some interaction of the user's (an unattended routine RE-arming the
+        // instant he clicks Approve on its parked confirm is the sharp case: his trailing
+        // mouse drift must not abort the resuming task). Steady-state stays hair-trigger.
+        handoffEndedAt = CFAbsoluteTimeGetCurrent()
         return true
     }
 

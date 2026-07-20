@@ -302,6 +302,7 @@ struct NotchContentView: View {
         case "failed": return "Task failed"
         case "cancelled": return "Task cancelled"
         case "reminder": return "Reminder" // M5: a scheduled reminder just fired
+        case "needs_input": return "Needs you" // M8: a paused (often unattended) task waits on the user
         default: break
         }
         // M8: while recording, the idle notch says so — a live session display (the user
@@ -342,6 +343,7 @@ struct SimmerBars: View {
         case "failed": return alarm
         case "cancelled": return faint
         case "reminder": return gold // M5: gold beacon — matches the dashboard's reminder accent
+        case "needs_input": return gold // M8: attention-gold — a paused task waits on the user
         default: break
         }
         if recording && state == .idle { return alarm } // M8: unmistakably "being recorded"

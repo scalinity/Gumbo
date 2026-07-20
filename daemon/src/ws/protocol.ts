@@ -128,9 +128,10 @@ export type OutboundMessage =
   | { type: 'playback_flush' } // barge-in: drop queued speaker audio immediately
   | { type: 'bubble_upsert'; task_id: string; title: string; status: BubbleStatus } // shell: one panel per task
   | { type: 'bubble_remove'; task_id: string } // shell: fade the panel out (sent after the done-linger)
-  // shell: brief notch pulse — task completion statuses, plus 'reminder' (M5) when a
-  // scheduled reminder fires (the visual cue alongside the spoken delivery).
-  | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running' | 'needs_input'> | 'reminder' }
+  // shell: brief notch pulse — task completion statuses, 'reminder' (M5) when a
+  // scheduled reminder fires, and 'needs_input' (M8) when a task pauses for the user
+  // (the unattended-routine pause must be visible, not just spoken into an empty room).
+  | { type: 'notch_pulse'; status: Exclude<BubbleStatus, 'running'> | 'reminder' }
   // shell: a supervisor escalation needs the user's yes/no; deny happens daemon-side on timeout.
   // `body` is optional long-form content behind the one-liner (the full plan text for a plan
   // approval) — the shell renders it behind a chevron as a scrollable view.

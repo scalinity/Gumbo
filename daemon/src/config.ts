@@ -183,6 +183,14 @@ export const config = {
     compileTimeoutMs: 60_000,
     traceMaxChars: 24_000, // condensed tool.call/tool.result stream fed to the compiler
   },
+  // M8 scheduled routines. The unattended policy is non-negotiable: a would-be-confirm
+  // PAUSES the run (needs_input + pulse + parked notch confirm) until the user answers —
+  // deny-on-timeout stays at pause scale, and NOTHING is ever auto-approved in absentia.
+  routines: {
+    pauseTimeoutMs: 60 * 60_000, // parked-confirm window before the standing deny fires
+    queueWindowMs: 30 * 60_000, // a routine firing into a busy Mac retries this long, then skips LOUDLY
+    retryIntervalMs: 60_000,
+  },
   // M7 browser lane: Playwright/CDP on a DEDICATED PERSISTENT automation profile
   // (~/Gumbo/browser/profile) — never the user's live Chrome (locked decision: anti-bot
   // flags CDP sessions; a burned live profile is unacceptable blast radius). The profile

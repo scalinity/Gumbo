@@ -481,3 +481,53 @@ test('M8: run_procedure is registered and routes matches/misses correctly', asyn
   assert.match(miss, /"file expenses"/, 'the miss lists what IS saved');
   assert.equal(spawned.length, 1, 'a miss never spawns');
 });
+
+test('M8: schedule_routine is registered; known procedures schedule, unknown ones refuse with the saved list', async () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  assert.ok(names.includes('schedule_routine'), 'schedule_routine missing from the realtime registry');
+
+  const scheduled: Array<{ name: string; fireAt: number; rec: unknown }> = [];
+  const scheduler = {
+    scheduleRoutine: (name: string, fireAt: number, rec: unknown) => {
+      scheduled.push({ name, fireAt, rec });
+      return { id: 's1', fire_at: fireAt };
+    },
+  };
+  const store = {
+    getProcedure: (name: string) => (name === 'file expenses' ? { name: 'file expenses', version: 1, body: '{}' } : undefined),
+    searchProcedures: () => [],
+    listProcedures: () => [{ name: 'file expenses' }],
+  };
+  const tools = createOrchestratorTools({} as never, store as never, {
+    scheduler: scheduler as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+  });
+  const sched = tools.find((t) => (t as { name: string }).name === 'schedule_routine') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+
+  // Recurring: "the first Monday at 9" — fire_at computed, not passed.
+  const rec = await sched.invoke({}, JSON.stringify({
+    procedure: 'file expenses', fire_at: null,
+    recurrence: { freq: 'monthly', hour: 9, minute: 0, weekday: 1, nth: 1, day: null },
+  }));
+  assert.match(rec, /Scheduled "file expenses" to run the first Monday of each month at 9:00/);
+  assert.equal(scheduled.length, 1);
+  assert.ok(scheduled[0].fireAt > Date.now());
+
+  // Unknown procedure: refuse and list what exists — never schedule a guess.
+  const miss = await sched.invoke({}, JSON.stringify({ procedure: 'mystery', fire_at: null, recurrence: { freq: 'daily', hour: 9, minute: 0, weekday: null, nth: null, day: null } }));
+  assert.match(miss, /No saved procedure matches/);
+  assert.equal(scheduled.length, 1);
+
+  // Incomplete recurrence: told to fix, nothing scheduled.
+  const bad = await sched.invoke({}, JSON.stringify({ procedure: 'file expenses', fire_at: null, recurrence: { freq: 'weekly', hour: 9, minute: 0, weekday: null, nth: null, day: null } }));
+  assert.match(bad, /incomplete/);
+  assert.equal(scheduled.length, 1);
+});
