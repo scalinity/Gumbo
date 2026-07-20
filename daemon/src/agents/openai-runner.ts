@@ -421,6 +421,17 @@ function itemText(item: unknown): string {
   return '';
 }
 
+/** Login-shaped INABILITY ending — the handoff-bounce trigger. Two independent signals
+ *  must BOTH be present so success reports can't false-positive: a sign-in word ("signed
+ *  out", "log in", "password", …) AND an inability word ("needs", "must", "cannot", …).
+ *  "You are logged in as scalinity" has no inability word → never bounced. Pinned against
+ *  the three verbatim reports from the live failures (openai-runner.test.ts). */
+export function needsHandoffBounce(finalOutput: string): boolean {
+  const login = /\b(?:sign(?:ed)?[ -]?in|sign[ -]?on|log(?:ged)?[ -]?in|log[ -]?on|signed out|logged out|password|passcode|2fa|credential)/i;
+  const inability = /\b(?:needs?|must|can(?:no|')t|cannot|unable|requires?|has to|have to|blocked|missing|before I|first)\b/i;
+  return login.test(finalOutput) && inability.test(finalOutput);
+}
+
 export async function runSubagent(opts: {
   taskId: string;
   brief: string;
@@ -445,12 +456,21 @@ export async function runSubagent(opts: {
   // (tool descriptions route; one loop discipline). The client is a daemon-wide lazy
   // singleton; nothing launches until a browser tool actually runs.
   const browser = isMac ? getBrowserClient() : null;
+  // Bounce bookkeeping: whether the model EVER asked for the handoff this run — the
+  // login-shaped-ending backstop below only fires when it never did.
+  let handoffAsked = false;
+  const trackedHandoff = requestHandoff
+    ? async (reason: string) => {
+        handoffAsked = true;
+        return requestHandoff(reason);
+      }
+    : undefined;
   try {
     const macToolset = isMac
       ? [
           // A login the user performs during a handoff is durable the moment he types it —
           // the persistent automation profile is Chrome's own disk state (no capture step).
-          ...createMacTools(taskId, macBridge!, signal, confirmScript!, { visionQuery, requestHandoff }),
+          ...createMacTools(taskId, macBridge!, signal, confirmScript!, { visionQuery, requestHandoff: trackedHandoff }),
           ...createBrowserTools(taskId, browser!, signal, confirmScript!, macBridge),
         ]
       : null;
@@ -466,25 +486,53 @@ export async function runSubagent(opts: {
 
     // Pass the signal so the SDK aborts the underlying model/tool request promptly on cancel;
     // the in-loop check below stays as a belt-and-suspenders guard between stream events.
-    const stream = await run(agent, brief, { stream: true, maxTurns: isMac ? config.mac.maxTurns : 25, signal });
     const limit = config.activityLogMaxChars;
-    for await (const event of stream) {
-      if (signal.aborted) {
-        throw new Error('cancelled');
+    const consume = async (s: Awaited<ReturnType<typeof run>>) => {
+      for await (const event of s) {
+        if (signal.aborted) {
+          throw new Error('cancelled');
+        }
+        if (event.type !== 'run_item_stream_event') continue;
+        const item = event.item;
+        if (item.type === 'tool_call_item') {
+          const raw = item.rawItem as { name?: string; arguments?: string; type?: string };
+          store.addEvent(taskId, 'tool.call', { name: raw.name ?? raw.type, args: raw.arguments?.slice(0, limit) });
+        } else if (item.type === 'tool_call_output_item') {
+          store.addEvent(taskId, 'tool.result', { output: String((item as { output?: unknown }).output ?? '').slice(0, limit) });
+        } else if (item.type === 'message_output_item') {
+          store.addEvent(taskId, 'subagent.message', { text: itemText(item) });
+        }
       }
-      if (event.type !== 'run_item_stream_event') continue;
-      const item = event.item;
-      if (item.type === 'tool_call_item') {
-        const raw = item.rawItem as { name?: string; arguments?: string; type?: string };
-        store.addEvent(taskId, 'tool.call', { name: raw.name ?? raw.type, args: raw.arguments?.slice(0, limit) });
-      } else if (item.type === 'tool_call_output_item') {
-        store.addEvent(taskId, 'tool.result', { output: String((item as { output?: unknown }).output ?? '').slice(0, limit) });
-      } else if (item.type === 'message_output_item') {
-        store.addEvent(taskId, 'subagent.message', { text: itemText(item) });
-      }
+      await s.completed;
+    };
+    const stream = await run(agent, brief, { stream: true, maxTurns: isMac ? config.mac.maxTurns : 25, signal });
+    await consume(stream);
+    const final = String(stream.finalOutput ?? '');
+    // Deterministic backstop (live demo 2026-07-20, THREE different path shapes to the same
+    // dead end): the model keeps ENDING computer tasks with "the user needs to sign in"
+    // without ever calling request_handoff — prompt rules and even a tool-result nudge
+    // didn't reliably fire (the nudge needs a login-looking URL; GitHub's signed-out
+    // HOMEPAGE has none). So the exit itself is guarded: a login-shaped inability ending
+    // with no handoff asked gets bounced ONCE with an explicit order. history-concat is
+    // the SDK's documented multi-turn continuation.
+    if (isMac && trackedHandoff && !handoffAsked && needsHandoffBounce(final)) {
+      store.addEvent(taskId, 'subagent.message', { text: '[bounce] login-shaped ending without request_handoff — ordering the handoff' });
+      const retry = await run(
+        agent,
+        stream.history.concat([{
+          role: 'user',
+          content:
+            'You are ending with a sign-in problem but you NEVER called request_handoff — that is not a valid ' +
+            'ending for a computer task. the user is right there. Do it now: bring the sign-in page up if it is ' +
+            'not already showing, call request_handoff telling him exactly what to log into, wait for done, ' +
+            'VERIFY the login landed with a fresh snapshot, then finish the ORIGINAL task.',
+        }]),
+        { stream: true, maxTurns: config.mac.maxTurns, signal },
+      );
+      await consume(retry);
+      return String(retry.finalOutput ?? '');
     }
-    await stream.completed;
-    return String(stream.finalOutput ?? '');
+    return final;
   } finally {
     if (isMac) macBridge!.taskFinished();
     // Capture-then-close the browser context (storage state persists the session for the
