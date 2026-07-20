@@ -2026,3 +2026,85 @@ the user caught that the address-pass fixes + demo polish were themselves un-rev
   attacker-controllable screen text (spoof/suppress risk + wording-drift fragility).
 - Skipped (recorded): a research-not-blocked-by-mac-task test needs an injectable runSubagent seam
   or live network; the guard's `if (taskType === 'mac')` structurally exempts research tasks.
+
+## M7 BUILT — computer use v2: browser lane, vision lane, handoff, steering (2026-07-19)
+
+Built to the locked SPEC §M7 on worktree-m7-computer-use (daemon 329/330 — the 1 skip is
+M6's recorded runSubagent-seam skip; shell builds clean; live headed-Chrome smoke passes).
+Phases committed separately: browser lane (7fa4ef1), vision lane (13f76bd), handoff +
+steering (0bcb21d), polish (e8b5c43). What is non-obvious and worth keeping:
+
+- **Playwright aria-ref ground truth (probed live against playwright-core 1.61.1 — the
+  probe script matters because none of this is documented):** (1) a DEFAULT-mode
+  `ariaSnapshot()` WIPES the injected script's aria-ref map — the next `aria-ref=eN`
+  locator resolves to nothing. Every capture in `browser/client.ts` is therefore
+  `mode:'ai'`, and diffs strip `[ref=…]` + `[active]` instead (stripForDiff). (2) ai-mode
+  refs are per-ELEMENT stable across captures and DOM mutation (e7 stays e7 while the
+  element lives) — but that's an implementation detail, not a contract, so the M6-style
+  generation encoding (`g3e12`, reject old generations) stays as the strict guard against
+  silent rebind. (3) frame refs (`f2e5`) auto-jump frames via Playwright's own selector.
+- **Browser auth is exactly the SPEC's capture-once-replay:** non-persistent launch
+  (`playwright-core` + `channel:'chrome'`, headed) + fresh context per task seeded from
+  `~/Gumbo/browser/state.json`, re-captured at task end AND immediately after an approved
+  handoff (a login must survive a later crash). A persistent user-data-dir was rejected —
+  Chrome's own password manager could then store credentials, violating "no stored
+  passwords, ever". state.json holds live session cookies → secret-classed: read-denied
+  in the Claude-session Seatbelt profile + a `Gumbo/browser` clause in the mac_do
+  secret-store pattern; ~/Gumbo/browser is never /files-served.
+- **The M6 literal-URL exfil residual is CLOSED, with a lane split:** gateScript now runs
+  literal fetch/open URLs (per fetchy segment, on the NORMALIZED script) through
+  mac/hosts.ts — unknown host → confirm. SUB-AGENT lane only: the hot lane transcribes
+  the user's own spoken words and has no screen-read context to exfiltrate (same trust
+  split as the shortcuts lane). One allowlist serves both surfaces (browser navigation +
+  script URLs): base config + remembered store, subdomain matching, escalate-with-
+  memoization per task (M4.1 egress posture), "Remember <host>" notch toggle +
+  /api/hosts + dashboard section for management.
+- **Browser submit gate is deterministic, not semantic:** lexicon on the accessible name
+  THE MODEL SAW in its snapshot (refTable parses the same yaml — an attacker shifting the
+  page between snapshot and act can't swap the gate's inputs), plus POST-form rules
+  (button click / Enter in a POST form confirms even when the name dodges the lexicon;
+  GET forms = search stay auto). `type` refuses newlines — pressSequentially would press
+  Enter mid-string and dodge the gate; fill covers multiline (sets value, no keystrokes).
+- **screen_look is a NESTED vision query, not an image-in-context tool:** capture →
+  /v1/responses with ONE question + the PNG → only the text answer enters the loop.
+  Screenshots structurally never accumulate in context (the SPEC's "never
+  full-frame-every-turn" enforced by construction, not prompt); the PNG persists in the
+  task workspace and the audit line records that pixels left the machine. OCR stays the
+  first rung (on-device, free) and capture_denied is a typed MacErrorKind — the model
+  tells the user exactly which grant to flip.
+- **ALL vision-lane coordinate math lives in ScreenVision.swift, next to the pixels:**
+  SCWindow/SCDisplay frames are global top-left points; Vision boxes are normalized
+  bottom-left — converted once, shell-side; the model only ever sees global points it
+  hands back to click_point verbatim. filter.pointPixelScale carries the DPR. SCK's
+  async-only API is semaphore-bridged on MacBridge's serial queue (never main) with its
+  own 8 s timeout under the daemon's RPC budget.
+- **KillSwitch: pure-modifier flagsChanged NEVER aborts (steering's enabler).** The ⌃⌥
+  PTT chord IS a flagsChanged event — under M6's any-untagged-input rule, TALKING to a
+  running task killed it. A modifier alone can neither type nor click, so exempting
+  flagsChanged gives up no takeover coverage. Handoff mode is a second carve-out:
+  `handoffActive` suppresses the abort while the user performs his step; task-end clears
+  it defensively (disarmSession), and MacBridge resync re-broadcasts an active handoff
+  so a shell relaunch mid-login doesn't abort on his in-progress typing.
+- **Steering rides tool results, not SDK surgery:** manager queues send_to_session text
+  for RUNNING computer tasks; wrapSteering monkey-wraps every computer tool's `invoke`
+  (the exact surface the SDK runner AND the unit tests call — the suite pins the patch
+  point) and appends "STEERING FROM THE USER" to the next result. Delivered exactly once;
+  dies with the task. send_to_session's description widened — realtime registry
+  unchanged (M7 adds ZERO realtime tools; tools.test.ts pins the browser/vision/handoff
+  primitives out).
+- **Handoff lifecycle lives in TaskManager, not the tool:** needs_input flip (the
+  existing announce path speaks it) → setHandoff(true) → notch confirm titled "Your
+  turn — tap Done when finished" (5-min EscalationRequest.timeoutMs override,
+  deny-on-timeout → the model wraps up cleanly) → finally setHandoff(false) + status
+  restore (skipped if the task finished/cancelled meanwhile). The remember write-through
+  fires ONLY for requests that carried remember_host and ONLY on approval — a lying
+  shell can't allowlist arbitrary hosts through unrelated confirms.
+- **Ghost cursor over web pages:** in-page CDP acts generate no HID at all, so the ghost
+  is their only visible trace — browser_act computes the element's global center
+  (boundingBox + the window outer/inner-delta origin formula; slightly off with devtools
+  docked, fine for a cosmetic overlay) and fires cursor_to fire-and-forget.
+- **Suite/env gotchas:** browser-tools tests remember `ok.test` into the per-file
+  mkdtemp'd hosts store — fine under canonical per-file isolation, one more reason never
+  to force a shared GUMBO_HOME. The smoke scripts (scratchpad) launch REAL headed Chrome
+  via the worktree's client — re-run them on any Playwright/Chrome bump (probe.mjs is
+  the aria-ref stability probe; treat a behavior change there as a breaking upgrade).
