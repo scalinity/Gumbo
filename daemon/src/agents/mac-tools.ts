@@ -33,12 +33,22 @@ function present(result: MacActionResult): string {
  * times running is a top-4 documented computer-use failure — short-circuit with a warning
  * before it burns the step budget looping.
  */
+/** Optional M7 wiring: requestHandoff pauses the task for the user's own step (manager owns
+ *  the lifecycle — status flip, kill-switch stand-down, notch Done); onHandoffDone runs
+ *  after an approved handoff (the runner captures browser storage state so a login he
+ *  just performed is remembered). Both absent in tests that don't exercise them. */
+export interface MacToolDeps {
+  visionQuery: VisionQuery;
+  requestHandoff?: (reason: string) => Promise<boolean>;
+  onHandoffDone?: () => Promise<void>;
+}
+
 export function createMacTools(
   taskId: string,
   macBridge: MacBridge,
   signal: AbortSignal,
   confirmScript: ConfirmScript,
-  deps: { visionQuery: VisionQuery } = { visionQuery: realVisionQuery },
+  deps: MacToolDeps = { visionQuery: realVisionQuery },
 ) {
   let lastActKey = '';
   let repeatCount = 0;
@@ -270,6 +280,34 @@ export function createMacTools(
     },
   });
 
+  // M7 cooperative handoff: pause → the user does the ONE step himself → verify → resume.
+  // The kill-switch tap classifies his input as the handoff (not an abort) while this is
+  // pending; deny/timeout comes back false and the model wraps up instead of retrying.
+  const requestHandoff = tool({
+    name: 'request_handoff',
+    description:
+      'Pause and hand the machine to the user for ONE step you must not do yourself — a login, a ' +
+      'password or 2FA prompt, a permission dialog, a captcha, a payment screen. Describe exactly ' +
+      'what he should do. Returns "done" when he finishes (then VERIFY with a fresh snapshot that ' +
+      'the state actually advanced) or "declined" (then wrap up and report what remains). Never try ' +
+      'to get past a login yourself.',
+    parameters: z.object({
+      reason: z.string().describe('What the user needs to do, e.g. "log into github.com in the automation browser window"'),
+    }),
+    async execute({ reason }) {
+      if (!deps.requestHandoff) return 'Handoff is unavailable for this task — report what you finished and what remains.';
+      const done = await deps.requestHandoff(reason);
+      auditMacAction({ tier: 'subagent', kind: 'act', action: `handoff: ${reason.slice(0, 160)}`, gate: done ? 'confirmed' : 'declined', ok: done, taskId });
+      if (!done) {
+        return "the user declined (or didn't respond in time) — wrap up: report what you completed and what remains, and end the task.";
+      }
+      // A login he just performed becomes replayable state (browser lane) — capture now,
+      // not at task end, so a later crash can't lose it.
+      await deps.onHandoffDone?.().catch(() => {});
+      return 'the user says the step is done. VERIFY it before continuing: take a fresh snapshot (browser_snapshot / ax_snapshot / screen_ocr) and confirm the state advanced — e.g. the login form is gone.';
+    },
+  });
+
   const checkPermissions = tool({
     name: 'check_permissions',
     description:
@@ -283,5 +321,5 @@ export function createMacTools(
     },
   });
 
-  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, screenOcr, screenLook, clickPoint];
+  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, screenOcr, screenLook, clickPoint, requestHandoff];
 }

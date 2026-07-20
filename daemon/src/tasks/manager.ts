@@ -22,6 +22,10 @@ export class TaskManager {
   private aborts = new Map<string, AbortController>();
   private finished = new Set<string>();
   private claudeRunners = new Map<string, ClaudeSessionRunner>();
+  // M7 voice steering: queued mid-task guidance for RUNNING computer tasks. The loop's
+  // tools drain it into their next result — guidance lands at the model's next
+  // attention point, no SDK surgery (same trick as the structured stall note).
+  private steering = new Map<string, string[]>();
   // cwd of every non-terminal Claude session — a second session on the same real project
   // dir would edit the same files concurrently (git/file conflicts). Kept through park.
   private activeCwds = new Map<string, string>();
@@ -81,9 +85,34 @@ export class TaskManager {
       taskType === 'mac'
         ? (detail: string, confirmTitle = 'Allow this Mac script?') => this.escalate(id, title, { title: confirmTitle, detail }, abort.signal)
         : undefined;
+    // M7 cooperative handoff: pause (needs_input announces it aloud), stand the kill
+    // switch down so the user's own typing IS the handoff, wait for his notch "Done"
+    // (generous window, deny-on-timeout), then re-arm and resume. Status restore skips
+    // a task that finished/cancelled while paused.
+    const requestHandoff =
+      taskType === 'mac'
+        ? async (reason: string) => {
+            this.setTaskStatus(id, 'needs_input', reason);
+            this.macBridge!.setHandoff(true);
+            try {
+              return await this.escalate(
+                id, title,
+                { title: 'Your turn — tap Done when finished', detail: reason, timeoutMs: config.mac.handoffTimeoutMs },
+                abort.signal,
+              );
+            } finally {
+              this.macBridge!.setHandoff(false);
+              if (!this.finished.has(id)) this.setTaskStatus(id, 'running', 'handoff finished');
+            }
+          }
+        : undefined;
     // Two-arg then(): the rejection handler sees ONLY runSubagent errors, so a failure
     // while writing the report (success path) can't be mislabeled 'cancelled'/'failed'.
-    runSubagent({ taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType, macBridge: this.macBridge, confirmScript }).then(
+    runSubagent({
+      taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType,
+      macBridge: this.macBridge, confirmScript, requestHandoff,
+      takeSteering: taskType === 'mac' ? () => this.takeSteering(id) : undefined,
+    }).then(
       (report) => this.finishWithReport(id, title, workspace, report),
       (err: unknown) => {
         this.finish(id, abort.signal.aborted ? 'cancelled' : 'failed', { error: String(err) });
@@ -144,10 +173,24 @@ export class TaskManager {
    * Follow-up text into a Claude session: queued live when the runner is up, otherwise
    * the persisted session id is resumed in its original cwd — this is also how a task
    * interrupted by a daemon restart (or parked needs_input) picks back up.
+   *
+   * M7: a RUNNING computer-use task takes steering instead — the message is queued and
+   * the loop's next tool result carries it ("use the personal account", "skip that
+   * dialog"). Computer tasks aren't resumable once finished (the screen moved on).
    */
   sendToSession(id: string, text: string): 'queued' | 'resumed' {
     const task = this.store.getTask(id);
     if (!task) throw new Error(`no task ${id}`);
+    if (task.kind === 'computer') {
+      if (task.status !== 'running' && task.status !== 'needs_input') {
+        throw new Error(`that computer task already ${task.status === 'done' ? 'finished' : 'stopped'} — start a new one instead`);
+      }
+      const queue = this.steering.get(id) ?? [];
+      queue.push(text);
+      this.steering.set(id, queue);
+      this.store.addEvent(id, 'task.steering', { text });
+      return 'queued';
+    }
     if (task.kind !== 'claude') throw new Error(`task ${id} is not a Claude session`);
     const live = this.claudeRunners.get(id);
     if (live && live.send(text)) {
@@ -290,11 +333,20 @@ export class TaskManager {
     this.store.addEvent(id, 'task.status', { status, reason });
   }
 
+  /** Drain queued steering for a computer task — called by the loop's tools; a message
+   *  is delivered exactly once. */
+  takeSteering(id: string): string[] {
+    const msgs = this.steering.get(id) ?? [];
+    this.steering.delete(id);
+    return msgs;
+  }
+
   private finish(id: string, status: TaskRow['status'], payload: unknown) {
     if (this.finished.has(id)) return; // idempotent: never double-emit task.finished / double-announce
     this.finished.add(id);
     this.aborts.delete(id);
     this.activeCwds.delete(id); // terminal → the project dir is free for a new session
+    this.steering.delete(id); // undelivered steering dies with the task
     this.store.updateTaskStatus(id, status);
     this.store.addEvent(id, 'task.finished', { status, ...(payload as object) });
     const task = this.store.getTask(id);

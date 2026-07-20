@@ -162,6 +162,10 @@ export const config = {
     // screen_look's nested vision-model query (capture → ask → text answer). Screenshots
     // deliberately NEVER enter the loop context — this bounds the one-shot ask instead.
     visionTimeoutMs: 60_000,
+    // M7 cooperative handoff: the user performs one step himself (login, permission dialog,
+    // captcha) and taps Done. Generous like planConfirmTimeoutMs — a login takes minutes,
+    // not seconds. Deny-on-timeout stays: an unanswered handoff wraps the task up cleanly.
+    handoffTimeoutMs: 300_000,
   },
   // M7 browser lane: Playwright/CDP on a DEDICATED automation profile — never the user's live
   // Chrome (locked decision: anti-bot flags CDP sessions; a burned live profile is

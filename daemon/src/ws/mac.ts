@@ -108,9 +108,22 @@ export class MacBridge {
     if (this.activeTasks === 0) this.hub.broadcast({ type: 'mac_task', active: false }, 'shell');
   }
 
+  /** M7 cooperative handoff: while active, the shell's kill switch treats the user's input
+   *  as the handoff (not an abort) and the ghost cursor hides. Edge-triggered like
+   *  mac_task; single flag — one computer task drives at a time by construction. */
+  setHandoff(active: boolean) {
+    if (this.handoffActive === active) return;
+    this.handoffActive = active;
+    this.hub.broadcast({ type: 'mac_handoff', active }, 'shell');
+  }
+  private handoffActive = false;
+
   /** A shell that (re)connects mid-task must arm its kill switch immediately —
-   *  broadcast the current state on every hello (shell relaunches are routine). */
+   *  broadcast the current state on every hello (shell relaunches are routine).
+   *  Handoff state rides along: reconnecting mid-handoff must NOT abort on the user's
+   *  in-progress typing. */
   resync() {
     this.hub.broadcast({ type: 'mac_task', active: this.activeTasks > 0 }, 'shell');
+    if (this.handoffActive) this.hub.broadcast({ type: 'mac_handoff', active: true }, 'shell');
   }
 }

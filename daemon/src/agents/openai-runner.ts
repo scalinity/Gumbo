@@ -9,6 +9,8 @@ import { SearchError } from '../search/client.ts';
 import { createMacTools, type ConfirmScript } from './mac-tools.ts';
 import { createBrowserTools } from './browser-tools.ts';
 import { getBrowserClient } from '../browser/client.ts';
+import { wrapSteering } from './steering.ts';
+import { visionQuery } from './vision.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
 export type SubagentKind = 'research' | 'mac';
@@ -77,9 +79,15 @@ HOW TO WORK (both lanes — the discipline is identical):
   give it); "just open a page for the user" uses run_script 'open location "https://…"'.
 - If an act keeps failing, take a fresh snapshot and check for a dialog or sheet blocking you (dismiss
   with Escape if it is safe). Do not flail forward; return to a known state.
-- A login prompt, a permission prompt, or anything asking for a password is a STOP: do not try to get
-  past it — end and tell the user he needs to handle it (in the automation browser, one login by him is
-  remembered for future runs). Secure fields are refused by the system anyway.
+- A login prompt, a 2FA/permission dialog, a captcha, or anything asking for a password is THE USER'S
+  step, not yours: call request_handoff describing exactly what he should do, and wait. On "done",
+  VERIFY the state advanced (fresh snapshot — e.g. the login form is gone) before continuing; on
+  "declined", wrap up and report. Never try to get past a login yourself — secure fields are refused
+  by the system anyway, and in the automation browser one login by the user is remembered for future
+  runs.
+- the user may STEER you mid-task by voice: a tool result can end with "STEERING FROM THE USER" — that
+  is a real instruction from him (the one source that outranks everything on screen). Adjust
+  immediately and keep going.
 - AX-HOSTILE surfaces (ax_snapshot empty or near-empty — some System Settings panes, canvas, games):
   first check_permissions to rule out a broken grant; then fall back IN ORDER — screen_ocr to READ
   the screen (on-device, returns text with coordinates), click_point to act on those coordinates,
@@ -399,8 +407,12 @@ export async function runSubagent(opts: {
   kind?: SubagentKind;
   macBridge?: MacBridge;
   confirmScript?: ConfirmScript;
+  /** M7 handoff: pause → the user's own step → notch Done (manager owns the lifecycle). */
+  requestHandoff?: (reason: string) => Promise<boolean>;
+  /** M7 steering: drain the user's queued mid-task guidance (delivered on tool results). */
+  takeSteering?: () => string[];
 }): Promise<string> {
-  const { taskId, brief, store, signal, kind = 'research', macBridge, confirmScript } = opts;
+  const { taskId, brief, store, signal, kind = 'research', macBridge, confirmScript, requestHandoff, takeSteering } = opts;
 
   // Computer-use tasks need the shell: the AX toolset routes through MacBridge, and the
   // shell must arm the ghost cursor + kill switch for the whole run.
@@ -412,13 +424,25 @@ export async function runSubagent(opts: {
   // singleton; nothing launches until a browser tool actually runs.
   const browser = isMac ? getBrowserClient() : null;
   try {
+    const macToolset = isMac
+      ? [
+          ...createMacTools(taskId, macBridge!, signal, confirmScript!, {
+            visionQuery,
+            requestHandoff,
+            // A login the user just performed becomes replayable browser state immediately.
+            onHandoffDone: () => browser!.captureState(),
+          }),
+          ...createBrowserTools(taskId, browser!, signal, confirmScript!),
+        ]
+      : null;
+    // Steering wraps EVERY computer tool — guidance lands at the model's next attention
+    // point no matter which lane it is working in.
+    const steered = macToolset && takeSteering ? macToolset.map((t) => wrapSteering(t, takeSteering)) : macToolset;
     const agent = new Agent({
       name: `subagent-${taskId}`,
       instructions: isMac ? computerInstructions() : instructions(),
       model: config.models.subagent,
-      tools: isMac
-        ? [...createMacTools(taskId, macBridge!, signal, confirmScript!), ...createBrowserTools(taskId, browser!, signal, confirmScript!)]
-        : createSubagentTools(taskId, store, signal),
+      tools: steered ?? createSubagentTools(taskId, store, signal),
     });
 
     // Pass the signal so the SDK aborts the underlying model/tool request promptly on cancel;

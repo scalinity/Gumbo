@@ -221,6 +221,8 @@ interface AskedQuestion {
 export interface EscalationRequest {
   title: string;
   detail: string;
+  /** Override the notch confirm window (M7 handoffs wait minutes, not seconds). */
+  timeoutMs?: number;
 }
 
 // Mirrors the SDK's PermissionResult without importing its types into every caller.

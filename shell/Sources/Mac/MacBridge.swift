@@ -45,6 +45,19 @@ final class MacBridge {
             let active = msg["active"] as? Bool ?? false
             DispatchQueue.main.async { active ? self.armSession() : self.disarmSession() }
             return true
+        case "mac_handoff":
+            // M7: the user is doing a step himself — stand the kill switch down and hide
+            // the ghost (his real cursor is the one that matters right now).
+            let active = msg["active"] as? Bool ?? false
+            DispatchQueue.main.async {
+                self.killSwitch.handoffActive = active
+                if active {
+                    self.ghost.hide()
+                } else if self.sessionArmed {
+                    self.ghost.show()
+                }
+            }
+            return true
         default:
             return false
         }
@@ -110,6 +123,10 @@ final class MacBridge {
 
     // MARK: session lifecycle (main thread)
 
+    /// Whether a computer-use session is armed — the handoff-end path only re-shows the
+    /// ghost while a task is actually driving (main-thread only, like arm/disarm).
+    private var sessionArmed = false
+
     private func armSession() {
         // Fail CLOSED: if the kill switch can't arm (PostEvent grant missing), we must not
         // let the task drive the machine with no human-input abort — tell the daemon to
@@ -121,10 +138,13 @@ final class MacBridge {
             reply(["type": "mac_abort", "reason": "kill_switch_unavailable"])
             return
         }
+        sessionArmed = true
         ghost.show()
     }
 
     private func disarmSession() {
+        sessionArmed = false
+        killSwitch.handoffActive = false // a task ending mid-handoff must not leave the tap soft
         killSwitch.disarm()
         ghost.hide()
     }

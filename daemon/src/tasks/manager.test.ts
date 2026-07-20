@@ -205,3 +205,22 @@ test('cancel() returns false for an unknown task', () => {
   const { manager } = freshManager(async () => ({ parked: false, report: '' }));
   assert.equal(manager.cancel('nope'), false);
 });
+
+// ——— M7 voice steering into computer tasks ———
+
+test('sendToSession queues steering for a running computer task; takeSteering drains exactly once', () => {
+  const { manager, store } = freshManager(async () => ({ parked: false, report: 'x' }));
+  const now = Date.now();
+  store.createTask({ id: 'mac1', kind: 'computer', title: 'drive', status: 'running', workspace: '/tmp/x', created_at: now, updated_at: now });
+  assert.equal(manager.sendToSession('mac1', 'use the personal account'), 'queued');
+  assert.equal(manager.sendToSession('mac1', 'skip that dialog'), 'queued');
+  assert.deepEqual(manager.takeSteering('mac1'), ['use the personal account', 'skip that dialog']);
+  assert.deepEqual(manager.takeSteering('mac1'), [], 'drained exactly once');
+});
+
+test('sendToSession refuses a finished computer task with a clear message', () => {
+  const { manager, store } = freshManager(async () => ({ parked: false, report: 'x' }));
+  const now = Date.now();
+  store.createTask({ id: 'mac2', kind: 'computer', title: 'drive', status: 'done', workspace: '/tmp/x', created_at: now, updated_at: now });
+  assert.throws(() => manager.sendToSession('mac2', 'hello'), /already finished/);
+});

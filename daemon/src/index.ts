@@ -44,7 +44,7 @@ const confirms = new ConfirmBridge(hub);
 const macBridge = new MacBridge(hub);
 const manager = new TaskManager(
   store,
-  (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal),
+  (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal, req.timeoutMs),
   // Plan approval: a longer notch window. The one-line detail is a peek; the FULL plan
   // rides as `body`, which the shell renders behind a chevron as a scrollable view —
   // the user approves what he can actually read (live gap 2026-07-16: the prompt showed

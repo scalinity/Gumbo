@@ -134,3 +134,17 @@ test('M7: capture_denied round-trips sanitize as a branchable kind', async () =>
   assert.equal(result.ok, false);
   assert.equal(result.error_kind, 'capture_denied');
 });
+
+test('M7: setHandoff is edge-triggered and resync repeats an active handoff', () => {
+  const { hub, sent } = fakeHub(true);
+  const bridge = new MacBridge(hub, 1000);
+  bridge.setHandoff(true);
+  bridge.setHandoff(true); // duplicate — must not re-broadcast
+  assert.deepEqual(sent.filter((m) => m.type === 'mac_handoff'), [{ type: 'mac_handoff', active: true }]);
+  bridge.resync();
+  assert.equal(sent.filter((m) => m.type === 'mac_handoff').length, 2, 'reconnect mid-handoff re-arms the stand-down');
+  bridge.setHandoff(false);
+  sent.length = 0;
+  bridge.resync();
+  assert.equal(sent.filter((m) => m.type === 'mac_handoff').length, 0, 'no handoff spam when inactive');
+});

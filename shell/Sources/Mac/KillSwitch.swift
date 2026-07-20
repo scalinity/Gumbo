@@ -8,10 +8,21 @@ import CoreGraphics
 /// ladder's global rung moved the real pointer (research correction, 2026-07-16).
 ///
 /// A dedicated abort hotkey is deliberately absent in v1: ANY untagged key press already
-/// aborts, which subsumes it (cooperative pause-and-resume is M7).
+/// aborts, which subsumes it. M7 carves out exactly two things:
+///  1. Pure-modifier events (.flagsChanged) never abort — the ⌃⌥ push-to-talk chord IS a
+///     flagsChanged, and voice steering into a running task requires holding it. A
+///     modifier alone can neither type nor click, so this gives up no takeover coverage.
+///  2. Handoff mode: while the daemon says the user is performing a step HIMSELF (login,
+///     dialog), his input is the handoff, not an abort.
 final class KillSwitch {
     /// Fired once per arm, on the main thread, with the abort reason for the daemon.
     var onFire: ((String) -> Void)?
+
+    /// M7 cooperative handoff — set on the main thread (MacBridge routes mac_handoff
+    /// there), read on the tap's thread. A Bool read can't tear on arm64; the worst race
+    /// is one event judged under the previous mode, which the daemon-side lifecycle
+    /// (status flip before/after the notch confirm) makes harmless.
+    var handoffActive = false
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -72,6 +83,11 @@ final class KillSwitch {
         }
         // Gumbo's own synthetic events (tagged) pass; untagged input is the user.
         if SyntheticInput.isSynthetic(event) { return }
+        // M7: pure-modifier presses never abort — ⌃⌥ is the PTT chord (voice steering
+        // rides it), and modifiers alone cannot drive the machine.
+        if type == .flagsChanged { return }
+        // M7 handoff: the user is doing his step — his input is the point, not an abort.
+        if handoffActive { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.tap != nil else { return } // one shot per arm
             self.disarm()

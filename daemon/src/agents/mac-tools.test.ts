@@ -38,11 +38,11 @@ function byName(list: ToolLike[], name: string) {
   return t!;
 }
 
-test('the AX toolset exposes exactly the sub-agent primitives (M7 adds the vision rungs)', () => {
+test('the AX toolset exposes exactly the sub-agent primitives (M7 adds vision rungs + handoff)', () => {
   const names = tools(fakeBridge(() => ({ ok: true, output: '' }))).map((t) => t.name);
   assert.deepEqual(
     names.sort(),
-    ['ax_act', 'ax_query', 'ax_snapshot', 'check_permissions', 'run_script', 'screen_ocr', 'screen_look', 'click_point'].sort(),
+    ['ax_act', 'ax_query', 'ax_snapshot', 'check_permissions', 'run_script', 'screen_ocr', 'screen_look', 'click_point', 'request_handoff'].sort(),
   );
 });
 
@@ -233,4 +233,50 @@ test('screen_look surfaces a capture failure without calling the vision model', 
   const out = await byName(list, 'screen_look').invoke({}, JSON.stringify({ question: 'q', app: 'Nope', region: null }));
   assert.match(out, /Error \(element_not_found\)/);
   assert.equal(visionCalls, 0);
+});
+
+// ——— M7 handoff + steering ———
+
+test('request_handoff: done → verify message + browser state captured; declined → wrap-up message', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: '' }));
+  let captured = 0;
+  const approving = createMacTools('t1', bridge as never, new AbortController().signal, async () => false, {
+    visionQuery: async () => 'x',
+    requestHandoff: async (reason: string) => {
+      assert.match(reason, /log into github/);
+      return true;
+    },
+    onHandoffDone: async () => { captured += 1; },
+  }) as unknown as ToolLike[];
+  const done = await byName(approving, 'request_handoff').invoke({}, JSON.stringify({ reason: 'log into github.com in the automation browser' }));
+  assert.match(done, /VERIFY/);
+  assert.equal(captured, 1, 'browser storage state captured right after the handoff');
+  assert.equal(lastAudit()!.gate, 'confirmed');
+
+  const declining = createMacTools('t1', bridge as never, new AbortController().signal, async () => false, {
+    visionQuery: async () => 'x',
+    requestHandoff: async () => false,
+    onHandoffDone: async () => { captured += 1; },
+  }) as unknown as ToolLike[];
+  const nope = await byName(declining, 'request_handoff').invoke({}, JSON.stringify({ reason: 'approve the dialog' }));
+  assert.match(nope, /wrap up/i);
+  assert.equal(captured, 1, 'no capture on decline');
+  assert.equal(lastAudit()!.gate, 'declined');
+});
+
+test('request_handoff without wiring (no dep) degrades to a clear report-and-stop message', async () => {
+  const list = tools(fakeBridge(() => ({ ok: true, output: '' })));
+  const out = await byName(list, 'request_handoff').invoke({}, JSON.stringify({ reason: 'x' }));
+  assert.match(out, /unavailable/i);
+});
+
+test('wrapSteering appends queued guidance to the next tool result exactly once', async () => {
+  const { wrapSteering } = await import('./steering.ts');
+  const bridge = fakeBridge(() => ({ ok: true, output: 'win "Notes"' }));
+  let queue: string[] = ['use the personal account'];
+  const list = (tools(bridge) as ToolLike[]).map((t) => wrapSteering(t, () => { const q = queue; queue = []; return q; }));
+  const first = await byName(list, 'ax_snapshot').invoke({}, JSON.stringify({ app: null, max_elements: 400 }));
+  assert.match(first, /STEERING FROM THE USER .*: use the personal account/);
+  const second = await byName(list, 'ax_snapshot').invoke({}, JSON.stringify({ app: null, max_elements: 400 }));
+  assert.doesNotMatch(second, /STEERING/, 'delivered exactly once');
 });

@@ -78,7 +78,7 @@ test('M6: mac_do is registered; the sub-agent AX primitives never leak to the re
 // primitives are sub-agent-only, exactly like the AX ones above.
 test('M7: the browser/vision-lane primitives never leak to the realtime registry', () => {
   const names = buildTools().map((t) => (t as { name: string }).name);
-  for (const banned of ['browser_snapshot', 'browser_act', 'browser_navigate', 'screen_ocr', 'screen_look', 'click_point']) {
+  for (const banned of ['browser_snapshot', 'browser_act', 'browser_navigate', 'screen_ocr', 'screen_look', 'click_point', 'request_handoff']) {
     assert.ok(!names.includes(banned), `${banned} is a sub-agent-only primitive and must not be a realtime tool`);
   }
   for (const name of names) {

@@ -139,9 +139,10 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   const sendToSession = tool({
     name: 'send_to_session',
     description:
-      'Send a follow-up instruction, answer, or course-correction into a Claude Code session — use it ' +
-      'when a session is paused needing input, when the user wants to redirect one, or to resume a ' +
-      'session that was interrupted (e.g. by a restart). The message must be self-contained.',
+      'Send a follow-up instruction, answer, or course-correction into a background task: a Claude ' +
+      'Code session (paused, needing input, or resuming an interrupted one) — or a RUNNING ' +
+      'computer-use task driving this Mac or its browser, where it lands as live steering ("use the ' +
+      'personal account", "skip that dialog"). The message must be self-contained.',
     parameters: z.object({
       task_id: z.string(),
       message: z.string().describe("the user's instruction or answer, self-contained"),
