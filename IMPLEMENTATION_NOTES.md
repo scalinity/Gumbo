@@ -2320,3 +2320,49 @@ bottleneck — accumulation is.
   profile singleton fails loudly if the manually-opened automation window is left open (by
   design — close it, the task launches its own). M7 demo checklist COMPLETE — the remaining
   gate to merge is the user's call.
+
+## M9–M17 external-research fold — two deep-research reports → SPEC amendments + 4 new phases (2026-07-20)
+
+the user ran `RESEARCH_BRIEF.md` through Claude Research and ChatGPT deep research and pasted both
+reports; this pass folded them into SPEC §M9–M17. Method: amend-in-place where a report extended an
+existing phase, new milestones only where content didn't fold cleanly (the user pre-authorized),
+anti-recommendations never reversed, corroborations recorded here rather than restated in SPEC.
+
+- **Independent double-hits (both reports, different sources — the strongest signal in the fold):**
+  (1) two-axis confidentiality×integrity labels beyond the planned taint bit (FIDES lineage, NOT
+  CaMeL — both explicitly drew that line) → M10; (2) an on-device small-model tier (Apple
+  Foundation Models + MLX) + privacy/effect-aware routing → new M15; (3) App Intents / Shortcuts as
+  a typed first-party action lane → new M16; (4) source-attributed + bitemporally-valid memory with
+  principled forgetting → M9; (5) calibrated abstention MUST be out-of-band (RiskEval: models
+  "almost never abstain" even when optimal; AgentAbstain ~59% paired accuracy + post-hoc
+  abstention) → M13; (6) explicit ephemeral physical perception, never ambient → new M17; (7)
+  prompt-cache discipline as a stated design constraint → M15; (8) near-identical premature lists
+  (payments rails, A2A/remote delegation, thin clients, per-user fine-tuning, learned gates as
+  primary, speculative mutating execution) → Deferred/out-of-scope, verbatim spirit.
+- **The two #1 picks COMPOSE:** ChatGPT's transactional-autonomy substrate (effect classes, durable
+  journal, COMMIT_UNKNOWN reconcile-never-retry, single-use permits, receipts, compensation-from-
+  receipts, fault-injection discipline; SagaLLM/ACRFence-informed) + Claude's APFS-localsnapshot
+  universal undo (tmutil ~0.01s CoW checkpoints, mount-ro selective restore; full-volume rollback
+  entitlement-gated — scope stated honestly) = new **M14 Transactional effects & universal undo**,
+  the extension's keystone. Claude's durable-execution/record-replay item folded into the same
+  phase (journal = authoritative; replay consumes recorded outputs, blocks live shell actions).
+- **One genuine conflict, recorded not resolved:** a local-only MCP boundary (`gumbo-mcp` stdio
+  shim). ChatGPT: build it (capability leases, effect-proposal-only). Claude: rejected-adjacent
+  ("multi-channel gateway in disguise"). → DEFERRED in SPEC with both positions + the constraints
+  any future build must honor. Do not build speculatively.
+- **Mere corroborations (no SPEC change needed):** deterministic out-of-band gating as the
+  surviving defense family (both reports re-validated the M10 stance and the 2026 adaptive-attack
+  read); sleep-time consolidation + PRISM-style etiquette (already M9/M12); the intentions ledger
+  extended M12 rather than contradicting it (PM-Bench's monitoring-false-positive lesson shaped the
+  channel-indexed, no-heartbeat design).
+- **Citation honesty:** several load-bearing sources are 2026 preprints (PM-Bench, AgentAbstain,
+  ACRFence, MemGate, transaction closure) — SPEC header carries the caveat. TSM and MemGate came
+  with NO arxiv ids in either report, so SPEC cites them by name only (an early draft of this fold
+  invented ids for both — caught and stripped before commit; never cite an id a source didn't
+  give). Apple WWDC26 items (AFM3, image input, App Schemas) are vendor claims pre-GA — flagged in
+  M15/M16. Report-given ids/urls used as-is: FIDES 2505.23643, RiskEval 2601.07767, vllm-mlx
+  2601.19139, RouteLLM 2506.22716, R2R 2505.21600, Zep 2501.13956, x402 2605.30998, Progent
+  2504.11703, plus Apple developer/tmutil/mount_apfs docs.
+- **Sequencing note added to the arc header:** M14 can interleave after M10 (receipts want labels;
+  M12 outcome closure and M13 replay fixtures want the journal); M15–M17 are independent and
+  opportunistic. Phase-range references updated M1–M13 → M1–M17.
