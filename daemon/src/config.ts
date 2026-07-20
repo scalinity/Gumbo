@@ -25,6 +25,10 @@ export const home = {
   notes: join(agentHome, 'notes'), // agent-curated notes / knowledge (self-organization)
   db: join(agentHome, 'db'), // sqlite — deliberately outside the /files-served subtree
   logs: join(agentHome, 'logs'), // append-only JSONL audit trails — private, never served
+  // M7 automation-browser state: storage-state auth (session cookies!) + the remembered
+  // host allowlist. Secret-class — never /files-served, and read-denied to sandboxed
+  // Claude sessions (claude-runner readDenied) + the mac_do secret-store gate.
+  browser: join(agentHome, 'browser'),
   /** Subtrees exposed read-only via GET /files/<name>/… */
   served: ['tasks', 'images', 'notes'] as const,
 };
@@ -150,6 +154,24 @@ export const config = {
     snapshotMaxElements: 400, // interactive elements per compacted snapshot the model sees
     maxTurns: 50, // computer-mode sub-agent step budget (SPEC §M6: default ~50)
     outputMaxChars: 262_144, // defensive cap on any single shell result payload
+  },
+  // M7 browser lane: Playwright/CDP on a DEDICATED automation profile — never the user's live
+  // Chrome (locked decision: anti-bot flags CDP sessions; a burned live profile is
+  // unacceptable blast radius). Auth is capture-once-replay storage state (cookies +
+  // localStorage injected into a fresh context per task — no stored passwords, ever); the
+  // browser is HEADED so the user can watch and, in a handoff, act. Runs entirely in-daemon
+  // (no TCC involved), so unlike the AX lane there is no shell RPC underneath.
+  browser: {
+    navTimeoutMs: 30_000, // page.goto budget — background lane, generous but bounded
+    actTimeoutMs: 10_000, // per-element action (click/fill/…) incl. Playwright actionability wait
+    settleTimeoutMs: 2_500, // post-action settle: poll until the tree stops changing
+    settlePollMs: 150, // matches the AX executor's debounced-signature cadence
+    snapshotMaxChars: 24_000, // aria snapshot cap the model sees (big pages truncate with a note)
+    diffMaxLines: 80, // before/after diff cap — past this, advise a fresh snapshot
+    // Base host allowlist (the user-configured, like sandbox.allowedDomains). Bare domains
+    // match subdomains. Remembered approvals persist in ~/Gumbo/browser/hosts.json —
+    // unknown hosts escalate to a notch confirm (M4.1 egress posture), never a silent 403.
+    allowedHosts: [] as string[],
   },
   // Grok (xAI) = live X/real-time-social lookups Exa/Tavily barely see inside X. Same
   // provider contract as the others (shared client, typed SearchError, one audit line,

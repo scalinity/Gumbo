@@ -73,6 +73,19 @@ test('M6: mac_do is registered; the sub-agent AX primitives never leak to the re
   }
 });
 
+// M7: the browser/vision lanes add ZERO realtime tools — spawn_subagent(task_type "mac")
+// + mac_do already cover the routing (SPEC §M7 registry discipline). The browser
+// primitives are sub-agent-only, exactly like the AX ones above.
+test('M7: the browser-lane primitives never leak to the realtime registry', () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  for (const banned of ['browser_snapshot', 'browser_act', 'browser_navigate']) {
+    assert.ok(!names.includes(banned), `${banned} is a sub-agent-only primitive and must not be a realtime tool`);
+  }
+  for (const name of names) {
+    assert.doesNotMatch(name, /browser/i, `${name} smells like a browser-lane tool`);
+  }
+});
+
 function toolByName(name: string, overrides: { store?: unknown; imageContext?: unknown; fileContext?: unknown; presentFile?: unknown; openImage?: unknown; macBridge?: unknown; confirmMacDo?: unknown } = {}) {
   const t = buildTools(overrides).find((t) => (t as { name: string }).name === name);
   assert.ok(t, `${name} not found`);

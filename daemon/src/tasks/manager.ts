@@ -76,9 +76,10 @@ export class TaskManager {
     this.aborts.set(id, abort);
     // Risky sub-agent scripts route to the same notch confirm as everything else (deny on
     // timeout / no shell). Only computer-use tasks use it; research tasks pass undefined.
+    // M7: the browser lane labels its own confirms via the optional title param.
     const confirmScript =
       taskType === 'mac'
-        ? (detail: string) => this.escalate(id, title, { title: 'Allow this Mac script?', detail }, abort.signal)
+        ? (detail: string, confirmTitle = 'Allow this Mac script?') => this.escalate(id, title, { title: confirmTitle, detail }, abort.signal)
         : undefined;
     // Two-arg then(): the rejection handler sees ONLY runSubagent errors, so a failure
     // while writing the report (success path) can't be mislabeled 'cancelled'/'failed'.

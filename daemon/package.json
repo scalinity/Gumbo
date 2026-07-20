@@ -9,6 +9,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.211",
     "@openai/agents": "^0.13.3",
+    "playwright-core": "^1.61.1",
     "ws": "^8.18.0",
     "zod": "^4.0.0"
   },

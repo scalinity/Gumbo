@@ -13,6 +13,7 @@ import { acceptImageEditRequest } from './images/edit.ts';
 import { reapInterruptedImageWork } from './images/reconcile.ts';
 import { applyFileContext, FileEditContext } from './files/context.ts';
 import { acceptFileEditRequest } from './files/edit.ts';
+import { shutdownBrowser } from './browser/client.ts';
 import { Orchestrator } from './realtime/session.ts';
 
 const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY'].filter((k) => !process.env[k]);
@@ -22,7 +23,7 @@ if (missing.length) {
 }
 
 // Organized agent home: one directory per concern, never a flat dump.
-for (const dir of [config.home.tasks, config.home.images, config.home.notes, config.home.db, config.home.logs]) {
+for (const dir of [config.home.tasks, config.home.images, config.home.notes, config.home.db, config.home.logs, config.home.browser]) {
   mkdirSync(dir, { recursive: true });
 }
 
@@ -240,6 +241,10 @@ hub.onBinary((frame, role) => {
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.once(signal, () => {
     orchestrator.shutdown();
+    // M7: fire-and-forget the automation browser close — the storage-state capture is
+    // best-effort here (task teardown already captured it), and Playwright's own exit
+    // handler reaps the Chrome child if the drain window is too short for a clean close.
+    shutdownBrowser().catch(() => {});
     // The sqlite record is already down (synchronous), but the WebSocket close frame is
     // not — an immediate exit abandons it in the socket buffer. A short drain lets it
     // flush so the server sees a clean close instead of a timeout.
