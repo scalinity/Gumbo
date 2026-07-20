@@ -2199,3 +2199,65 @@ live smoke + shell build green):
   stopping point is reached; the remaining merge gates are the live demos with the user.
 - **Not pushed.** Feature-branch worktree, no remote; merge to main stays gated on the review
   flow + live GUI demos.
+
+## M9–M13 gap analysis — two research passes → SPEC completeness arc (2026-07-19)
+
+the user asked for a SOTA gap analysis to define post-M8 phases. Two Fable research agents ran in
+parallel — one on FRONTIER TECHNIQUES/papers, one on the OSS/PRODUCT landscape — each given a dense
+Gumbo capability inventory + the hard design constraints (local, single-user, macOS, privacy-first,
+no commercial infra) so they'd return real, buildable gaps rather than generic advice or things
+Gumbo already has. Both reports were folded into SPEC §M9–M13. This section preserves the parts of
+their findings that don't belong in the SPEC proper — the convergence, the "don't re-add" list, and
+the anti-recommendations — so no future session re-derives them.
+
+**The convergence (the load-bearing signal).** Two independent passes ranked the SAME gaps at the
+top. Both #1/#2: memory + a user model (Gumbo keeps a full event log but never learns the user). OSS
+#1: personal-data connectors (mail/messages/calendar — the defining feature of every shipped personal
+agent). Technique #2: a taint/provenance bit (closes the M7 literal-URL residual by principle). Both
+#3-ish: proactivity (brief + watchers) and semantic recall. → SPEC M9 memory, M10 taint, M11
+connectors, M12 proactive, M13 self-improvement. Dependency-ordered (memory personalizes the rest;
+taint before more private data lands; connectors before the proactive layer that reads them).
+
+**Already-SOTA — do NOT re-add (both passes agreed Gumbo matches or leads the field here):**
+- Deterministic out-of-band gating (policy table + Seatbelt + egress proxy + confirms) — the exact
+  defense family that survived 2026's adaptive-attack evals while in-band detectors/classifiers broke
+  at >90% (arxiv 2606.26479). No personal-agent OSS project ships default-deny egress at all.
+- Flat act→observe loop + coding-action lane — Agent S3 reached this by ABLATING its own
+  manager-worker hierarchy (+13%) and adding a coding agent (simular.ai/articles/agent-s3).
+- Orchestrator-worker + tool-description routing + small realtime registry — matches Anthropic's
+  production research architecture and its "tool descriptions are load-bearing" lesson.
+- OCR-first on-device vision w/ cloud one-shot; poll-never-webhook; typed errors; fail-closed kill
+  switch; dedicated-profile browser lane w/ storage-state auth + cooperative handoff — at/above field
+  practice. The only active OSS macOS-control competitor (browser-use's macOS-use) is abandoned.
+- Trace completeness (per-call JSONL audit + sqlite event log) — HAL-grade raw material, already
+  collected; realtime speech-to-speech + PTT + barge-in beats every OSS STT→LLM→TTS stack on latency.
+
+**Anti-recommendations — popular field patterns Gumbo should deliberately NOT adopt:**
+- Full CaMeL/NOVA plan interpreters — ~43% capability tax on OSWorld + still leak via Branch Steering
+  (arxiv 2601.09923); capability-scoped gates + taint labels (M10) buy most protection at no tax.
+- Behavior Best-of-N / wide parallel rollouts — needs resettable VMs; unsafe on a live Mac (SPEC §M8
+  already rejected it; the 2026 research re-confirms it's an eval-time technique).
+- Debate/judge/verifier panels + deeper agent hierarchies — fixed-budget multi-agent synergy collapses
+  via correlated errors (arxiv 2601.17311), and AI "organizations" measure LESS aligned than the same
+  models run singly (alignment.anthropic.com/2026/ai-organizations) — wrong direction for a
+  machine-controlling agent.
+- In-band injection classifiers as a PRIMARY defense — the class that broke >90% under adaptive attack;
+  fine only as a cheap advisory layered on the deterministic gate.
+- Always-on ambient sensing / wake-word-for-anticipation — needs the continuous capture PTT was chosen
+  to avoid; PTT is the consent boundary, not a limitation. Multi-channel chat gateway / device nodes /
+  skills marketplace (OpenClaw's growth surface) — outward auth+exfil surface, multi-tenant infra in
+  disguise. Cloud memory platforms (hosted Letta/Mem0/Zep) + knowledge-graph RAG at n-of-1 — the
+  TECHNIQUES port to local sqlite; the products/heavy-indexes don't fit. Full-duplex model swap today —
+  Moshi-class models trail frontier on reasoning/tool-use and the production realtime API is itself
+  still half-duplex. 24/7 screen recording (~20 GB/mo, max privacy blast radius). Any telemetry.
+
+**Key comparables/citations** (full set inline in SPEC §M9–M13): Letta/MemGPT (arxiv 2310.08560) +
+sleep-time compute (2504.13171) + mem0 extract-consolidate (2504.19413); lethal-trifecta
+(simonwillison.net/2025/Jun/16) + CaMeL (2503.18813) + the adaptive-attack eval (2606.26479);
+Agent-S3, workflow-use/Terminator (record→replay→heal validates M8); Voyager (2305.16291) + ACE
+(2510.04618); sqlite-vec + contextual-retrieval; PRISM calibrated proactivity (2602.01532); the
+macos-mcp TCC access recipes + iMCP (validates shell-owns-TCC). OSWorld: frontier general models now
+pass the 72.36% human baseline (Fable 5 / Mythos 5 ~85%), so Gumbo's model choice is not the
+bottleneck — accumulation is.
+
+**NOT a build.** M9–M13 are design-only, specced-not-built, in the same status as M8. No code written.

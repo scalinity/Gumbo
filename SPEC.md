@@ -8,8 +8,9 @@
 > **Personal use only. Local machine only. Single user (the user).** No auth, analytics, telemetry,
 > CI/CD, or deployment infra beyond what local development needs.
 
-This is the source-of-truth spec. It is organized by build phase (M1–M6). A companion running log
-lives in [`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md). The original approved plan is at
+This is the source-of-truth spec. It is organized by build phase (M1–M13; M1–M8 built, M9–M13 are
+the SOTA-completeness arc specced from a 2026-07-19 research pass). A companion running log lives in
+[`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md). The original approved plan is at
 `~/.claude/plans/<local-plan>.md`.
 
 ---
@@ -616,6 +617,227 @@ the confirm-gated submit until the user taps.
 
 **Deferred (post-M8):** wake word; GPT-Live model swap; launchd auto-start; deeper agent
 self-organization (archiving / reorganizing its home).
+
+---
+
+## M9–M13 — SOTA completeness arc (specced 2026-07-19 from two research passes)
+
+M1–M8 built a voice agent that *acts* — on the web, the Mac, and code — under strong containment.
+Two parallel Fable research passes (one on frontier techniques/papers, one on the OSS/product
+landscape) independently mapped what separates Gumbo from a *complete* state-of-the-art personal
+agent, and they converged. The control/containment stack is already at or ahead of the field:
+deterministic out-of-band gating (policy table + Seatbelt + egress proxy + confirms) is the exact
+defense family that survived 2026's adaptive-attack evaluations while in-band detectors/classifiers
+fell ([arxiv 2606.26479](https://arxiv.org/abs/2606.26479)); the flat act→observe loop with a coding
+lane is what Agent S3 reached by *ablating* its own manager-worker hierarchy
+([simular.ai/articles/agent-s3](https://www.simular.ai/articles/agent-s3)); orchestrator-worker with
+tool-description routing matches Anthropic's production research architecture. The real gaps are all
+*accumulation and knowing the user*: Gumbo keeps a full event log but never learns from it, can't read
+his mail or calendar, speaks only when pushed-to-talk or on a timer, and doesn't track when its own
+context has been touched by untrusted content. These five phases add each capability, and — the
+load-bearing constraint — **every one reuses an existing seam** (the scheduler `kind`, the event log,
+the policy table, sqlite/FTS5, the MacBridge) rather than new infrastructure. Full gap analyses,
+citations, and the "already-SOTA / anti-recommendations" lists are in IMPLEMENTATION_NOTES
+§"M9–M13 gap analysis". Sequenced by dependency: memory first (it personalizes the rest); provenance
+before more private data lands; connectors before the proactive layer that reads them.
+
+### M9 — Memory & the model of the user (specced 2026-07-19)
+
+Both research passes ranked this the #1 missing capability. Gumbo keeps a complete sqlite event log
+and a memory table but never *learns the user*: preferences stated by voice evaporate, finished tasks
+are stored but never distilled, and the event log is replayed for session continuity yet never
+mined. This is the phase that makes "personal" true — and it introduces no new infrastructure.
+
+- **Core-memory blocks (self-editing, always in context).** 3–5 pinned rows in the memory table — a
+  user profile, durable preferences, active projects/people — that the orchestrator edits with a new
+  daemon-side `remember`/`update_memory` realtime tool and that are injected into the realtime session
+  instructions at connect (the session-rebuild-from-event-log path is exactly where they belong).
+  MemGPT/Letta's self-editing memory ([arxiv 2310.08560](https://arxiv.org/abs/2310.08560)) minus the
+  server and paging. The blocks are small and human-readable — the user inspects and corrects them in
+  the dashboard.
+- **Sleep-time reflection as a scheduler consumer (`kind: 'reflection'`).** The generic scheduler
+  `kind` seam ships its designed third consumer (reminder → routine → reflection): a nightly job feeds
+  the day's event log + finished-task reports through the existing background sub-agent runner (cheap
+  model) and emits (a) consolidated memory rows, (b) core-block updates, (c) a one-paragraph episodic
+  day summary. **Consolidate, never blind-append** — mem0's extract→update/merge/supersede
+  ([arxiv 2504.19413](https://arxiv.org/abs/2504.19413); sleep-time compute
+  [2504.13171](https://arxiv.org/abs/2504.13171)). Reflection runs while Gumbo is idle, so interactive
+  turns start pre-digested.
+- **Hybrid semantic recall.** FTS5 keyword recall fails on paraphrase ("that pergola thing" vs a
+  stored "patio cover"). Two steps: (1) a `search_memory` realtime tool over the existing FTS5 — zero
+  new infra, immediate voice-reachable recall; (2) sqlite-vec alongside FTS5 (node:sqlite loads
+  extensions), embed rows + notes, fuse BM25 + vector with reciprocal-rank fusion, under the provider
+  conventions (typed errors, one audit line per embedding call). **Privacy fork to decide at build:**
+  embedding text via the OpenAI key sends it to a provider — fine for search-derived rows (already
+  provider-touched), a real decision for personal notes; the privacy-clean alternative is an on-device
+  embedding model at the cost of new infra. Skip rerankers and graph RAG until hybrid demonstrably
+  misses.
+
+**Demo:** "remember I prefer aisle seats and my sister's name is Mara" → weeks later, "book me a
+flight to see my sister" recalls both without being told; overnight, Gumbo consolidates a week of
+scattered mentions into a two-line profile the user can read in the dashboard.
+
+**Considered and rejected:** cloud memory platforms (hosted Letta/Mem0/Zep) — the *techniques* port to
+local sqlite; the products move the user's user model off-device, against keys-stay-daemon-side.
+Knowledge-graph RAG (GraphRAG/HippoRAG) — a heavy standing index for corpus-scale multi-hop QA; at
+n-of-1 scale hybrid BM25+vector wins on cost/simplicity. Monolithic memory rewrites — ACE's "context
+collapse" ([arxiv 2510.04618](https://arxiv.org/abs/2510.04618)); updates are always deltas.
+
+### M10 — Provenance & taint-aware gating (specced 2026-07-19)
+
+The most *principled* thing Gumbo can add, and the technique pass's #2: it closes the M7 literal-URL
+exfil residual (the one the review flow kept circling) with a rule instead of a host-allowlist regex,
+and it hardens the whole computer-use + web surface before M11 adds a pile of private data to protect.
+The 2026 adaptive-attack evidence is decisive — deterministic out-of-band enforcement (reference
+monitors, information-flow labels) held under defense-aware attack while in-band detectors broke at
+>90% ([arxiv 2606.26479](https://arxiv.org/abs/2606.26479)). Gumbo's gates are already that family;
+they're just missing provenance.
+
+- **Taint as a task-level bit, not an interpreter.** Every tool result already flows through the
+  daemon — stamp each with a source class (`user | web | screen | file`) in the event log. The first
+  `web`/`screen` ingestion flips the task's `tainted` flag. Biba-style integrity labeling grafted onto
+  existing gates — days, not weeks — not a CaMeL-style plan interpreter.
+- **A stricter lane for tainted tasks in `gateScript` / the policy table.** Once tainted: network
+  sends and `do shell script` escalate unconditionally; literal-URL navigation is blocked outright
+  (this *is* the M7 residual's principled fix — a task that has read untrusted content may not open a
+  URL built from it, allowlist or no); and the notch confirm renders a "this task has read untrusted
+  web/screen content" banner so the user's approval is *informed*, not blind.
+- **Context minimization for the worst edge (optional).** Scrape/OCR results destined for a
+  computer-use task pass through a quarantined summarize-to-facts call first (one of the six documented
+  injection-defense patterns, [arxiv 2506.08837](https://arxiv.org/abs/2506.08837)) — the model acts on
+  extracted facts, never the raw attacker-controlled bytes.
+
+**Demo:** a research task that scraped an attacker-controlled page then tries to `open location` a URL
+containing text it read → blocked with a spoken "that task read web content and is trying to open a URL
+built from it — I've stopped it," where the M7 gate leaned on the host allowlist alone.
+
+**Considered and rejected:** full CaMeL/NOVA plan interpreters — provable control-flow integrity costs
+~43% of frontier capability on OSWorld and still leaks via Branch Steering
+([arxiv 2601.09923](https://arxiv.org/abs/2601.09923)); capability-scoped gates + taint labels buy
+most of the protection at none of the capability tax. In-band injection classifiers as the primary
+gate — the class that broke under adaptive attack; acceptable only as a cheap advisory signal layered
+on top, never as the boundary.
+
+### M11 — Personal-data connectors (specced 2026-07-19)
+
+The OSS/product pass's #1: the defining capability of every shipped personal agent (OpenClaw, POHA,
+Aitne, Khoj all lead with it) and Gumbo's single largest gap versus the field. "What did Mara text
+me?", "when's my dentist appointment?", "summarize this morning's mail" are the queries a *personal*
+agent actually gets, and Gumbo can answer none today. The access recipes are fully documented and the
+shell-owns-TCC architecture is already the correct shape (independently validated by iMCP, which uses
+the exact GUI-owns-grants + bridge split).
+
+- **Read tools via the shell's TCC + node:sqlite — native, not third-party MCP servers.** Extend the
+  M6 MacBridge with read actions: EventKit calendar read + Contacts-framework search (shell-side, it
+  already owns Automation TCC); daemon-side read-only node:sqlite over Messages' `chat.db` and Mail's
+  Envelope Index (the documented recipe — JXA message/mail reading is broken/too-slow on recent macOS,
+  so direct SQLite reads are the field standard). Native tools keep the keys/TCC posture; third-party
+  MCP servers would not.
+- **Four realtime tools, read-only auto-allow.** `calendar_lookup`, `messages_lookup`, `mail_lookup`,
+  `contacts_lookup` — query live, persist nothing new, auto-run (reads are reversible). **Every send
+  stays behind the existing notch gates** (the M6 mail-send gate already exists). A contacts-enrichment
+  cache resolves numbers/emails to names so "who texted me" reads like a person would say it.
+- **The TCC + privacy trade-off, surfaced to the user up front.** Reading `chat.db` and the Mail index
+  needs **Full Disk Access** — a new, powerful grant and the biggest privacy-footprint increase in
+  Gumbo's arc. Minimal-first: one connector at a time, read-only, and FDA is presented as a deliberate
+  decision, not slipped in.
+
+**Demo:** "what did Mara text me yesterday, and am I free for lunch Thursday?" — answered from Messages
++ Calendar in one turn, names resolved, nothing sent, nothing stored.
+
+**Considered and rejected:** a multi-channel chat gateway / device-node pairing / skills marketplace
+(OpenClaw's growth surface) — every channel is an outward auth+exfil surface and multi-device pairing
+is multi-tenant infra in disguise, against loopback-only/single-user. If remote reachability is ever
+wanted, the minimal move is a single iMessage channel via this connector, flagged as a deliberate
+posture change first.
+
+### M12 — Proactive presence (specced 2026-07-19)
+
+Both passes converged here from different angles — the OSS pass on *what* (morning brief + watchers,
+the POHA/Aitne/Khoj pattern), the technique pass on *how to be polite about it* (calibrated
+proactivity / interruption etiquette). The scheduler — the hard part — already exists; this ships its
+proactive consumers plus the etiquette that keeps them from being an annoyance. Depends on M11
+(watchers read the connectors), reads best after M9 (the brief is personalized) and M10
+(watcher-ingested content is tainted).
+
+- **Morning brief (`kind: 'brief'`).** One scheduled task fans out to sub-agents (calendar + mail via
+  M11, overnight X/news via the existing Grok/Exa tools), synthesizes, and delivers as a notch card +
+  an optional spoken summary at the *first PTT of the day* — never an unprompted cold monologue.
+- **Watchers with two-tier triage (`kind: 'watch'`).** Aitne's cost-and-attention-protecting pattern:
+  cheap polling of connectors/search into a sqlite `observations` table *without spawning sessions*; a
+  scheduled cheap-model triage pass; escalation to a real sub-agent + a notch notification *only* on
+  genuine signal. Quiet hours and a per-day cost cap are first-class.
+- **Interruption etiquette (deterministic, shell-side).** The "small always-on trigger" of the
+  proactivity literature (PRISM's asymmetric speak-or-stay-silent cost,
+  [arxiv 2602.01532](https://arxiv.org/abs/2602.01532)) reduced to zero-cost signals macOS already
+  exposes: hold/queue non-urgent announcements while a realtime session is live, Focus/DND is on, or
+  screen capture/sharing is active (the shell knows all three), and flush the queue at the next PTT
+  press as a one-line "while you were away." No trigger model, no monitoring — pure Swift.
+
+**Demo:** Gumbo stays silent through a screen-shared meeting, then at the first PTT after: "while you
+were presenting — two things: your 3pm moved to 4, and the invoice you were watching for arrived."
+
+**Considered and rejected:** always-on ambient activity sensing / a wake word for anticipatory
+suggestions — the research pattern needs exactly the continuous capture PTT was chosen to avoid.
+**PTT is Gumbo's consent boundary, not a limitation to engineer away.** (Wake word stays deferred as a
+hands-free *input* convenience — a separate decision from proactivity.)
+
+### M13 — Self-improvement & evaluation (specced 2026-07-19)
+
+The capstone: Gumbo's traces are write-only today — nothing distills a successful run into reusable
+procedure, nothing learns from a failure, and there's no regression check on the *behavioral* layer.
+This closes the loop, deliberately reusing M9's nightly reflection job as the single curator (one
+mechanism, not a parallel learning system).
+
+- **Reflexion-lite (learn from failure).** On a task failure/abort, one extra background call writes a
+  three-line "symptom / cause / try-instead" lesson to the memory table, keyed by task kind + target
+  app/site (Reflexion, [arxiv 2303.11366](https://arxiv.org/abs/2303.11366)). The next similar task
+  retrieves and prepends it — one API call per failure, one FTS query per spawn.
+- **Procedure promotion feeding M8.** The nightly reflection job is the curator that promotes
+  *successful* multi-step runs into M8 procedures and *failed* ones into lessons. **Delta updates
+  only** — procedures are small structured entries amended incrementally, never wholesale rewritten
+  (ACE's context-collapse mode, [arxiv 2510.04618](https://arxiv.org/abs/2510.04618)). This makes M8's
+  procedure memory a living skill library (Voyager, [arxiv 2305.16291](https://arxiv.org/abs/2305.16291))
+  rather than a static macro store.
+- **A behavioral regression harness.** ~20 recorded `utterance → expected-tool-call` pairs harvested
+  from the event log, replayed by `node --test` against the realtime tool registry — so "remind me
+  Tuesday" still routes to the scheduler after an orchestrator-instruction tweak. The unit suite covers
+  code; this covers *routing*, the design's weakest link.
+- **Pre-announce claim check.** A cheap list-wise self-check on research reports before they're
+  announced — each claim must have a fetched source behind it (list-wise verification,
+  [arxiv 2506.12928](https://arxiv.org/abs/2506.12928)) — so a finished-task announce doesn't
+  confidently read out an unsupported claim.
+
+**Demo:** a computer-use task that failed on an AX-hostile pane last week silently succeeds this week
+because the retrieved lesson routed it straight to the vision lane; a routing-regression run catches
+that an instruction edit broke "set a timer."
+
+**Considered and rejected:** trajectory→skill distillation into fine-tuning, LLM-judge eval panels,
+reference-free trajectory scoring at scale (HAL/TRACE/AdaRubric) — real techniques, but eval
+*infrastructure* for teams shipping to many users; at n-of-1 the lightweight lesson/regression loop is
+the right weight. Debate/verifier panels — fixed-budget multi-agent synergy collapses via correlated
+errors and measures *less* aligned than single agents
+([arxiv 2601.17311](https://arxiv.org/abs/2601.17311)), the wrong direction for a machine-controlling
+agent.
+
+### Ongoing polish (field-borrowed, not phase-gated)
+
+Small, high-value borrows to fold in opportunistically rather than as phases: coding-session
+git-safety (snapshot dirty state to a temp ref before a Claude session; a "revert last coding task"
+voice tool — Aider's discipline); per-computer-task trajectory JSONL + keep-last-N-image pruning in
+the vision loop (Anthropic computer-use best-practices); a `validate(prompt)→bool` end-of-task
+assertion (Skyvern); preferring non-focus AX actions so the agent doesn't steal the cursor (cua);
+parallel Exa/Grok fan-out within a breadth-first research task (the one multi-agent win worth taking —
+no new agents).
+
+**Deferred (post-M13):** wake word (a hands-free *input* convenience, unrelated to proactivity — PTT
+stays the consent boundary); a full-duplex GPT-Live model swap (Moshi-class models trail frontier
+models on reasoning/tool-use, and the production realtime stack is itself still half-duplex — revisit
+when a frontier-quality full-duplex API ships); launchd auto-start; deeper agent self-organization.
+**Firmly out of scope, re-validated by the 2026 research:** Behavior Best-of-N (needs resettable VMs;
+unsafe on a live Mac), cloud memory platforms, knowledge-graph RAG at n-of-1, in-band injection
+classifiers as a primary gate, multi-agent debate/organizations (measurably less aligned than single
+agents), and any telemetry.
 
 ---
 
