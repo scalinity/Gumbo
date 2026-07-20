@@ -75,6 +75,8 @@ const fileContext = new FileEditContext();
 // result), and "save that as a procedure" distills a finished run's trace.
 const procedures = createProcedureService(store);
 manager.distillProcedure = (name, steps, taskId) => procedures.distillTeaching(name, steps, taskId);
+// Self-heal: a replay that drifted but whose fallback run succeeded becomes version+1.
+manager.healProcedure = (name, taskId) => procedures.saveFromTask(taskId, name, 'healed');
 const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, fileContext, macBridge, confirms, procedures);
 scheduler.onFire = (row) =>
   orchestrator.speakProactively(

@@ -551,6 +551,47 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     },
   });
 
+  // M8 replay: a saved procedure runs deterministically (fast, near-zero model chatter),
+  // falling back to the full computer-use loop only when the UI drifted. The description
+  // routes between this and spawn_subagent: taught/saved tasks come HERE.
+  const runProcedure = tool({
+    name: 'run_procedure',
+    description:
+      'Run a SAVED procedure — something Gumbo learned by watching the user demonstrate it, or saved ' +
+      'from a successful run. Use when he asks for a task he taught or saved ("file this month\'s ' +
+      'expense report", "do the invoices thing like I showed you"). Pass his words as `procedure` — ' +
+      'exact name or a description both match. If nothing matches, tell him what IS saved and offer a ' +
+      'normal task (spawn_subagent) instead — never guess. Replay is fast and quiet, and still asks ' +
+      'via the notch before anything risky (approvals never carry over from the demonstration).',
+    parameters: z.object({
+      procedure: z.string().describe("The procedure name or the user's description of it"),
+      notes: z
+        .string()
+        .nullable()
+        .describe('Run-specific details from the user (a month, a filename, an account) — applied to parameterized steps; null if none'),
+    }),
+    execute: async ({ procedure: query, notes }) => {
+      try {
+        const row = store.getProcedure(query.trim()) ?? store.searchProcedures(query, 1)[0];
+        if (!row) {
+          const saved = store.listProcedures(5).map((p) => `"${p.name}"`).join(', ');
+          return `No saved procedure matches "${query}". ${saved ? `Saved procedures: ${saved}.` : 'Nothing has been saved yet.'} Offer to do it as a normal task instead (spawn_subagent) — don't guess.`;
+        }
+        const parsed = JSON.parse(row.body) as { goal?: string };
+        const brief =
+          `Replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${parsed.goal ?? row.title}.` +
+          (notes ? ` Run-specific notes from the user: ${notes}` : '');
+        const task = manager.spawnSubagent(row.name, brief, 'mac', {
+          procedure: JSON.parse(row.body),
+          notes: notes ?? null,
+        });
+        return `Running the saved procedure "${row.name}" (internal task_id ${task.id} — never say it aloud). You will be told when it finishes.`;
+      } catch (err) {
+        return `Could not start that: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  });
+
   // Hot path: Tavily, hard-capped at config.search.quickLookupTimeoutMs, no retries. The
   // description below IS the router between this and spawn_subagent — its wording is part
   // of the spec; don't loosen it.
@@ -593,7 +634,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
 
   return [
     spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, xLookupTool, macDo,
-    teachProcedure,
+    teachProcedure, runProcedure,
     generateImage, editImageTool, openImage, setReminder, listReminders, cancelReminder,
     listTasks, getTaskStatus, cancelTask, readReport, saveNote, presentFileTool, editFileTool,
   ];

@@ -6,11 +6,13 @@ import { exaSearch, exaContents, type ExaResult } from '../search/exa.ts';
 import { grokLiveSearch } from '../search/grok.ts';
 import { firecrawlScrape, firecrawlMap, firecrawlCrawl, firecrawlExtract, type FirecrawlPage } from '../scrape/firecrawl.ts';
 import { SearchError } from '../search/client.ts';
-import { createMacTools, type ConfirmScript } from './mac-tools.ts';
+import { createMacTools, type ConfirmScript, type ToolObservation } from './mac-tools.ts';
 import { createBrowserTools } from './browser-tools.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import { wrapSteering } from './steering.ts';
 import { visionQuery } from './vision.ts';
+import { fallbackBrief, replayProcedure } from './procedure-runner.ts';
+import type { CompleteFn, Procedure } from './procedures.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
 export type SubagentKind = 'research' | 'mac';
@@ -449,8 +451,18 @@ export async function runSubagent(opts: {
   requestHandoff?: (reason: string) => Promise<boolean>;
   /** M7 steering: drain the user's queued mid-task guidance (delivered on tool results). */
   takeSteering?: () => string[];
+  /** M8 replay: run this saved procedure deterministically FIRST; the Agent loop below
+   *  becomes the fallback when a step drifts. steeringPending is a PEEK (the engine
+   *  bails on steering; only the wrapped fallback loop may consume it). */
+  procedure?: {
+    procedure: Procedure;
+    notes: string | null;
+    steeringPending: () => boolean;
+    complete?: CompleteFn;
+  };
 }): Promise<string> {
-  const { taskId, brief, store, signal, kind = 'research', macBridge, confirmScript, requestHandoff, takeSteering } = opts;
+  const { taskId, brief: originalBrief, store, signal, kind = 'research', macBridge, confirmScript, requestHandoff, takeSteering } = opts;
+  let brief = originalBrief;
 
   // Computer-use tasks need the shell: the AX toolset routes through MacBridge, and the
   // shell must arm the ghost cursor + kill switch for the whole run.
@@ -471,14 +483,47 @@ export async function runSubagent(opts: {
       }
     : undefined;
   try {
+    // M8: the structured last-result side-channel the replay engine reads — never the
+    // result strings (screen text could spoof any textual signal). Inert outside replay.
+    let lastObservation: ToolObservation | null = null;
+    const observe = (obs: ToolObservation) => { lastObservation = obs; };
     const macToolset = isMac
       ? [
           // A login the user performs during a handoff is durable the moment he types it —
           // the persistent automation profile is Chrome's own disk state (no capture step).
-          ...createMacTools(taskId, macBridge!, signal, confirmScript!, { visionQuery, requestHandoff: trackedHandoff }),
-          ...createBrowserTools(taskId, browser!, signal, confirmScript!, macBridge),
+          ...createMacTools(taskId, macBridge!, signal, confirmScript!, { visionQuery, requestHandoff: trackedHandoff, observe }),
+          ...createBrowserTools(taskId, browser!, signal, confirmScript!, macBridge, observe),
         ]
       : null;
+
+    // M8 deterministic replay: runs on the UNWRAPPED toolset (wrapSteering mutates
+    // invoke in place — wrapping first would drain steering into results nobody reads).
+    // Every gate fires inside the tool invokes exactly as in the full loop.
+    if (isMac && opts.procedure && macToolset) {
+      const replay = await replayProcedure({
+        taskId,
+        procedure: opts.procedure.procedure,
+        notes: opts.procedure.notes,
+        store,
+        signal,
+        macBridge: macBridge!,
+        browser: browser!,
+        tools: macToolset as unknown as Array<{ name: string; invoke: (ctx: unknown, args: string) => Promise<unknown> }>,
+        takeObservation: () => { const o = lastObservation; lastObservation = null; return o; },
+        steeringPending: opts.procedure.steeringPending,
+        complete: opts.procedure.complete,
+      });
+      store.addEvent(taskId, 'procedure.replay', {
+        name: opts.procedure.procedure.name,
+        outcome: replay.outcome,
+        ...(replay.outcome === 'fallback' ? { atStep: replay.atStep, reason: replay.reason } : {}),
+      });
+      if (replay.outcome !== 'fallback') return replay.report;
+      // Drift → the SAME task falls through into the full act→observe loop below, with
+      // the skeleton + verified progress as context. Success then self-heals (manager).
+      brief = fallbackBrief(originalBrief, opts.procedure.procedure, replay);
+    }
+
     // Steering wraps EVERY computer tool — guidance lands at the model's next attention
     // point no matter which lane it is working in.
     const steered = macToolset && takeSteering ? macToolset.map((t) => wrapSteering(t, takeSteering)) : macToolset;

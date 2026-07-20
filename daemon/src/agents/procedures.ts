@@ -153,7 +153,9 @@ interface ResponsesPayload {
   output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
 }
 
-const defaultComplete: CompleteFn = async (instructions, input, signal) => {
+/** The daemon's one-shot text completion (/v1/responses, the vision.ts idiom). Exported
+ *  for the replay engine's checkpoint/parameter calls — one client shape, one place. */
+export const completeOnce: CompleteFn = async (instructions, input, signal) => {
   const timeout = AbortSignal.timeout(config.procedures.compileTimeoutMs);
   const res = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
@@ -225,11 +227,13 @@ export interface ProcedureService {
   /** Teaching stop → compile + save; returns the report tail (summary or the reason it
    *  wasn't saved is the CALLER's framing — this throws on failure). */
   distillTeaching(name: string, steps: TeachStep[], taskId: string): Promise<string>;
-  /** "Save that as a procedure": distill a finished computer task's action trace. */
-  saveFromTask(taskId: string, name: string): Promise<{ name: string; version: number; stepCount: number }>;
+  /** "Save that as a procedure": distill a finished computer task's action trace.
+   *  provider 'healed' = the M8 self-heal path (a replay that drifted, fell back to the
+   *  full loop, and succeeded — this run's trace becomes version+1). */
+  saveFromTask(taskId: string, name: string, provider?: 'saved' | 'healed'): Promise<{ name: string; version: number; stepCount: number }>;
 }
 
-export function createProcedureService(store: Store, complete: CompleteFn = defaultComplete): ProcedureService {
+export function createProcedureService(store: Store, complete: CompleteFn = completeOnce): ProcedureService {
   return {
     async distillTeaching(name, steps, taskId) {
       const lines = steps.map((s, i) => describeTeachStep(s, i + 1));
@@ -242,7 +246,7 @@ export function createProcedureService(store: Store, complete: CompleteFn = defa
       return procedureSummary(procedure, version, 'taught');
     },
 
-    async saveFromTask(taskId, name) {
+    async saveFromTask(taskId, name, provider = 'saved') {
       const task = store.getTask(taskId);
       if (!task || task.kind !== 'computer') throw new Error('only a finished computer task can be saved as a procedure');
       if (task.status !== 'done') throw new Error(`that task ${task.status === 'running' ? 'is still running' : `ended ${task.status}`} — only a successful run can be saved`);
@@ -252,9 +256,9 @@ export function createProcedureService(store: Store, complete: CompleteFn = defa
       const input = `Procedure name: ${name}\nSource: the action trace of a computer task that completed successfully.\nGoal (the task's brief): ${brief}\n\nAction trace:\n${trace}`;
       const procedure = await compile(complete, input, name);
       const version = store.saveProcedure({
-        taskId, name, title: `${name} — ${procedure.goal}`, body: JSON.stringify(procedure), provider: 'saved',
+        taskId, name, title: `${name} — ${procedure.goal}`, body: JSON.stringify(procedure), provider,
       });
-      store.addEvent(taskId, 'procedure.learned', { name, version, steps: procedure.steps.length, provider: 'saved' });
+      store.addEvent(taskId, 'procedure.learned', { name, version, steps: procedure.steps.length, provider });
       return { name, version, stepCount: procedure.steps.length };
     },
   };

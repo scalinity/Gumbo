@@ -5,7 +5,7 @@ import { hostAllowed, hostOf } from '../mac/hosts.ts';
 import { browserActDecision } from '../mac/policy.ts';
 import type { BrowserActInput, BrowserResult } from '../browser/client.ts';
 import type { MacBridge } from '../ws/mac.ts';
-import type { ConfirmScript } from './mac-tools.ts';
+import type { ConfirmScript, ToolObservation } from './mac-tools.ts';
 
 /** The slice of BrowserClient the tools need — structural, so tests inject a plain fake
  *  (the same seam idea as mac-tools' fakeBridge). */
@@ -17,6 +17,8 @@ export interface BrowserSurface {
   listTabs(): Promise<BrowserResult>;
   switchTab(index: number): Promise<BrowserResult>;
   refInfo(ref: string): { role: string; name: string | null } | null;
+  /** M8 replay: taught {role,name} → current-generation ref (null = no unambiguous match). */
+  findRef(role: string | null, name: string | null): string | null;
   formMethod(ref: string | null): Promise<string | null>;
   currentUrl(): string | null;
   /** Global-screen center of a ref's element — the ghost cursor's target (null = don't fly). */
@@ -72,7 +74,7 @@ function loginNudge(url: string | null): string {
  * (snapshot, tab list) don't. All of it is sub-agent-only — the realtime registry never
  * sees these tools (tools.test.ts pins that).
  */
-export function createBrowserTools(taskId: string, surface: BrowserSurface, signal: AbortSignal, confirmScript: ConfirmScript, macBridge?: MacBridge) {
+export function createBrowserTools(taskId: string, surface: BrowserSurface, signal: AbortSignal, confirmScript: ConfirmScript, macBridge?: MacBridge, observe?: (obs: ToolObservation) => void) {
   // Hosts the user approved for THIS task (deny is not memoized — he may change his mind).
   const approvedHosts = new Set<string>();
   let lastActKey = '';
@@ -92,6 +94,7 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
       return null;
     }
     auditMacAction({ tier: 'subagent', kind: 'browser', action: `${what} ${host}`, gate: 'declined', ok: false, error: 'unlisted host', taskId, url });
+    observe?.({ tool: 'browser_host_gate', ok: false, declined: true });
     return `the user didn't approve using ${host} — use a different site or report you can't proceed.`;
   }
 
@@ -106,6 +109,7 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
     async execute() {
       if (signal.aborted) return 'Task was cancelled.';
       const result = await surface.snapshot();
+      observe?.({ tool: 'browser_snapshot', ok: result.ok, errorKind: result.error_kind });
       return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);
     },
   });
@@ -163,6 +167,7 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
         const approved = await confirmScript(`${decision.reason} on ${hostOf(url ?? '') ?? 'this page'}`, 'Allow this browser action?');
         if (!approved) {
           auditMacAction({ tier: 'subagent', kind: 'browser', action: `${verb} ${info?.name ?? ref ?? ''}`.trim(), gate: 'declined', ok: false, error: decision.reason, taskId, url });
+          observe?.({ tool: 'browser_act', ok: false, declined: true });
           return `the user didn't approve that (${decision.reason}) — try another approach or skip it.`;
         }
         gate = 'confirmed';
@@ -178,6 +183,7 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
       }
       const result = await surface.act({ verb, ref, value, role, name, timeout_ms });
       auditMacAction({ tier: 'subagent', kind: 'browser', action: `${verb} ${info?.name ?? ref ?? role ?? ''}`.trim(), gate, ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url });
+      observe?.({ tool: 'browser_act', ok: result.ok, errorKind: result.error_kind, noChange: result.no_change === true });
       const stalled = result.ok && result.no_change === true;
       noChangeStreak = stalled ? noChangeStreak + 1 : 0;
       if (noChangeStreak >= 3) {
@@ -213,6 +219,7 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
           if (refusal) return refusal;
           const result = await surface.navigate(url);
           auditMacAction({ tier: 'subagent', kind: 'browser', action: `goto ${url}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url });
+          observe?.({ tool: 'browser_navigate', ok: result.ok, errorKind: result.error_kind });
           // Nudge on the LANDED url (currentUrl), not the requested one — the login case
           // is usually a redirect away from what the model asked for.
           return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);

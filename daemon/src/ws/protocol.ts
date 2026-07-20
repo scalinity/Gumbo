@@ -40,7 +40,13 @@ export type MacAction =
   // stop ack arrives AFTER the shell flushes its pending typing burst, so the daemon has
   // every step by the time record_stop resolves (ordering is load-bearing — manager.ts).
   | { kind: 'record_start' }
-  | { kind: 'record_stop' };
+  | { kind: 'record_stop' }
+  // M8 replay resolution: match a taught target (role/name/identifier) against the LAST
+  // snapshot's nodes, shell-side, returning ONLY the ref string — never by parsing
+  // snapshot text daemon-side (unescaped quotes + clipping break parsers, and screen-text
+  // values choosing the acted-on element would be an injection surface). Resolution is an
+  // observation; the subsequent act inherits every gate.
+  | { kind: 'resolve'; role: string | null; name: string | null; identifier: string | null };
 
 /** SPEC §M6 typed errors (mirrors SearchError.kind — callers branch on kind, never message
  *  strings). The lane-level ones: secure_field is the executor's hard refusal,

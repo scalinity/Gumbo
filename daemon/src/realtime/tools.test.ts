@@ -440,3 +440,44 @@ test('M8: save_last_run distills the newest finished computer task (never a teac
   assert.match(result, /Saved "check invoices" \(version 1, 4 steps\)/);
   assert.deepEqual(saved, [{ taskId: 'run9', name: 'check invoices' }], 'teaching rows are skipped; newest real run wins');
 });
+
+test('M8: run_procedure is registered and routes matches/misses correctly', async () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  assert.ok(names.includes('run_procedure'), 'run_procedure missing from the realtime registry');
+
+  const spawned: Array<{ title: string; replay: unknown }> = [];
+  const body = JSON.stringify({ name: 'file expenses', goal: 'file the report', preconditions: [], apps: ['Mail'], steps: [{ lane: 'ax', desc: 'x' }] });
+  const manager = {
+    spawnSubagent: (title: string, _brief: string, _type: string, replay: unknown) => {
+      spawned.push({ title, replay });
+      return { id: 'r1' };
+    },
+  };
+  const store = {
+    getProcedure: (name: string) => (name === 'file expenses' ? { name: 'file expenses', version: 2, title: 'file expenses — file the report', body } : undefined),
+    searchProcedures: () => [],
+    listProcedures: () => [{ name: 'file expenses' }],
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+  });
+  const runProc = tools.find((t) => (t as { name: string }).name === 'run_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  const hit = await runProc.invoke({}, JSON.stringify({ procedure: 'file expenses', notes: 'July' }));
+  assert.match(hit, /Running the saved procedure "file expenses"/);
+  assert.equal(spawned.length, 1);
+  assert.equal((spawned[0].replay as { notes: string }).notes, 'July');
+
+  const miss = await runProc.invoke({}, JSON.stringify({ procedure: 'water the lawn', notes: null }));
+  assert.match(miss, /No saved procedure matches/);
+  assert.match(miss, /"file expenses"/, 'the miss lists what IS saved');
+  assert.equal(spawned.length, 1, 'a miss never spawns');
+});

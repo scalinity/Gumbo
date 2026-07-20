@@ -82,6 +82,12 @@ final class AXExecutor {
                     maxResults: action["max_results"] as? Int ?? 40
                 ).wire()
             case "act": return act(action).wire()
+            case "resolve":
+                return resolve(
+                    role: action["role"] as? String,
+                    name: action["name"] as? String,
+                    identifier: action["identifier"] as? String
+                ).wire()
             default: return AXResult.failure("out_of_scope", "Unknown action kind \"\(kind)\".").wire()
             }
         }
@@ -537,6 +543,48 @@ final class AXExecutor {
             guard let element = refs[ref] else { return nil }
             return frameOf(element)
         }
+    }
+
+    // MARK: M8 replay resolution — taught target → live ref (read-only)
+
+    /// Match a recorded target against the LAST snapshot's nodes: identifier exact →
+    /// role+name exact → role+name contains. Returns ONLY the ref string (no ambient
+    /// screen text — the daemon-side engine makes deterministic decisions on it), a
+    /// typed element_not_found otherwise. Ambiguity IS not-found: replay never guesses
+    /// between two matches (adapt-or-bail, never act on the wrong element).
+    private func resolve(role: String?, name: String?, identifier: String?) -> AXResult {
+        guard !lastNodes.isEmpty else {
+            return AXResult.failure("stale_ref", "No snapshot to resolve against — take ax_snapshot first.")
+        }
+        func norm(_ s: String?) -> String {
+            var v = (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if v.hasPrefix("ax") { v = String(v.dropFirst(2)) }
+            return v
+        }
+        let wantRole = norm(role)
+        let wantName = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let wantId = (identifier ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wantId.isEmpty || !wantName.isEmpty else {
+            return AXResult.failure("element_not_found", "resolve needs an identifier or a name.")
+        }
+        let pool = lastNodes.filter { wantRole.isEmpty || norm($0.role) == wantRole }
+        // Rung 1: identifier exact — the only selector stable across runs when apps set it.
+        if !wantId.isEmpty {
+            let hits = pool.filter { $0.identifier == wantId }
+            if hits.count == 1 { return AXResult(ok: true, output: hits[0].ref, errorKind: nil, health: nil) }
+            if hits.count > 1 { return AXResult.failure("element_not_found", "ambiguous: \(hits.count) elements share that identifier.") }
+        }
+        if !wantName.isEmpty {
+            // Rung 2: exact name.
+            let exact = pool.filter { $0.name.lowercased() == wantName }
+            if exact.count == 1 { return AXResult(ok: true, output: exact[0].ref, errorKind: nil, health: nil) }
+            if exact.count > 1 { return AXResult.failure("element_not_found", "ambiguous: \(exact.count) elements named that.") }
+            // Rung 3: containment (relaxed — labels drift with counts/dates).
+            let contains = pool.filter { $0.name.lowercased().contains(wantName) }
+            if contains.count == 1 { return AXResult(ok: true, output: contains[0].ref, errorKind: nil, health: nil) }
+            if contains.count > 1 { return AXResult.failure("element_not_found", "ambiguous: \(contains.count) partial matches.") }
+        }
+        return AXResult.failure("element_not_found", "no element matches the recorded target in the current snapshot.")
     }
 
     // MARK: M8 recorder support — element-at-point + focused element (read-only)

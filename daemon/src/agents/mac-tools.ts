@@ -35,6 +35,20 @@ function present(result: MacActionResult): string {
  * times running is a top-4 documented computer-use failure — short-circuit with a warning
  * before it burns the step budget looping.
  */
+/** M8 replay: the structured last-result side-channel. The engine makes DETERMINISTIC
+ *  decisions, so it must never parse tool-result strings (screen text echoed into a diff
+ *  could spoof or suppress any textual signal — the same reason no_change is a wire
+ *  flag). Tools report ok/errorKind/noChange/declined here; the engine reads exactly one
+ *  observation per invoke. */
+export type ToolObservation = {
+  tool: string;
+  ok: boolean;
+  errorKind?: string;
+  noChange?: boolean;
+  /** A confirm gate (host, submit, risky script, handoff) resolved as a deny. */
+  declined?: boolean;
+};
+
 /** Optional M7 wiring: requestHandoff pauses the task for the user's own step (manager owns
  *  the lifecycle — status flip, kill-switch stand-down, notch Done). A login he performs
  *  during the handoff needs no capture step — the persistent automation profile is
@@ -42,6 +56,8 @@ function present(result: MacActionResult): string {
 export interface MacToolDeps {
   visionQuery: VisionQuery;
   requestHandoff?: (reason: string) => Promise<boolean>;
+  /** M8: structured result observer for the replay engine (see ToolObservation). */
+  observe?: (obs: ToolObservation) => void;
 }
 
 export function createMacTools(
@@ -73,6 +89,7 @@ export function createMacTools(
     }),
     async execute({ app, max_elements }) {
       const result = await macBridge.request({ kind: 'snapshot', app, max_elements }, { signal });
+      deps.observe?.({ tool: 'ax_snapshot', ok: result.ok, errorKind: result.error_kind });
       return present(result);
     },
   });
@@ -126,6 +143,7 @@ export function createMacTools(
       );
       const summary = `${verb} ${ref ?? role ?? ''}`.trim();
       auditMacAction({ tier: 'subagent', kind: 'act', action: summary, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      deps.observe?.({ tool: 'ax_act', ok: result.ok, errorKind: result.error_kind, noChange: result.no_change === true });
       // Keyed on the STRUCTURED no_change flag, not output text — screen content echoed
       // into the diff could otherwise spoof (or suppress) the stall signal (review 🔵).
       const stalled = result.ok && result.no_change === true;
@@ -167,6 +185,7 @@ export function createMacTools(
         const approved = await confirmScript(`${decision.reason}: ${describeMacDo(script)}`);
         if (!approved) {
           auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script}`, gate: 'declined', ok: false, error: decision.reason, taskId });
+          deps.observe?.({ tool: 'run_script', ok: false, declined: true });
           return `the user didn't approve that script (${decision.reason}) — try another approach or skip it.`;
         }
       }
@@ -177,6 +196,7 @@ export function createMacTools(
       // Audit the FULL script like the hot lane does (drift between the two lanes' audit
       // shapes was a review 🟡) — the JSONL writer escapes newlines, so length is the only cost.
       auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script}`, gate, ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      deps.observe?.({ tool: 'run_script', ok: result.ok, errorKind: result.error_kind });
       return present(result);
     },
   });
@@ -300,6 +320,7 @@ export function createMacTools(
       if (!deps.requestHandoff) return 'Handoff is unavailable for this task — report what you finished and what remains.';
       const done = await deps.requestHandoff(reason);
       auditMacAction({ tier: 'subagent', kind: 'act', action: `handoff: ${reason.slice(0, 160)}`, gate: done ? 'confirmed' : 'declined', ok: done, taskId });
+      deps.observe?.({ tool: 'request_handoff', ok: done, declined: !done });
       if (!done) {
         return "the user declined (or didn't respond in time) — wrap up: report what you completed and what remains, and end the task.";
       }
@@ -320,6 +341,7 @@ export function createMacTools(
     async execute({ app }) {
       const result = await macBridge.request({ kind: 'activate', app }, { signal });
       auditMacAction({ tier: 'subagent', kind: 'act', action: `activate ${app}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      deps.observe?.({ tool: 'focus_app', ok: result.ok, errorKind: result.error_kind });
       return present(result);
     },
   });

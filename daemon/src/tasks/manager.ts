@@ -9,6 +9,7 @@ import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import { sanitizeTeachStep, teachingReport, type TeachStep } from './teach.ts';
+import type { Procedure } from '../agents/procedures.ts';
 
 /** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod).
  *  The signal fires if the task is cancelled while the confirm is pending. */
@@ -76,8 +77,15 @@ export class TaskManager {
 
   /** Spawn a background sub-agent. taskType 'mac' runs the computer-use loop (kind
    *  'computer' so the kill switch can find it) with the AX toolset; 'research' is the
-   *  default web/writing agent. */
-  spawnSubagent(title: string, brief: string, taskType: SubagentKind = 'research'): TaskRow {
+   *  default web/writing agent. M8: `replay` runs a saved procedure deterministically
+   *  first — the loop becomes its drift fallback, and a successful fallback run
+   *  SELF-HEALS the procedure (version+1 via healProcedure). */
+  spawnSubagent(
+    title: string,
+    brief: string,
+    taskType: SubagentKind = 'research',
+    replay?: { procedure: Procedure; notes: string | null },
+  ): TaskRow {
     if (taskType === 'mac' && !this.macBridge) throw new Error('Mac control is unavailable (no shell bridge wired).');
     if (taskType === 'mac') this.assertMacFree();
     const id = randomUUID().slice(0, 8);
@@ -144,13 +152,42 @@ export class TaskManager {
       taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType,
       macBridge: this.macBridge, confirmScript, requestHandoff,
       takeSteering: taskType === 'mac' ? () => this.takeSteering(id) : undefined,
+      procedure: replay
+        ? { procedure: replay.procedure, notes: replay.notes, steeringPending: () => this.hasSteering(id) }
+        : undefined,
     }).then(
-      (report) => this.finishWithReport(id, title, workspace, report),
+      (report) => {
+        this.finishWithReport(id, title, workspace, report);
+        if (replay) this.healAfterFallback(id, replay.procedure.name);
+      },
       (err: unknown) => {
         this.finish(id, abort.signal.aborted ? 'cancelled' : 'failed', { error: String(err) });
       },
     );
     return task;
+  }
+
+  /** M8 self-heal: a replay that DRIFTED but whose fallback loop then finished 'done'
+   *  becomes the procedure's next version (this run's trace recompiles). Best-effort and
+   *  after the announce — a heal failure must never touch the task's own outcome. */
+  private healAfterFallback(taskId: string, procedureName: string) {
+    if (!this.healProcedure) return;
+    const replayEvent = this.store.getLatestEventPayload(taskId, 'procedure.replay') as { outcome?: string } | null;
+    if (replayEvent?.outcome !== 'fallback') return;
+    if (this.store.getTask(taskId)?.status !== 'done') return;
+    this.healProcedure(procedureName, taskId).then(
+      (result) => this.store.addEvent(taskId, 'procedure.healed', result),
+      (err: unknown) => this.store.addEvent(taskId, 'session.error', { message: `procedure heal failed: ${String(err)}` }),
+    );
+  }
+
+  /** M8 Phase 3 seam, wired in index.ts → procedures.saveFromTask(taskId, name, 'healed'). */
+  healProcedure?: (name: string, taskId: string) => Promise<{ name: string; version: number; stepCount: number }>;
+
+  /** Peek (no drain) — the replay engine bails to the full loop on queued steering; only
+   *  the loop's wrapped tools may consume it. */
+  hasSteering(id: string): boolean {
+    return (this.steering.get(id)?.length ?? 0) > 0;
   }
 
   /**
