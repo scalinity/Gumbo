@@ -72,6 +72,9 @@ HOW TO WORK (both lanes — the discipline is identical):
   it worked. NEVER assume success: an empty diff means nothing changed. Verify STATES, not elements —
   ask "am I on the compose window now?", which survives layout drift, rather than "did button X exist?".
 - Start every task by checking whether it is ALREADY DONE (idempotency), and stop as soon as it is.
+- To open or focus an app, use run_script \`tell application "X" to activate\` — Gumbo runs in the
+  background, so \`open -a X\` opens the app WITHOUT bringing it to the front; \`activate\` foregrounds it
+  (do this first so the window you're driving is visible and frontmost).
 - In apps, prefer a keyboard shortcut (ax_act verb "key", e.g. "cmd+n") or run_script (AppleScript /
   a Shortcut) when it is more reliable than clicking.
 - NEVER navigate by typing into an address bar: autocomplete can silently rewrite what you typed

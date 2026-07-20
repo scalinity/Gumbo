@@ -60,17 +60,19 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     name: 'spawn_subagent',
     description:
       'Spawn a background sub-agent to do research, analysis, or writing — OR a multi-step task on ' +
-      "this Mac's apps and windows (task_type \"mac\"): opening an app and doing something inside it, " +
-      'navigating menus, filling things in, any "open X and do Y" that takes more than one command. ' +
-      'Returns immediately with a task id; the user is notified on completion. The brief must be ' +
-      'detailed and self-contained — the sub-agent cannot ask follow-up questions.',
+      "this Mac's apps and windows (task_type \"mac\"): ACTING INSIDE an app — clicking buttons, typing " +
+      'into fields, navigating menus, filling forms, doing something to the content of a page. Merely ' +
+      'opening an app OR sending it to a URL is NOT this — that is one command, use mac_do. Reach here ' +
+      'only when, after opening, you must click/type/navigate inside. Returns immediately with a task ' +
+      'id; the user is notified on completion. The brief must be detailed and self-contained — the ' +
+      'sub-agent cannot ask follow-up questions.',
     parameters: z.object({
       title: z.string().describe('Short human-readable task title, a few words'),
       brief: z.string().describe('Detailed, self-contained instructions for the sub-agent'),
       task_type: z
         .enum(['research', 'mac'])
         .default('research')
-        .describe('"mac" ONLY for driving apps on this Mac (multi-step UI work); "research" for everything web/writing'),
+        .describe('"mac" ONLY for clicking/typing/navigating INSIDE an app — never for merely opening an app or loading a URL (that is mac_do); "research" for everything web/writing'),
     }),
     execute: async ({ title, brief, task_type }) => {
       // The voice model tends to echo tool results verbatim — keep the id clearly
@@ -90,11 +92,16 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   const macDo = tool({
     name: 'mac_do',
     description:
-      'Run ONE quick command on this Mac and return its output — open an app or URL ("open -a ..."), ' +
-      'toggle a setting, read system info (tmutil, defaults read, osascript one-liners). Use for ' +
-      'single-shot requests you can express as one bash or AppleScript command. NOT for multi-step ' +
-      'app driving ("open X and then do Y inside it") — use spawn_subagent with task_type "mac" for ' +
-      'that. Risky commands ask the user via the notch first; if declined, report that and move on.',
+      'Run ONE quick command on this Mac and return its output — a single bash or AppleScript line. ' +
+      'Opening an app and sending it to a website is ONE command. IMPORTANT: Gumbo runs in the ' +
+      'background, so `open -a` opens an app WITHOUT bringing it to the front — to open an app visibly ' +
+      'you MUST use osascript with `activate` (the app fronts itself). Example — "open Chrome and go to ' +
+      'claude.ai" is one osascript that foregrounds AND navigates: `tell application "Google Chrome" to ' +
+      'activate` then `tell application "Google Chrome" to open location "https://claude.ai"`. Any app: ' +
+      '`tell application "Notes" to activate`. Also single-shot: toggle a setting, read system info ' +
+      '(tmutil, defaults read, osascript one-liners). Only escalate to spawn_subagent(task_type "mac") ' +
+      'when you must then CLICK, TYPE, or navigate menus INSIDE the app. Risky commands ask the user via ' +
+      'the notch first; if declined, report that and move on.',
     parameters: z.object({
       script: z.string().describe('The one-liner to run, complete and self-contained'),
       interpreter: z
