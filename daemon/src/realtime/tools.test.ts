@@ -402,3 +402,41 @@ test('M8: teach_procedure surfaces manager refusals as spoken text (busy Mac, no
   assert.match(await teach.invoke({}, JSON.stringify({ action: 'stop', name: null })), /no recording is active/);
   assert.match(await teach.invoke({}, JSON.stringify({ action: 'cancel', name: null })), /No recording is active/);
 });
+
+test('M8: save_last_run distills the newest finished computer task (never a teaching session)', async () => {
+  const saved: Array<{ taskId: string; name: string }> = [];
+  const manager = { startTeaching: async () => ({}), stopTeaching: async () => ({ name: '', stepCount: 0 }), cancelTeaching: () => false };
+  const store = {
+    listTasks: () => [
+      { id: 'teachrow', kind: 'computer', status: 'done', title: 'Teaching: file expenses' },
+      { id: 'run9', kind: 'computer', status: 'done', title: 'Check invoices' },
+      { id: 'old', kind: 'computer', status: 'done', title: 'Older run' },
+    ],
+  };
+  const tools = createOrchestratorTools(
+    manager as never,
+    store as never,
+    {
+      scheduler: {} as never,
+      announce: async () => {},
+      imageContext: { get: () => null } as never,
+      fileContext: { get: () => null } as never,
+      presentFile: (() => true) as never,
+      openImage: (() => true) as never,
+      macBridge: {} as never,
+      confirmMacDo: (async () => false) as never,
+      procedures: {
+        saveFromTask: async (taskId: string, name: string) => {
+          saved.push({ taskId, name });
+          return { name, version: 1, stepCount: 4 };
+        },
+      } as never,
+    },
+  );
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  const result = await teach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'check invoices' }));
+  assert.match(result, /Saved "check invoices" \(version 1, 4 steps\)/);
+  assert.deepEqual(saved, [{ taskId: 'run9', name: 'check invoices' }], 'teaching rows are skipped; newest real run wins');
+});

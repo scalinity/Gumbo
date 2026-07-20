@@ -33,6 +33,26 @@ export interface ScheduleRow {
   created_at: number;
 }
 
+// M8: one saved procedure VERSION. Insert-only versioning by design: an update is a NEW
+// row with version+1 (the memory table's FTS sync trigger is AFTER INSERT only — updates
+// would silently desync the index), and recall always resolves the latest version.
+export interface ProcedureRow {
+  id: number;
+  ts: number;
+  task_id: string | null;
+  /** memory.query — the exact recall key. */
+  name: string;
+  version: number;
+  /** How this version came to be: demonstrated, saved from a run, or replay self-healing. */
+  provider: 'taught' | 'saved' | 'healed';
+  /** "name — goal" (FTS-indexed alongside the body). */
+  title: string;
+  /** Procedure JSON (agents/procedures.ts owns the schema + guard). */
+  body: string;
+}
+
+const PROCEDURE_COLS = 'id, ts, task_id, query AS name, version, provider, title, body';
+
 type EventListener = (event: EventRow) => void;
 
 export class Store {
@@ -58,12 +78,14 @@ export class Store {
       CREATE INDEX IF NOT EXISTS events_type_ts ON events(type, ts);
       -- memory is INSERT-ONLY by design: memory_fts syncs via the AFTER INSERT trigger
       -- alone, so any future UPDATE/DELETE path must add companion triggers or the FTS
-      -- index silently desyncs. No reader or retention policy yet (write-only until the
-      -- recall feature lands) — add a pruning/VACUUM story before it grows unbounded.
+      -- index silently desyncs. M8 added kind 'procedure' (+ the version column) and the
+      -- FIRST readers (getProcedure/searchProcedures) — procedure updates are new rows,
+      -- version+1, never UPDATEs. Still no retention policy — add a pruning/VACUUM story
+      -- before it grows unbounded. (Pre-M8 DBs are rebuilt once by migrateMemoryTable.)
       CREATE TABLE IF NOT EXISTS memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT, ts INT, task_id TEXT,
-        kind TEXT CHECK(kind IN ('search_result','task_output')),
-        provider TEXT, query TEXT, url TEXT, title TEXT, body TEXT
+        kind TEXT CHECK(kind IN ('search_result','task_output','procedure')),
+        provider TEXT, query TEXT, url TEXT, title TEXT, body TEXT, version INT
       );
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(title, body, content='memory', content_rowid='id');
       CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memory BEGIN
@@ -88,6 +110,47 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS schedule_due ON schedule(status, fire_at);
     `);
+    this.migrateMemoryTable();
+  }
+
+  /**
+   * M8 one-time rebuild of a pre-M8 memory table: the kind CHECK must admit 'procedure'
+   * and the version column must exist, but CREATE IF NOT EXISTS never retrofits either
+   * onto an existing DB. External-content FTS5 makes the order load-bearing: the trigger
+   * drops FIRST (a rename re-parses trigger bodies against the already-dropped FTS
+   * table), the copy uses an EXPLICIT column list (SELECT * would silently miscopy
+   * against the new column), and the FTS 'rebuild' re-tokenizes at the end. Explicit-id
+   * copy re-seeds sqlite_sequence, so AUTOINCREMENT continues where it left off.
+   */
+  private migrateMemoryTable() {
+    const row = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'memory' AND type = 'table'")
+      .get() as { sql?: string } | undefined;
+    const sql = row?.sql ?? '';
+    if (sql.includes("'procedure'") && /\bversion\b/.test(sql)) return;
+    // Re-tokenizing every row is synchronous boot work (bodies are full page texts) —
+    // one line so a slow boot after upgrading is explicable, not mysterious.
+    console.log('store: one-time memory-table rebuild for M8 procedures (FTS re-index included)');
+    this.transaction(() => {
+      this.db.exec(`
+        DROP TRIGGER IF EXISTS memory_fts_insert;
+        DROP TABLE IF EXISTS memory_fts;
+        ALTER TABLE memory RENAME TO memory_old;
+        CREATE TABLE memory (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, ts INT, task_id TEXT,
+          kind TEXT CHECK(kind IN ('search_result','task_output','procedure')),
+          provider TEXT, query TEXT, url TEXT, title TEXT, body TEXT, version INT
+        );
+        INSERT INTO memory (id, ts, task_id, kind, provider, query, url, title, body)
+          SELECT id, ts, task_id, kind, provider, query, url, title, body FROM memory_old;
+        DROP TABLE memory_old;
+        CREATE VIRTUAL TABLE memory_fts USING fts5(title, body, content='memory', content_rowid='id');
+        CREATE TRIGGER memory_fts_insert AFTER INSERT ON memory BEGIN
+          INSERT INTO memory_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+        END;
+        INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');
+      `);
+    });
   }
 
   createSchedule(row: ScheduleRow) {
@@ -158,6 +221,72 @@ export class Store {
     this.db
       .prepare("INSERT INTO memory (ts, task_id, kind, title, body) VALUES (?, ?, 'task_output', ?, ?)")
       .run(Date.now(), taskId, title, body);
+  }
+
+  /** M8: save one procedure VERSION (insert-only — see ProcedureRow). Returns the
+   *  version just written; the first save of a name is v1. */
+  saveProcedure(row: {
+    taskId: string | null;
+    name: string;
+    title: string;
+    body: string;
+    provider: ProcedureRow['provider'];
+  }): number {
+    const cur = this.db
+      .prepare("SELECT MAX(version) AS v FROM memory WHERE kind = 'procedure' AND query = ?")
+      .get(row.name) as { v: number | null } | undefined;
+    const version = (cur?.v ?? 0) + 1;
+    this.db
+      .prepare("INSERT INTO memory (ts, task_id, kind, provider, query, title, body, version) VALUES (?, ?, 'procedure', ?, ?, ?, ?, ?)")
+      .run(Date.now(), row.taskId, row.provider, row.name, row.title, row.body, version);
+    return version;
+  }
+
+  /** Latest version of an exactly-named procedure (the recall fast path). */
+  getProcedure(name: string): ProcedureRow | undefined {
+    return this.db
+      .prepare(`SELECT ${PROCEDURE_COLS} FROM memory WHERE kind = 'procedure' AND query = ? ORDER BY version DESC LIMIT 1`)
+      .get(name) as unknown as ProcedureRow | undefined;
+  }
+
+  /** Latest version of every saved procedure, newest-first. */
+  listProcedures(limit = 50): ProcedureRow[] {
+    return this.db
+      .prepare(
+        `SELECT ${PROCEDURE_COLS} FROM memory m WHERE kind = 'procedure' AND version = (
+           SELECT MAX(version) FROM memory WHERE kind = 'procedure' AND query = m.query
+         ) ORDER BY ts DESC LIMIT ?`,
+      )
+      .all(limit) as unknown as ProcedureRow[];
+  }
+
+  /** M8 recall — the memory table's FIRST reader. FTS over title+body (any version may
+   *  match; each hit resolves to its name's LATEST version), ranked, deduped. Tokens are
+   *  quoted so user phrasing can't smuggle FTS5 syntax. */
+  searchProcedures(query: string, limit = 3): ProcedureRow[] {
+    const tokens = query
+      .split(/\s+/)
+      .map((t) => t.replace(/"/g, ''))
+      .filter(Boolean)
+      .slice(0, 8)
+      .map((t) => `"${t}"`);
+    if (tokens.length === 0) return [];
+    const hits = this.db
+      .prepare(
+        `SELECT m.query AS name FROM memory_fts f JOIN memory m ON m.id = f.rowid
+         WHERE m.kind = 'procedure' AND memory_fts MATCH ? ORDER BY rank LIMIT 20`,
+      )
+      .all(tokens.join(' OR ')) as Array<{ name: string }>;
+    const seen = new Set<string>();
+    const out: ProcedureRow[] = [];
+    for (const { name } of hits) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const latest = this.getProcedure(name);
+      if (latest) out.push(latest);
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   /**

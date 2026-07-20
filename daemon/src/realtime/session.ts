@@ -8,6 +8,7 @@ import type { ImageEditContext } from '../images/context.ts';
 import type { FileEditContext } from '../files/context.ts';
 import { readForPresentation, type PresentedFile } from '../files/present.ts';
 import type { MacBridge } from '../ws/mac.ts';
+import type { ProcedureService } from '../agents/procedures.ts';
 import type { ConfirmBridge } from '../ws/confirm.ts';
 import { AUDIO_REALTIME } from '../ws/protocol.ts';
 import { announcementText, echoForInstructions, speakAnnouncement } from '../audio/announce.ts';
@@ -146,10 +147,11 @@ export class Orchestrator {
   private fileContext: FileEditContext;
   private macBridge: MacBridge;
   private confirms: ConfirmBridge;
+  private procedures?: ProcedureService;
 
   // No parameter properties: they fail `node --test` strip-only the moment a test
   // imports this file (repo gotcha) — and session.test.ts now does.
-  constructor(store: Store, hub: Hub, manager: TaskManager, scheduler: Scheduler, imageContext: ImageEditContext, fileContext: FileEditContext, macBridge: MacBridge, confirms: ConfirmBridge) {
+  constructor(store: Store, hub: Hub, manager: TaskManager, scheduler: Scheduler, imageContext: ImageEditContext, fileContext: FileEditContext, macBridge: MacBridge, confirms: ConfirmBridge, procedures?: ProcedureService) {
     this.store = store;
     this.hub = hub;
     this.manager = manager;
@@ -158,6 +160,7 @@ export class Orchestrator {
     this.fileContext = fileContext;
     this.macBridge = macBridge;
     this.confirms = confirms;
+    this.procedures = procedures;
   }
 
   /** Broadcast a file to the shell's document card + open viewer. Shared by the present_file
@@ -287,6 +290,8 @@ export class Orchestrator {
             // cosmetic; the shorter mac window applies (a voice turn is waiting).
             confirmMacDo: (detail) =>
               this.confirms.request('', 'Mac command', 'Allow this Mac command?', detail, undefined, config.mac.confirmTimeoutMs),
+            // M8: "save that as a procedure" (teach_procedure save_last_run).
+            procedures: this.procedures,
           }),
         });
         const session = new RealtimeSession(agent, {

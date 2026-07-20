@@ -177,6 +177,12 @@ export const config = {
     maxDurationMs: 10 * 60_000, // auto-stop — a demo is minutes, not hours
     valueMaxChars: 400, // per-step typed-text cap (sanitize)
   },
+  // M8 procedure memory: the one-shot compile (recording/trace → replayable procedure)
+  // and its trace-condensation budget. Background work — generous like other one-shots.
+  procedures: {
+    compileTimeoutMs: 60_000,
+    traceMaxChars: 24_000, // condensed tool.call/tool.result stream fed to the compiler
+  },
   // M7 browser lane: Playwright/CDP on a DEDICATED PERSISTENT automation profile
   // (~/Gumbo/browser/profile) — never the user's live Chrome (locked decision: anti-bot
   // flags CDP sessions; a burned live profile is unacceptable blast radius). The profile

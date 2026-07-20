@@ -409,6 +409,12 @@ export class TaskManager {
     steps: TeachStep[]; timer: NodeJS.Timeout; stopping?: boolean;
   } | null = null;
 
+  /** M8 Phase 2 seam, wired in index.ts to the procedure compiler. When present,
+   *  stopTeaching distills the demonstration before the task finishes (ONE announce
+   *  carries both); absent (tests), the raw step report lands alone. Returns the report
+   *  tail; a rejection means "not saved" and is reported loudly, never swallowed. */
+  distillProcedure?: (name: string, steps: TeachStep[], taskId: string) => Promise<string>;
+
   /** Begin recording a demonstration. Resolves once the shell's recorder is ARMED —
    *  fail-closed: if the tap can't arm, the teach task fails and this throws (never a
    *  silently un-recorded "recording"). */
@@ -483,7 +489,22 @@ export class TaskManager {
     if (this.teaching !== t) throw new Error('the recording was cancelled');
     this.teaching = null;
     this.macBridge?.setTeaching(false);
-    this.finishWithReport(t.taskId, t.title, t.workspace, teachingReport(t.name, t.steps, note));
+    const base = teachingReport(t.name, t.steps, note);
+    if (this.distillProcedure && t.steps.length > 0) {
+      // The task stays 'running' for the few seconds of compile; ONE announce then
+      // carries the step list AND the saved-procedure summary (or the loud not-saved
+      // note — the demonstration itself is never lost to a compile failure).
+      this.distillProcedure(t.name, t.steps, t.taskId).then(
+        (summary) => this.finishWithReport(t.taskId, t.title, t.workspace, `${base}\n${summary}`),
+        (err: unknown) => this.finishWithReport(
+          t.taskId, t.title, t.workspace,
+          `${base}\nProcedure NOT saved — distillation failed: ${err instanceof Error ? err.message : String(err)}. ` +
+            'The demonstration above is preserved; teach it again, or say "save that as a procedure" after Gumbo does it once itself.',
+        ),
+      );
+    } else {
+      this.finishWithReport(t.taskId, t.title, t.workspace, base);
+    }
     return { name: t.name, stepCount: t.steps.length };
   }
 

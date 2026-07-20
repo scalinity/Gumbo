@@ -94,3 +94,81 @@ test('recentTranscripts stitches user/assistant lines oldest-first with roles ma
   const lines = store.recentTranscripts(0).map((l) => `${l.role}:${l.text}`);
   assert.deepEqual(lines, ['user:hello gumbo', 'assistant:hi the user']);
 });
+
+// ——— M8 procedure memory ———
+
+test('M8: saveProcedure versions insert-only; getProcedure resolves the latest', () => {
+  const v1 = store.saveProcedure({ taskId: 'p1', name: 'file expenses', title: 'file expenses — submit the monthly report', body: '{"v":1}', provider: 'taught' });
+  const v2 = store.saveProcedure({ taskId: 'p2', name: 'file expenses', title: 'file expenses — submit the monthly report', body: '{"v":2}', provider: 'healed' });
+  assert.equal(v1, 1);
+  assert.equal(v2, 2);
+  const latest = store.getProcedure('file expenses');
+  assert.equal(latest?.version, 2);
+  assert.equal(latest?.provider, 'healed');
+  assert.equal(latest?.body, '{"v":2}');
+  // Both versions persist as rows (insert-only — the FTS trigger never sees an UPDATE).
+  const count = raw.prepare("SELECT COUNT(*) AS n FROM memory WHERE kind = 'procedure' AND query = 'file expenses'").get() as { n: number };
+  assert.equal(count.n, 2);
+});
+
+test('M8: searchProcedures matches by goal words and resolves latest versions, deduped', () => {
+  store.saveProcedure({ taskId: null, name: 'water plants', title: 'water plants — log the weekly watering in the garden app', body: '{}', provider: 'taught' });
+  const hits = store.searchProcedures('weekly watering garden');
+  assert.ok(hits.length >= 1);
+  assert.equal(hits[0].name, 'water plants');
+  // A query matching an OLD version's title still resolves to the latest row.
+  const stale = store.searchProcedures('monthly report expenses');
+  assert.ok(stale.some((h) => h.name === 'file expenses' && h.version === 2), 'must resolve to the latest version');
+  // FTS syntax can't be smuggled through user phrasing.
+  assert.doesNotThrow(() => store.searchProcedures('weird "quoted OR NEAR( tokens'));
+  assert.deepEqual(store.searchProcedures('   '), []);
+});
+
+test('M8: listProcedures returns one latest row per name', () => {
+  const names = store.listProcedures().map((p) => `${p.name}@${p.version}`);
+  assert.ok(names.includes('file expenses@2'));
+  assert.ok(names.includes('water plants@1'));
+  assert.ok(!names.includes('file expenses@1'), 'stale versions never listed');
+});
+
+// The migration is the riskiest Phase-2 piece: an OLD-schema DB (no 'procedure' kind, no
+// version column) must rebuild once, preserving rows + ids AND a working FTS index.
+test('M8: pre-M8 memory table is rebuilt once — rows/ids preserved, FTS reindexed, procedures insertable', () => {
+  const oldPath = join(mkdtempSync(join(tmpdir(), 'gumbo-migrate-')), 'gumbo.db');
+  const old = new DatabaseSync(oldPath);
+  old.exec(`
+    CREATE TABLE memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INT, task_id TEXT,
+      kind TEXT CHECK(kind IN ('search_result','task_output')),
+      provider TEXT, query TEXT, url TEXT, title TEXT, body TEXT
+    );
+    CREATE VIRTUAL TABLE memory_fts USING fts5(title, body, content='memory', content_rowid='id');
+    CREATE TRIGGER memory_fts_insert AFTER INSERT ON memory BEGIN
+      INSERT INTO memory_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+    END;
+    INSERT INTO memory (ts, task_id, kind, provider, query, url, title, body)
+      VALUES (1, 'old1', 'search_result', 'exa', 'q', 'https://x.test', 'Old title', 'archaeopteryx feathers');
+    INSERT INTO memory (ts, task_id, kind, title, body)
+      VALUES (2, 'old2', 'task_output', 'Old report', 'the quetzal conclusion');
+  `);
+  old.close();
+
+  const migrated = new Store(oldPath);
+  const raw2 = new DatabaseSync(oldPath);
+  // Rows and ids survived; the version column exists (null for old rows).
+  const rows = raw2.prepare('SELECT id, kind, version FROM memory ORDER BY id').all() as Array<{ id: number; kind: string; version: number | null }>;
+  assert.deepEqual(rows.map((r) => [r.id, r.kind, r.version]), [[1, 'search_result', null], [2, 'task_output', null]]);
+  // FTS was rebuilt — old rows still match.
+  const hit = raw2.prepare("SELECT m.id FROM memory_fts f JOIN memory m ON m.id = f.rowid WHERE memory_fts MATCH 'archaeopteryx'").all();
+  assert.equal(hit.length, 1);
+  // Procedures now insert (widened CHECK) and the FTS trigger works post-rebuild.
+  migrated.saveProcedure({ taskId: null, name: 'migrated proc', title: 'migrated proc — do the thing', body: '{}', provider: 'taught' });
+  const procHit = raw2.prepare("SELECT m.id FROM memory_fts f JOIN memory m ON m.id = f.rowid WHERE memory_fts MATCH 'migrated'").all();
+  assert.equal(procHit.length, 1);
+  // AUTOINCREMENT continued past the copied ids (no id reuse).
+  const proc = migrated.getProcedure('migrated proc');
+  assert.ok(proc && proc.id > 2, 'new rows must not reuse migrated ids');
+  // Reopening again is a no-op (idempotent migration).
+  const again = new Store(oldPath);
+  assert.equal(again.getProcedure('migrated proc')?.version, 1);
+});

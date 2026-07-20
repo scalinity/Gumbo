@@ -15,6 +15,7 @@ import { applyFileContext, FileEditContext } from './files/context.ts';
 import { acceptFileEditRequest } from './files/edit.ts';
 import { shutdownBrowser } from './browser/client.ts';
 import { rememberHost } from './mac/hosts.ts';
+import { createProcedureService } from './agents/procedures.ts';
 import { Orchestrator } from './realtime/session.ts';
 
 const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY'].filter((k) => !process.env[k]);
@@ -70,7 +71,11 @@ const scheduler = new Scheduler(store, hub);
 const imageContext = new ImageEditContext();
 // The shell file viewer's open document — what an edit_file voice edit targets (2026-07-16).
 const fileContext = new FileEditContext();
-const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, fileContext, macBridge, confirms);
+// M8 procedure memory: teaching stops distill through here (ONE announce carries the
+// result), and "save that as a procedure" distills a finished run's trace.
+const procedures = createProcedureService(store);
+manager.distillProcedure = (name, steps, taskId) => procedures.distillTeaching(name, steps, taskId);
+const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, fileContext, macBridge, confirms, procedures);
 scheduler.onFire = (row) =>
   orchestrator.speakProactively(
     // Cold TTS speaks the raw text verbatim; the LIVE instruction echo is defanged

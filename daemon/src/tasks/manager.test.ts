@@ -416,3 +416,28 @@ test('M8 teaching: the step cap stops the recording loudly, keeping what it capt
     (config.teach as { maxSteps: number }).maxSteps = original;
   }
 });
+
+test('M8 teaching: the distill seam lands the procedure summary in ONE report; failure is loud, steps preserved', async () => {
+  const { store, manager } = teachManager();
+  manager.distillProcedure = async (name) => `Saved procedure "${name}" v1 (taught) — 3 steps.`;
+  const task = await manager.startTeaching('file expenses');
+  manager.teachEvent({ kind: 'click', app: 'Mail', role: 'AXButton', name: 'Compose', value: 'click' });
+  await manager.stopTeaching();
+  await settle();
+  assert.equal(store.getTask(task.id)?.status, 'done');
+  const report = readFileSync(join(task.workspace, 'report.md'), 'utf8');
+  assert.match(report, /1 step recorded/, 'the raw demonstration stays in the report');
+  assert.match(report, /Saved procedure "file expenses" v1/, 'the distilled summary rides the same announce');
+
+  // Distill failure: the demonstration is preserved and the failure is SPOKEN, not silent.
+  const { store: store2, manager: manager2 } = teachManager();
+  manager2.distillProcedure = async () => { throw new Error('model returned garbage'); };
+  const task2 = await manager2.startTeaching('doomed distill');
+  manager2.teachEvent({ kind: 'click', app: 'Notes', name: 'New Note' });
+  await manager2.stopTeaching();
+  await settle();
+  assert.equal(store2.getTask(task2.id)?.status, 'done', 'the RECORDING succeeded; only the save failed');
+  const report2 = readFileSync(join(task2.workspace, 'report.md'), 'utf8');
+  assert.match(report2, /Procedure NOT saved — distillation failed: model returned garbage/);
+  assert.match(report2, /1 step recorded/, 'steps survive a failed distill');
+});

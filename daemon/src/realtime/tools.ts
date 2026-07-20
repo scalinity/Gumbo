@@ -53,6 +53,9 @@ export interface OrchestratorToolDeps {
   // M6: the hands (shell executor) + the notch confirm for a risky one-shot command.
   macBridge: MacBridge;
   confirmMacDo: (detail: string) => Promise<boolean>;
+  /** M8: procedure memory — "save that as a procedure" distills a finished computer
+   *  task's trace. Optional so bare test harnesses keep working. */
+  procedures?: { saveFromTask(taskId: string, name: string): Promise<{ name: string; version: number; stepCount: number }> };
 }
 
 export function createOrchestratorTools(manager: TaskManager, store: Store, deps: OrchestratorToolDeps) {
@@ -507,13 +510,16 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       'to demonstrate, e.g. "file expense report"). While recording, everything he does on the Mac ' +
       'is the demonstration; passwords are never recorded. action "stop" ends and saves the ' +
       'recording — use when he says "done", "that\'s it", "stop watching". action "cancel" discards ' +
-      'it ("never mind", "forget that"). Recording shows in the notch the whole time.',
+      'it ("never mind", "forget that"). Recording shows in the notch the whole time. action ' +
+      '"save_last_run": when Gumbo itself just finished a multi-step computer task and the user says ' +
+      '"save that as a procedure" / "remember how you did that" — distills that run instead of a ' +
+      'demonstration (name: infer from his words or the task).',
     parameters: z.object({
-      action: z.enum(['start', 'stop', 'cancel']),
+      action: z.enum(['start', 'stop', 'cancel', 'save_last_run']),
       name: z
         .string()
         .nullable()
-        .describe('Short procedure name, required for start (a few words); null for stop/cancel'),
+        .describe('Short procedure name — required for start, optional for save_last_run (defaults to the task title); null for stop/cancel'),
     }),
     execute: async ({ action, name }) => {
       try {
@@ -525,7 +531,16 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         }
         if (action === 'stop') {
           const done = await manager.stopTeaching();
-          return `Recording finished — captured ${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}". Confirm briefly to the user.`;
+          return `Recording finished — captured ${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}"; now distilling it into a procedure (the result will be announced). Confirm briefly to the user.`;
+        }
+        if (action === 'save_last_run') {
+          if (!deps.procedures) return 'Procedure saving is not wired up right now.';
+          const last = store
+            .listTasks(50)
+            .find((t) => t.kind === 'computer' && t.status === 'done' && !t.title.startsWith('Teaching:'));
+          if (!last) return 'No finished computer task to save — Gumbo has to complete one first.';
+          const saved = await deps.procedures.saveFromTask(last.id, name?.trim() || last.title);
+          return `Saved "${saved.name}" (version ${saved.version}, ${saved.stepCount} steps) as a reusable procedure.`;
         }
         return manager.cancelTeaching('cancelled by the user')
           ? 'Recording discarded — nothing was kept.'
