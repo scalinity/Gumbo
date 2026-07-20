@@ -37,6 +37,7 @@ function fakeSurface(overrides: Partial<BrowserSurface> & { actResult?: BrowserR
     refInfo: overrides.refInfo ?? (() => ({ role: 'button', name: 'Go' })),
     formMethod: overrides.formMethod ?? (async () => null),
     currentUrl: overrides.currentUrl ?? (() => 'https://ok.test/page'),
+    screenPointForRef: overrides.screenPointForRef ?? (async () => null),
   };
   return surface as unknown as BrowserSurface & { acts: Array<Record<string, unknown>> };
 }
@@ -140,6 +141,15 @@ test('browser_navigate gates the TARGET host before going there', async () => {
   assert.match(ok, /url: https:\/\/brandnew\.example\/page/);
   const last = auditLines().at(-1)!;
   assert.equal(last.action, 'goto https://brandnew.example/page');
+});
+
+test('switch_tab audits with the landed URL (review 🔵 — it was the one silent navigation)', async () => {
+  const surface = fakeSurface({ currentUrl: () => 'https://ok.test/tab2' });
+  await byName(tools(surface), 'browser_navigate').invoke({}, JSON.stringify({ action: 'switch_tab', url: null, tab: 2 }));
+  const last = auditLines().at(-1)!;
+  assert.equal(last.kind, 'browser');
+  assert.equal(last.action, 'switch_tab 2');
+  assert.equal(last.url, 'https://ok.test/tab2');
 });
 
 test('type refuses newlines (submit would dodge the gate); fill is the multiline path', async () => {

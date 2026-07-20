@@ -190,10 +190,13 @@ export function normalizeOsascript(script: string): string {
 }
 
 // M7 literal-URL host gate: URLs a script would FETCH OR OPEN (open/curl/wget/`open
-// location` segments — a URL merely echoed in a dialog string doesn't trip it). Trailing
-// quote/punctuation is trimmed so `open location "https://x.com/a"` yields the bare URL.
+// location` segments, plus AppleScript `URL:` property-list + `set URL of … to` navigation
+// — a URL merely echoed in a dialog string doesn't trip it). Trailing quote/punctuation is
+// trimmed so `open location "https://x.com/a"` yields the bare URL. `URL` is a fetchy word
+// (review 🟡) so `make new document with properties {URL:"…"}` and `set URL of tab 1 to
+// "…"` get host-checked, not just `open location`.
 const URL_LITERAL = /https?:\/\/[^\s"'`]+/gi;
-const FETCHY_SEGMENT = /\b(open|curl|wget|location)\b/i;
+const FETCHY_SEGMENT = /\b(open|curl|wget|location|url)\b/i;
 
 /** Literal URLs in fetch/open positions, per command segment (same separator set the
  *  delete lane splits on, so a URL can't hide behind `;` or a newline). */
@@ -208,6 +211,31 @@ export function extractFetchUrls(script: string): string[] {
   return urls;
 }
 
+// AppleScript URL navigation: `open location`, `set URL of … to`, and `{… URL: …}`
+// property lists. A target that is a bare variable (`open location u`) or built by `&`
+// concatenation (`open location "https://ok" & "@evil.com/x"`) can't be host-checked
+// statically — the executor concatenates/resolves it at runtime while the gate sees only
+// a fragment (the SAME class the do-shell-script guard closes for bash). `URL:` is scoped
+// to property-list position (`{`/`,` before it) so a dialog string mentioning "URL:"
+// doesn't trip it.
+const NAV_VERB = /\bopen\s+location\b|\bset\s+url\s+of\b[^\n]*?\bto\b|[{,]\s*url\s*:/gi;
+
+/** True when any URL-navigation verb's target is NOT a single clean string literal — a
+ *  bare variable or a `&` concatenation. Such a target confirms as unresolvable (the
+ *  SHELL_EXPANSION stance), closing the concatenation/indirection exfil bypass the
+ *  literal-only host check missed (review 🟡, corroborated). Clean literals fall through
+ *  to the host allowlist via extractFetchUrls. */
+export function unresolvableNavTarget(script: string): boolean {
+  for (const m of script.matchAll(NAV_VERB)) {
+    const rest = script.slice(m.index! + m[0].length).replace(/^\s+/, '');
+    const literal = /^"[^"]*"/.exec(rest);
+    if (!literal) return true; // bare variable target (`open location u`)
+    const afterLiteral = rest.slice(literal[0].length).replace(/^\s+/, '');
+    if (afterLiteral.startsWith('&')) return true; // concatenation (`"…" & evil`)
+  }
+  return false;
+}
+
 /** ONE choke point for both script lanes (hot mac_do + sub-agent run_script): normalize
  *  first, then decide on the SAME string the executor will run (review 🟡: the two lanes
  *  each did this independently and had already drifted). Shortcuts are opaque to the
@@ -217,9 +245,11 @@ export function extractFetchUrls(script: string): string[] {
  *
  *  M7: the sub-agent lane additionally runs literal fetch/open URLs through the host
  *  allowlist — an unlisted host confirms, closing the recorded literal-URL exfil
- *  residual. The hot lane is exempt (the user spoke the URL himself; no screen-read
- *  context exists there to exfiltrate). `isHostAllowed` is injectable for offline tests
- *  and defaults to the real allowlist. */
+ *  residual — AND confirms any URL navigation whose target is built by concatenation or a
+ *  variable (unresolvableNavTarget), which the literal-only check would otherwise miss.
+ *  The hot lane is exempt (the user spoke the URL himself; no screen-read context exists
+ *  there to exfiltrate). `isHostAllowed` is injectable for offline tests and defaults to
+ *  the real allowlist. */
 export function gateScript(
   interpreter: 'bash' | 'osascript' | 'shortcuts',
   raw: string,
@@ -238,6 +268,11 @@ export function gateScript(
   }
   const decision = macDoDecision(script);
   if (decision.route === 'confirm' || lane === 'hot') return { script, decision };
+  // Unresolvable navigation targets (concatenation / variable) can't be host-checked —
+  // confirm before the literal check even looks.
+  if (unresolvableNavTarget(script)) {
+    return { script, decision: { route: 'confirm', reason: 'opening an unresolvable URL (built at runtime)' } };
+  }
   for (const url of extractFetchUrls(script)) {
     if (!isHostAllowed(url)) {
       return { script, decision: { route: 'confirm', reason: `opening an unlisted website (${hostOf(url) ?? 'unparseable URL'})` } };
@@ -251,11 +286,26 @@ export function gateScript(
 // consequential/outbound classes; a false positive confirms, which is the safe direction.
 const SUBMIT_NAME = /\b(send|submit|buy|purchase|pay|order|checkout|post|publish|tweet|reply|apply|book|donate|transfer|delete|confirm)\b/i;
 
+/** Normalize an accessible name before the lexicon test: NFKC folds fullwidth/compatibility
+ *  forms, and stripping zero-width + collapsing whitespace defeats `S​e​n​d`-style padding
+ *  evasion (review 🟡). NOTE the residual, honestly: this does NOT fold cross-script
+ *  homoglyphs (Cyrillic "Ѕend"), and it cannot see a consequential JS `onclick` on an
+ *  innocuously-named control OUTSIDE a <form> — those are the documented ceiling of a
+ *  name/form heuristic. The mitigations are the untrusted-screen-text rule in the loop
+ *  instructions and that the model has no incentive to disguise its own actions. */
+function normalizeName(name: string): string {
+  return name
+    .normalize('NFKC')
+    .replace(/[​‌‍﻿]/g, '') // zero-width space / ZWNJ / ZWJ / BOM
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Pure decision for one in-page browser action. Inputs are deterministic facts the
  *  browser layer read itself: the element's role+accessible name AS THE MODEL SAW THEM
  *  in the snapshot, and the enclosing <form>'s method when one exists. GET forms (search
- *  boxes) stay auto; POST forms submit data, so a button click or an Enter press inside
- *  one confirms even when the button's name dodges the lexicon. */
+ *  boxes) stay auto; POST forms submit data, so a button click, a `select` change, or an
+ *  Enter press inside one confirms even when the control's name dodges the lexicon. */
 export function browserActDecision(act: {
   verb: string;
   role?: string | null;
@@ -265,12 +315,17 @@ export function browserActDecision(act: {
 }): MacPolicyResult {
   const method = (act.formMethod ?? '').toLowerCase();
   if (act.verb === 'click') {
-    if (act.name && SUBMIT_NAME.test(act.name)) {
+    if (act.name && SUBMIT_NAME.test(normalizeName(act.name))) {
       return { route: 'confirm', reason: `clicking "${act.name}"` };
     }
     if (method === 'post' && act.role === 'button') {
       return { route: 'confirm', reason: 'submitting a form' };
     }
+  }
+  // A dropdown change inside a POST form can trigger an onchange submit/navigation — same
+  // consequential class as the button (review 🟡: select was unconditionally auto).
+  if (act.verb === 'select' && method === 'post') {
+    return { route: 'confirm', reason: 'changing a selection in a form that submits' };
   }
   if (act.verb === 'press' && /\benter\b/i.test(act.chord ?? '') && method === 'post') {
     return { route: 'confirm', reason: 'pressing Enter in a form that submits' };

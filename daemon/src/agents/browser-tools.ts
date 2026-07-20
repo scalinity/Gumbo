@@ -136,12 +136,13 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
         gate = 'confirmed';
       }
 
-      // Cursor continuity (pure visualization): in-page acts ride CDP — no HID at all —
-      // so fly the ghost to the element first. Fire-and-forget; never delays the act.
+      // Cursor continuity (pure visualization): in-page acts ride CDP — no HID at all — so
+      // fly the ghost to the element first. Resolve the point BEFORE the act so the two
+      // don't race the same page's ref state (review 🔵); the fire-and-forget cursor RPC
+      // still never delays the act.
       if (ref && macBridge) {
-        void surface.screenPointForRef(ref).then((pt) => {
-          if (pt) void macBridge.request({ kind: 'cursor_to', x: pt.x, y: pt.y }, { timeoutMs: 2000 });
-        }).catch(() => {});
+        const pt = await surface.screenPointForRef(ref).catch(() => null);
+        if (pt) void macBridge.request({ kind: 'cursor_to', x: pt.x, y: pt.y }, { timeoutMs: 2000 });
       }
       const result = await surface.act({ verb, ref, value, role, name, timeout_ms });
       auditMacAction({ tier: 'subagent', kind: 'browser', action: `${verb} ${info?.name ?? ref ?? role ?? ''}`.trim(), gate, ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url });
@@ -189,8 +190,13 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
         }
         case 'list_tabs':
           return present(await surface.listTabs());
-        case 'switch_tab':
-          return present(await surface.switchTab(tab ?? 1));
+        case 'switch_tab': {
+          // Re-orients the task onto a different page — audit it with the URL it lands on,
+          // like goto/back (review 🔵: switch_tab was the one navigation that was silent).
+          const result = await surface.switchTab(tab ?? 1);
+          auditMacAction({ tier: 'subagent', kind: 'browser', action: `switch_tab ${tab ?? 1}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url: surface.currentUrl() ?? undefined });
+          return present(result);
+        }
       }
     },
   });

@@ -103,7 +103,11 @@ export class TaskManager {
               );
             } finally {
               this.macBridge!.setHandoff(false);
-              if (!this.finished.has(id)) this.setTaskStatus(id, 'running', 'handoff finished');
+              // Restore 'running' only if the task is still live. On a kill-switch/cancel
+              // DURING the handoff, escalate resolves false and finish() hasn't run yet, so
+              // finished.has(id) is still false — the abort check (mirroring reviewPlan)
+              // stops a spurious running→cancelled flicker on the bubble/dashboard (🟡).
+              if (!this.finished.has(id) && !abort.signal.aborted) this.setTaskStatus(id, 'running', 'handoff finished');
             }
           }
         : undefined;

@@ -116,7 +116,8 @@ function AllowlistSection() {
   const [draft, setDraft] = useState('');
   const add = () => {
     const host = draft.trim().toLowerCase();
-    if (!host || /[\s/:]/.test(host)) return; // bare hostnames only — same rule as the API
+    // bare hostname WITH a dot — same rule the API enforces (rejects "com"-style TLD rows)
+    if (!host || /[\s/:]/.test(host) || !host.includes('.')) return;
     void mutateHost('POST', host);
     setDraft('');
   };

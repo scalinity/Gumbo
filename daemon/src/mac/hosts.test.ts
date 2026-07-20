@@ -59,3 +59,14 @@ test('forgetHost removes a remembered entry; listHosts reports base + remembered
   assert.ok(!listHosts().remembered.includes('temp.example'), 'normalized removal');
   assert.equal(hostAllowed('https://temp.example/'), false, 'forgetting really revokes');
 });
+
+test('validHostEntry accepts a dotted hostname, rejects TLD-wide / malformed entries', async () => {
+  const { validHostEntry } = await import('./hosts.ts');
+  assert.equal(validHostEntry('example.com'), true);
+  assert.equal(validHostEntry('sub.example.co.uk'), true);
+  assert.equal(validHostEntry('com'), false, 'a bare TLD would allowlist every *.com');
+  assert.equal(validHostEntry(''), false);
+  assert.equal(validHostEntry('has space'), false);
+  assert.equal(validHostEntry('http://x.com'), false, 'a URL is not a bare hostname');
+  assert.equal(validHostEntry('a/b'), false);
+});

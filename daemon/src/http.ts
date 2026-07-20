@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { config } from './config.ts';
-import { forgetHost, listHosts, rememberHost } from './mac/hosts.ts';
+import { forgetHost, listHosts, rememberHost, validHostEntry } from './mac/hosts.ts';
 import type { Store } from './events/store.ts';
 
 const MIME: Record<string, string> = {
@@ -62,19 +62,40 @@ export function createHttpServer(store: Store) {
         return;
       }
       if (req.method === 'POST' || req.method === 'DELETE') {
+        // CSRF guard (CWE-352): this mutation writes the computer-use exfil allowlist, so it
+        // must not be drivable by a hostile page the user happens to have open. A cross-site
+        // POST is a CORS "simple request" (no preflight), so the browser WOULD deliver it to
+        // loopback — mirror ws/hub.ts verifyClient: a present Origin must be allowlisted; an
+        // ABSENT Origin is the native shell / same-origin proxy and is allowed.
+        const origin = req.headers.origin;
+        if (origin !== undefined && !config.allowedOrigins.includes(origin)) {
+          res.statusCode = 403;
+          res.end(JSON.stringify({ error: 'cross-origin request refused' }));
+          return;
+        }
         let body = '';
-        req.on('data', (chunk) => { body += chunk; });
+        let tooLarge = false;
+        req.on('data', (chunk) => {
+          body += chunk;
+          if (body.length > 4096 && !tooLarge) { // a hostname payload is tiny — cap the stream
+            tooLarge = true;
+            res.statusCode = 413;
+            res.end(JSON.stringify({ error: 'body too large' }));
+            req.destroy();
+          }
+        });
         req.on('end', () => {
+          if (tooLarge) return;
           let host = '';
           try {
-            host = String((JSON.parse(body || '{}') as { host?: unknown }).host ?? '').trim();
+            host = String((JSON.parse(body || '{}') as { host?: unknown }).host ?? '').trim().toLowerCase();
           } catch {
-            // fall through to the empty-host 400
+            // fall through to the 400
           }
-          // A bare hostname, not a URL — reject anything with a scheme/slash/space.
-          if (!host || /[\s/:]/.test(host)) {
+          // A bare hostname with a dot — not a URL, not a bare TLD (validHostEntry).
+          if (!validHostEntry(host)) {
             res.statusCode = 400;
-            res.end(JSON.stringify({ error: 'pass {"host":"example.com"} (bare hostname)' }));
+            res.end(JSON.stringify({ error: 'pass {"host":"example.com"} (bare hostname with a dot)' }));
             return;
           }
           if (req.method === 'POST') rememberHost(host);

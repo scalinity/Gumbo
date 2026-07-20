@@ -73,12 +73,17 @@ enum ScreenVision {
         let filter: SCContentFilter
         let rect: CGRect
         let label: String
+        // Region capture resolves its display ONCE, up front, and reuses it for both the
+        // filter and sourceRect — resolving twice with divergent fallbacks (one with
+        // `?? .first`, one without) let a straddling/off-screen region capture the whole
+        // fallback display while the OCR math still assumed the region, throwing every
+        // coordinate off (review 🟡). regionDisplay is nil for the window branch.
+        var regionDisplay: SCDisplay?
         if let region {
-            // Region capture: find the display containing the region's center; sourceRect
-            // is display-LOCAL top-left points.
             guard let display = content.displays.first(where: { $0.frame.contains(CGPoint(x: region.midX, y: region.midY)) }) ?? content.displays.first else {
                 return .fail(AXResult.failure("ax_unavailable", "No display found for that region."))
             }
+            regionDisplay = display
             filter = SCContentFilter(display: display, excludingWindows: [])
             rect = region
             label = "region (\(Int(region.minX)),\(Int(region.minY)) \(Int(region.width))x\(Int(region.height)))"
@@ -98,11 +103,10 @@ enum ScreenVision {
         cfg.height = Int(rect.height * scale)
         cfg.showsCursor = false
         cfg.captureResolution = .best
-        if let region {
-            // sourceRect is in display-local points (top-left origin).
-            if let display = content.displays.first(where: { $0.frame.contains(CGPoint(x: region.midX, y: region.midY)) }) {
-                cfg.sourceRect = region.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
-            }
+        if let region, let display = regionDisplay {
+            // sourceRect is in display-local points (top-left origin) — the SAME display the
+            // filter was built from, so the captured pixels and cap.rect can never disagree.
+            cfg.sourceRect = region.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
         }
 
         let imageResult: Result<CGImage, Error> = wait { done in

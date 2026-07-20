@@ -155,6 +155,7 @@ export function buildSandboxProfile(cwd: string, taskId: string, proxyPort: numb
   const readDenied = [
     realOrLiteral(secretFilePaths[0]), // repo .env (provider keys)
     realOrLiteral(config.home.browser), // M7 automation-browser storage state = live session cookies
+    realOrLiteral(config.home.logs), // M7: audit trails carry full page URLs (possible query-string tokens)
     realOrLiteral(join(home, '.ssh')),
     realOrLiteral(join(home, '.aws')),
     realOrLiteral(join(home, '.config', 'gh')), // GitHub OAuth token (hosts.yml)

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright-core';
 import { config } from '../config.ts';
@@ -74,18 +74,41 @@ export class BrowserClient {
       });
     }
     if (!this.context) {
-      this.context = await this.browser.newContext({
-        storageState: existsSync(stateFile()) ? stateFile() : undefined,
-        viewport: null, // headed: pages use the real window size the user is watching
-      });
+      this.context = await this.newContextRecovering();
       this.context.on('page', (page) => {
         this.newPages.push(page); // popups/new tabs — the settle step switches + reports
       });
       this.activePage = await this.context.newPage();
       this.newPages = []; // the initial page is not "new"
     }
+    // Guarantee a live page even when the context survived but every tab closed (a
+    // window.close() control, or the user closing the last tab). Adopt a surviving tab, else
+    // open a blank one — so the model gets a snapshot of an empty page it can navigate
+    // from, never a hard task failure from requirePage throwing outside a try (review 🟡).
+    if (!this.activePage || this.activePage.isClosed()) {
+      const remaining = this.context.pages().filter((p) => !p.isClosed());
+      this.activePage = remaining.length > 0 ? remaining[remaining.length - 1] : await this.context.newPage();
+    }
   }
 
+  /** New context seeded from the persisted storage state — but a TRUNCATED state.json (a
+   *  crash mid-capture: storageState writes in place, not temp-then-rename) makes
+   *  newContext throw, which would wedge EVERY future browser task until the file is
+   *  removed by hand. Fail safe like hosts.ts does: on a seeded-launch failure, drop the
+   *  bad file and launch fresh (a lost session is re-earnable; a wedged lane is not). */
+  private async newContextRecovering(): Promise<BrowserContext> {
+    if (!existsSync(stateFile())) return this.browser!.newContext({ viewport: null });
+    try {
+      return await this.browser!.newContext({ storageState: stateFile(), viewport: null });
+    } catch (err) {
+      console.error('browser: stored session state was unusable, starting fresh:', err instanceof Error ? err.message.split('\n')[0] : err);
+      rmSync(stateFile(), { force: true });
+      return this.browser!.newContext({ viewport: null });
+    }
+  }
+
+  /** Getter for the active page — open() guarantees one exists, so this only throws in a
+   *  genuinely broken state (which mapError turns into a recoverable browser_unavailable). */
   private requirePage(): Page {
     const page = this.activePage;
     if (!page || page.isClosed()) {
@@ -262,9 +285,11 @@ export class BrowserClient {
     const deadline = Date.now() + config.browser.settleTimeoutMs;
     let last: string | null = null;
     let after = '';
+    let captured = false; // did ANY settle read succeed?
     do {
       try {
         const now = stripForDiff(await this.captureAi(page, config.browser.settleTimeoutMs));
+        captured = true;
         if (last !== null && now === last) {
           after = now;
           break;
@@ -288,6 +313,15 @@ export class BrowserClient {
       notes.push(`a new tab opened and is now active: ${this.activePage.url()} — take browser_snapshot to see it`);
     } else if (page.url() !== beforeUrl) {
       notes.push(`url: ${beforeUrl} → ${page.url()}`);
+    }
+
+    // Never settled into a readable state (the page stayed mid-navigation the whole
+    // window): diffing `before` against an empty `after` would render the entire page as
+    // "removed", reading as "the page cleared" when it's just in flux (review 🔵). Report
+    // the unsettled state instead and let the model re-snapshot.
+    if (!captured) {
+      const note = notes.length ? notes.map((n) => `~ ${n}`).join('\n') + '\n' : '';
+      return { ok: true, output: `${note}~ the page is still loading — take browser_snapshot once it settles` };
     }
 
     const diff = diffSnapshots(before, after, config.browser.diffMaxLines);
@@ -352,11 +386,16 @@ export class BrowserClient {
   }
 
   /** Persist the context's storage state — cookies + localStorage, no passwords. Called
-   *  at task end (and after a login handoff, Phase 3) so the NEXT run replays the session. */
+   *  at task end (and after a login handoff, Phase 3) so the NEXT run replays the session.
+   *  Written temp-then-rename so a crash mid-capture can't truncate the live file (rename
+   *  is atomic within a filesystem) — the read side (newContextRecovering) also self-heals,
+   *  but not leaving a torn file is the belt to that suspenders (review 🟡). */
   async captureState(): Promise<void> {
     if (!this.context) return;
     mkdirSync(config.home.browser, { recursive: true });
-    await this.context.storageState({ path: stateFile() });
+    const tmp = stateFile() + `.tmp`;
+    await this.context.storageState({ path: tmp });
+    renameSync(tmp, stateFile());
   }
 
   /** Task teardown: capture-then-close the context; the browser process stays warm for

@@ -37,6 +37,15 @@ function normalizeHost(host: string): string {
   return host.toLowerCase().replace(/\.$/, '');
 }
 
+/** A well-formed allowlist ENTRY (not a URL): a bare hostname with at least one dot.
+ *  The dot requirement rejects a single-label entry like "com" — `hostAllowed`'s
+ *  subdomain match (`host.endsWith('.'+entry)`) would otherwise allowlist an entire TLD
+ *  from one row (review 🔴/🔵). Used by the untrusted /api/hosts surface; the notch
+ *  "remember" path feeds a real `hostOf(url)`, so it's already well-formed. */
+export function validHostEntry(host: string): boolean {
+  return host.length > 0 && !/[\s/:]/.test(host) && host.includes('.');
+}
+
 /** Hostname of a URL, or null when it can't be parsed (callers treat null as "not a web
  *  URL" — e.g. about:blank — never as approved-by-accident for a real fetch target). */
 export function hostOf(url: string): string | null {
