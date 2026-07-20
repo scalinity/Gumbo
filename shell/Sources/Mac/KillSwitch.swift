@@ -18,11 +18,24 @@ final class KillSwitch {
     /// Fired once per arm, on the main thread, with the abort reason for the daemon.
     var onFire: ((String) -> Void)?
 
-    /// M7 cooperative handoff — set on the main thread (MacBridge routes mac_handoff
-    /// there), read on the tap's thread. A Bool read can't tear on arm64; the worst race
-    /// is one event judged under the previous mode, which the daemon-side lifecycle
-    /// (status flip before/after the notch confirm) makes harmless.
-    var handoffActive = false
+    /// M7 "the user's input is expected" (handoff + any pending notch confirm) — set on the
+    /// main thread (MacBridge routes mac_handoff there), read on the tap's thread. A Bool
+    /// read can't tear on arm64; the worst race is one event judged under the previous
+    /// mode, which the daemon-side lifecycle (status flip before/after the notch confirm)
+    /// makes harmless.
+    var handoffActive = false {
+        didSet {
+            // Re-arm GRACE (live demo 2026-07-20): the user's trailing mouse drift right
+            // after clicking Approve aborted the task — a hand doesn't freeze at the
+            // click frame. Input shortly after a stood-down window ends is still him
+            // finishing the answer, not a takeover; steady-state stays hair-trigger.
+            // Same threading story as the Bool: an aligned Double store/load can't tear
+            // on arm64, and one misjudged event is harmless.
+            if oldValue && !handoffActive { handoffEndedAt = CFAbsoluteTimeGetCurrent() }
+        }
+    }
+    private var handoffEndedAt: CFAbsoluteTime = 0
+    private let rearmGraceSeconds: CFAbsoluteTime = 1.5
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -86,8 +99,10 @@ final class KillSwitch {
         // M7: pure-modifier presses never abort — ⌃⌥ is the PTT chord (voice steering
         // rides it), and modifiers alone cannot drive the machine.
         if type == .flagsChanged { return }
-        // M7 handoff: the user is doing his step — his input is the point, not an abort.
+        // M7 handoff/confirm: the user is doing his step — his input is the point, not an abort.
         if handoffActive { return }
+        // …and the moments right after: trailing motion from answering the prompt.
+        if CFAbsoluteTimeGetCurrent() - handoffEndedAt < rearmGraceSeconds { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.tap != nil else { return } // one shot per arm
             self.disarm()
