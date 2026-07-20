@@ -41,7 +41,12 @@ function normalizeHost(host: string): string {
  *  The dot requirement rejects a single-label entry like "com" — `hostAllowed`'s
  *  subdomain match (`host.endsWith('.'+entry)`) would otherwise allowlist an entire TLD
  *  from one row (review 🔴/🔵). Used by the untrusted /api/hosts surface; the notch
- *  "remember" path feeds a real `hostOf(url)`, so it's already well-formed. */
+ *  "remember" path feeds a real `hostOf(url)`, so it's already well-formed.
+ *  RESIDUAL (second-review 🔵): a two-label public suffix (`co.uk`, `com.au`) still passes
+ *  and would allowlist that whole eTLD via the subdomain match. Accepted for v1 — entries
+ *  come only from the user (dashboard, Origin-gated to loopback) or a real navigated URL, so
+ *  a bare eTLD is never actually written; a public-suffix-list check is overkill for a
+ *  single-user tool and would add a dependency against the minimalism rule. */
 export function validHostEntry(host: string): boolean {
   return host.length > 0 && !/[\s/:]/.test(host) && host.includes('.');
 }

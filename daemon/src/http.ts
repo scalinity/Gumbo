@@ -76,12 +76,13 @@ export function createHttpServer(store: Store) {
         let body = '';
         let tooLarge = false;
         req.on('data', (chunk) => {
+          if (tooLarge) return; // stop accumulating — bounds memory even before the socket tears down
           body += chunk;
-          if (body.length > 4096 && !tooLarge) { // a hostname payload is tiny — cap the stream
+          if (body.length > 4096) { // a hostname payload is tiny — cap the stream
             tooLarge = true;
             res.statusCode = 413;
             res.end(JSON.stringify({ error: 'body too large' }));
-            req.destroy();
+            req.destroy(); // loopback: the 413 flushes first; a RST-before-read race is moot here
           }
         });
         req.on('end', () => {

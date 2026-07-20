@@ -101,8 +101,17 @@ export class BrowserClient {
     try {
       return await this.browser!.newContext({ storageState: stateFile(), viewport: null });
     } catch (err) {
-      console.error('browser: stored session state was unusable, starting fresh:', err instanceof Error ? err.message.split('\n')[0] : err);
-      rmSync(stateFile(), { force: true });
+      // Move the unusable file ASIDE rather than deleting it — corruption is the dominant
+      // cause, but a transient fault (EMFILE, disk hiccup, a momentary lock) also lands
+      // here, and a plain delete would silently discard live cookies re-earnable only by a
+      // fresh login (second-review 🟡). `.bad` preserves them for inspection/recovery; the
+      // next captureState overwrites state.json cleanly.
+      console.error('browser: stored session state was unusable, moving it aside and starting fresh:', err instanceof Error ? err.message.split('\n')[0] : err);
+      try {
+        renameSync(stateFile(), stateFile() + '.bad');
+      } catch {
+        rmSync(stateFile(), { force: true }); // rename failed (already gone / cross-device) — last resort
+      }
       return this.browser!.newContext({ viewport: null });
     }
   }
@@ -156,7 +165,11 @@ export class BrowserClient {
    *  devtools docked — acceptable for a cosmetic overlay. null = don't fly (never guess). */
   async screenPointForRef(ref: string): Promise<{ x: number; y: number } | null> {
     try {
-      const box = await this.locatorFor(ref).boundingBox({ timeout: 1500 });
+      // Short timeout: this resolves on the act's critical path (browser_act awaits it so
+      // the ghost fly doesn't race the page's ref state), but it is PURELY cosmetic — a
+      // stale ref must not stall the real act for over a second (second-review 🔵). If the
+      // box isn't ready fast, skip the fly; the act proceeds and surfaces the real error.
+      const box = await this.locatorFor(ref).boundingBox({ timeout: 400 });
       if (!box) return null;
       const origin = await this.requirePage().evaluate(() => ({
         x: window.screenX + (window.outerWidth - window.innerWidth) / 2,

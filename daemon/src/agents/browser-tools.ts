@@ -120,9 +120,12 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
       if (refusal) return refusal;
 
       // Submit/purchase gate: decided on the role+name the model SAW in the snapshot,
-      // plus the enclosing form's method for the ambiguous cases.
+      // plus the enclosing form's method for the ambiguous cases. `select` is included so
+      // the POST-form dropdown rule in browserActDecision is actually REACHABLE — without
+      // it, formMethod was never fetched for a select and that gate branch was dead code
+      // (second-review 🟡).
       const info = ref ? surface.refInfo(ref) : null;
-      const needsForm = verb === 'click' || (verb === 'press' && /\benter\b/i.test(value ?? ''));
+      const needsForm = verb === 'click' || verb === 'select' || (verb === 'press' && /\benter\b/i.test(value ?? ''));
       const formMethod = needsForm ? await surface.formMethod(ref) : null;
       const decision = browserActDecision({ verb, role: info?.role, name: info?.name, formMethod, chord: value });
       let gate: 'auto' | 'confirmed' = 'auto';

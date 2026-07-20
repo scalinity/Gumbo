@@ -56,6 +56,15 @@ test('POST from a HOSTILE origin is refused 403 and writes nothing (CSRF guard)'
   assert.ok(!after.includes('evil.example'));
 });
 
+test('DELETE from a HOSTILE origin is also refused 403 (the guard covers both methods)', async () => {
+  // Seed a host natively, then confirm a hostile page can't remove it either.
+  await hostsReq('POST', { body: JSON.stringify({ host: 'keep.example' }) });
+  const { status } = await hostsReq('DELETE', { origin: 'http://evil.example', body: JSON.stringify({ host: 'keep.example' }) });
+  assert.equal(status, 403);
+  assert.ok((await hostsReq('GET')).json.remembered.includes('keep.example'), 'still present — hostile DELETE refused');
+  await hostsReq('DELETE', { body: JSON.stringify({ host: 'keep.example' }) }); // cleanup (native)
+});
+
 test('POST with no Origin (native shell / same-origin proxy) is allowed', async () => {
   const { status, json } = await hostsReq('POST', { body: JSON.stringify({ host: 'native.example' }) });
   assert.equal(status, 200);

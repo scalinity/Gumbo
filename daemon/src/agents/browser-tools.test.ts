@@ -113,6 +113,20 @@ test('Enter in a POST form confirms; in a GET form it stays auto', async () => {
   assert.equal(asked, 1, 'GET form Enter does not ask');
 });
 
+// Second-review 🟡: the select-in-POST-form gate was DEAD in production because the tool
+// only fetched formMethod for click/press-enter. This drives a real `select` THROUGH the
+// tool (not the pure function) to prove needsForm now fetches the form method and confirms.
+test('select in a POST form confirms THROUGH the tool (the gate is reachable, not just unit-true)', async () => {
+  const surfacePost = fakeSurface({ formMethod: async () => 'post' });
+  let asked = 0;
+  await byName(tools(surfacePost, async () => ((asked += 1), true)), 'browser_act').invoke({}, actArgs({ verb: 'select', value: 'France' }));
+  assert.equal(asked, 1, 'POST-form select asks (formMethod was actually fetched)');
+  assert.equal(surfacePost.acts.length, 1, 'approved → the select ran');
+  const surfaceGet = fakeSurface({ formMethod: async () => 'get' });
+  await byName(tools(surfaceGet, async () => ((asked += 1), true)), 'browser_act').invoke({}, actArgs({ verb: 'select', value: 'Newest' }));
+  assert.equal(asked, 1, 'GET-form select (sort dropdown) stays auto');
+});
+
 test('acting on an unlisted host asks once per task, memoizes approval, and refuses on deny', async () => {
   const surface = fakeSurface({ currentUrl: () => 'https://unlisted.example/x' });
   let asked = 0;

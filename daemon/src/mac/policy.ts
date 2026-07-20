@@ -182,19 +182,38 @@ export function describeMacDo(script: string): string {
  *  script just fails to run); it can never make the gate see less than the executor runs. */
 export function normalizeOsascript(script: string): string {
   const trimmed = script.trim();
-  if (!/^osascript\b/.test(trimmed)) return trimmed;
-  const bodies = [...trimmed.matchAll(/-e\s+(?:'([^']*)'|"([^"]*)")/g)]
-    .map((m) => m[1] ?? m[2])
-    .filter((b) => b !== undefined && b !== '');
-  return bodies.length > 0 ? bodies.join('\n') : trimmed;
+  const unwrapped = /^osascript\b/.test(trimmed)
+    ? (() => {
+        const bodies = [...trimmed.matchAll(/-e\s+(?:'([^']*)'|"([^"]*)")/g)]
+          .map((m) => m[1] ?? m[2])
+          .filter((b) => b !== undefined && b !== '');
+        return bodies.length > 0 ? bodies.join('\n') : trimmed;
+      })()
+    : trimmed;
+  // Fold AppleScript line continuations (`¬` at end of line) into a single statement so an
+  // evasion can't split a concatenation onto the next physical line, AND so a clean
+  // `open location ¬\n "https://unlisted"` still reaches the host check as one fetchy
+  // segment (second-review 🔴 — folding must happen at NORMALIZE so both extractFetchUrls
+  // and unresolvableNavTarget see it; `¬` is semantically a space to the executor, so the
+  // gate and the executed string stay identical). Safe: `¬` never appears mid-URL.
+  return foldContinuations(unwrapped);
+}
+
+/** Fold AppleScript `¬` end-of-line continuations to a single space. */
+function foldContinuations(s: string): string {
+  return s.replace(/¬[^\S\n]*\r?\n/g, ' ');
 }
 
 // M7 literal-URL host gate: URLs a script would FETCH OR OPEN (open/curl/wget/`open
-// location` segments, plus AppleScript `URL:` property-list + `set URL of … to` navigation
-// — a URL merely echoed in a dialog string doesn't trip it). Trailing quote/punctuation is
-// trimmed so `open location "https://x.com/a"` yields the bare URL. `URL` is a fetchy word
-// (review 🟡) so `make new document with properties {URL:"…"}` and `set URL of tab 1 to
-// "…"` get host-checked, not just `open location`.
+// location` segments, plus AppleScript `URL:` property-list + `set [the] URL of … to`
+// navigation). Trailing quote/punctuation is trimmed so `open location "https://x.com/a"`
+// yields the bare URL. `URL` is a fetchy word (review 🟡) so `{URL:"…"}` and `set URL of
+// tab 1 to "…"` get host-checked, not just `open location`.
+// RESIDUAL (honest, second-review 🟡): because `url` is a fetchy word, a segment that
+// merely NAMES a url in text — `display dialog "URL: https://example.com"` — now host-
+// checks that literal and CONFIRMS an unlisted host where it used to auto-run. That's the
+// safe direction (over-confirm on a rare dialog, one extra tap), not a hole; the earlier
+// "a URL echoed in a dialog doesn't trip it" claim no longer holds and is removed.
 const URL_LITERAL = /https?:\/\/[^\s"'`]+/gi;
 const FETCHY_SEGMENT = /\b(open|curl|wget|location|url)\b/i;
 
@@ -211,27 +230,43 @@ export function extractFetchUrls(script: string): string[] {
   return urls;
 }
 
-// AppleScript URL navigation: `open location`, `set URL of … to`, and `{… URL: …}`
+// AppleScript URL navigation: `open location`, `set [the] URL of … to`, and `{… URL: …}`
 // property lists. A target that is a bare variable (`open location u`) or built by `&`
 // concatenation (`open location "https://ok" & "@evil.com/x"`) can't be host-checked
 // statically — the executor concatenates/resolves it at runtime while the gate sees only
 // a fragment (the SAME class the do-shell-script guard closes for bash). `URL:` is scoped
 // to property-list position (`{`/`,` before it) so a dialog string mentioning "URL:"
-// doesn't trip it.
-const NAV_VERB = /\bopen\s+location\b|\bset\s+url\s+of\b[^\n]*?\bto\b|[{,]\s*url\s*:/gi;
+// doesn't trip it. The optional definite article (`set THE url of …`) is idiomatic Safari/
+// Chrome AppleScript — omitting it reopened the concatenation exfil on an articled form
+// (second-review 🔴, the M6 "one-word variant reopens the gate" class).
+const NAV_VERB = /\bopen\s+location\b|\bset\s+(?:the\s+)?url\b[^\n]*?\bto\b|[{,]\s*url\s*:/gi;
+// AppleScript that runs JS IN a page (`do JavaScript`/`execute javascript`) can navigate
+// or fetch from inside the DOM; its JS body is opaque to any host check, so it is always
+// unresolvable → confirm (second-review 🔴 — it was covered by no gate list at all).
+const JS_IN_PAGE = /\b(?:do\s+javascript|execute\s+javascript)\b/i;
 
-/** True when any URL-navigation verb's target is NOT a single clean string literal — a
- *  bare variable or a `&` concatenation. Such a target confirms as unresolvable (the
- *  SHELL_EXPANSION stance), closing the concatenation/indirection exfil bypass the
- *  literal-only host check missed (review 🟡, corroborated). Clean literals fall through
- *  to the host allowlist via extractFetchUrls. */
+/** True when a script performs URL navigation the host check can't resolve — in-page JS,
+ *  or a nav verb whose target is a bare variable or a `&` concatenation. Such a script
+ *  confirms as unresolvable (the SHELL_EXPANSION stance), closing the concatenation/
+ *  indirection exfil bypass the literal-only host check misses. Clean single-literal
+ *  targets fall through to the host allowlist via extractFetchUrls.
+ *
+ *  Robustness (second-review 🔴, corroborated by both reviewers): rather than parse the
+ *  exact target (brittle — the article `the`, a `¬` line-continuation, or a comment between
+ *  the literal and the `&` each dodged an exact parse), fold continuations first and treat
+ *  ANY `&` in the nav STATEMENT as runtime-built → confirm. `&` inside the target literal
+ *  is excluded (we look only AFTER the literal's closing quote). Folds internally too so a
+ *  direct caller (tests) is covered even without going through normalizeOsascript. */
 export function unresolvableNavTarget(script: string): boolean {
-  for (const m of script.matchAll(NAV_VERB)) {
-    const rest = script.slice(m.index! + m[0].length).replace(/^\s+/, '');
+  const s = foldContinuations(script);
+  if (JS_IN_PAGE.test(s)) return true;
+  for (const m of s.matchAll(NAV_VERB)) {
+    const rest = s.slice(m.index! + m[0].length).replace(/^\s+/, '');
     const literal = /^"[^"]*"/.exec(rest);
     if (!literal) return true; // bare variable target (`open location u`)
-    const afterLiteral = rest.slice(literal[0].length).replace(/^\s+/, '');
-    if (afterLiteral.startsWith('&')) return true; // concatenation (`"…" & evil`)
+    // ANY concatenation in the remainder of THIS statement = target built at runtime.
+    const stmt = rest.slice(literal[0].length).split(/[\n;]/, 1)[0];
+    if (stmt.includes('&')) return true;
   }
   return false;
 }
