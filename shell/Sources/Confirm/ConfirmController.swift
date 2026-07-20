@@ -19,6 +19,8 @@ final class ConfirmController {
         let body: String // long-form content (the full plan) behind the chevron
         let timeoutMs: Double
         let rememberHost: String // non-empty → show the "Remember <host>" toggle (M7)
+        let confirmLabel: String // button text — a handoff says "Done", not "Approve"
+        let denyLabel: String
     }
 
     private var queue: [Request] = []
@@ -29,8 +31,8 @@ final class ConfirmController {
     private var currentId: String?
     private var currentTaskId: String?
 
-    func present(id: String, taskId: String, taskTitle: String, title: String, detail: String, body: String, timeoutMs: Double, rememberHost: String = "") {
-        queue.append(Request(id: id, taskId: taskId, taskTitle: taskTitle, title: title, detail: detail, body: body, timeoutMs: timeoutMs, rememberHost: rememberHost))
+    func present(id: String, taskId: String, taskTitle: String, title: String, detail: String, body: String, timeoutMs: Double, rememberHost: String = "", confirmLabel: String = "Approve", denyLabel: String = "Deny") {
+        queue.append(Request(id: id, taskId: taskId, taskTitle: taskTitle, title: title, detail: detail, body: body, timeoutMs: timeoutMs, rememberHost: rememberHost, confirmLabel: confirmLabel, denyLabel: denyLabel))
         if !showing { showNext() }
     }
 
@@ -64,7 +66,9 @@ final class ConfirmController {
             body: request.body,
             rememberHost: request.rememberHost,
             deadline: Date().addingTimeInterval(request.timeoutMs / 1000),
-            totalSeconds: request.timeoutMs / 1000)
+            totalSeconds: request.timeoutMs / 1000,
+            confirmLabel: request.confirmLabel,
+            denyLabel: request.denyLabel)
         model.onAnswer = { [weak self] approved in
             self?.answer(request.id, approved: approved)
         }
@@ -171,13 +175,15 @@ final class ConfirmModel: ObservableObject {
     let rememberHost: String // non-empty → the "Remember <host>" toggle (M7)
     let deadline: Date
     let totalSeconds: Double
+    let confirmLabel: String // "Approve" normally; a handoff says "Done" (live-demo polish)
+    let denyLabel: String
     @Published var expanded = false
     /// Default OFF: remembering forever is the bigger action — the user opts in per site.
     @Published var remember = false
     var onAnswer: ((Bool) -> Void)?
     var onExpandChange: ((Bool) -> Void)?
 
-    init(taskTitle: String, title: String, detail: String, body: String, rememberHost: String = "", deadline: Date, totalSeconds: Double) {
+    init(taskTitle: String, title: String, detail: String, body: String, rememberHost: String = "", deadline: Date, totalSeconds: Double, confirmLabel: String = "Approve", denyLabel: String = "Deny") {
         self.taskTitle = taskTitle
         self.title = title
         self.detail = detail
@@ -185,6 +191,8 @@ final class ConfirmModel: ObservableObject {
         self.rememberHost = rememberHost
         self.deadline = deadline
         self.totalSeconds = max(1, totalSeconds)
+        self.confirmLabel = confirmLabel
+        self.denyLabel = denyLabel
     }
 }
 
@@ -271,7 +279,7 @@ struct ConfirmView: View {
                 countdown
                 Spacer()
                 Button(action: { model.onAnswer?(false) }) {
-                    Text("Deny")
+                    Text(model.denyLabel)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
                         .padding(.horizontal, 14).padding(.vertical, 5)
@@ -280,7 +288,7 @@ struct ConfirmView: View {
                 }
                 .buttonStyle(.plain)
                 Button(action: { model.onAnswer?(true) }) {
-                    Text("Approve")
+                    Text(model.confirmLabel)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(Tokens.roux)
                         .padding(.horizontal, 14).padding(.vertical, 5)

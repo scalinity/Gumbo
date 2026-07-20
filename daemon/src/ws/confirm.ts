@@ -28,8 +28,9 @@ export class ConfirmBridge {
 
   /** `body` is the optional long-form content behind the one-line title/detail — the full
    *  plan text for a plan approval, expandable in the shell (chevron → scrollable view).
-   *  `rememberHost` labels a "Remember <host>" toggle on the panel (M7 host confirms). */
-  request(taskId: string, taskTitle: string, title: string, detail: string, signal?: AbortSignal, timeoutMs?: number, body?: string, rememberHost?: string): Promise<boolean> {
+   *  `rememberHost` labels a "Remember <host>" toggle on the panel (M7 host confirms).
+   *  `confirmLabel`/`denyLabel` override the button text (handoffs say Done/Cancel). */
+  request(taskId: string, taskTitle: string, title: string, detail: string, signal?: AbortSignal, timeoutMs?: number, body?: string, rememberHost?: string, confirmLabel?: string, denyLabel?: string): Promise<boolean> {
     if (!this.hub.hasRole('shell') || signal?.aborted) return Promise.resolve(false); // nobody to ask / already cancelled
     const budget = timeoutMs ?? this.timeoutMs; // plan approval passes a longer window
     const id = randomUUID().slice(0, 8);
@@ -55,6 +56,8 @@ export class ConfirmBridge {
           type: 'confirm_request', id, task_id: taskId, task_title: taskTitle, title, detail, timeout_ms: budget,
           ...(body ? { body } : {}),
           ...(rememberHost ? { remember_host: rememberHost } : {}),
+          ...(confirmLabel ? { confirm_label: confirmLabel } : {}),
+          ...(denyLabel ? { deny_label: denyLabel } : {}),
         },
         'shell',
       );

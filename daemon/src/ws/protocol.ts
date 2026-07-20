@@ -118,8 +118,9 @@ export type OutboundMessage =
   // shell: a supervisor escalation needs the user's yes/no; deny happens daemon-side on timeout.
   // `body` is optional long-form content behind the one-liner (the full plan text for a plan
   // approval) — the shell renders it behind a chevron as a scrollable view.
-  // M7: remember_host labels the "Remember <host>" toggle on host-approval confirms.
-  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number; body?: string; remember_host?: string }
+  // M7: remember_host labels the "Remember <host>" toggle on host-approval confirms;
+  // confirm_label/deny_label override the button text (a handoff says Done/Cancel).
+  | { type: 'confirm_request'; id: string; task_id: string; task_title: string; title: string; detail: string; timeout_ms: number; body?: string; remember_host?: string; confirm_label?: string; deny_label?: string }
   // shell: dismiss a pending confirm — its task was cancelled (daemon already resolved it deny).
   | { type: 'confirm_cancel'; id: string }
   // shell (M5): mirror a scheduled reminder into Reminders.app via EventKit (OS-durable —

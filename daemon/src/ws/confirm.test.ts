@@ -138,3 +138,21 @@ test('remember_host rides the request; approve+remember fires onRemember; deny+r
   assert.equal(await p3, true);
   assert.deepEqual(remembered, ['github.com'], 'no rememberHost on the request → no write-through');
 });
+
+test('button-label overrides ride the wire only when given (handoff says Done/Cancel)', async () => {
+  const { hub, sent } = fakeHub(true);
+  const bridge = new ConfirmBridge(hub, 1000);
+  const p = bridge.request('t', 'Task', 'Your turn — tap Done when finished', 'sign in', undefined, undefined, undefined, undefined, 'Done', 'Cancel');
+  const req = sent.find((m) => m.type === 'confirm_request') as Record<string, unknown>;
+  assert.equal(req.confirm_label, 'Done');
+  assert.equal(req.deny_label, 'Cancel');
+  bridge.handleResponse(String(req.id), true);
+  assert.equal(await p, true);
+
+  const plain = bridge.request('t', 'Task', 'Allow this Mac script?', 'detail');
+  const req2 = sent.filter((m) => m.type === 'confirm_request').at(-1) as Record<string, unknown>;
+  assert.ok(!('confirm_label' in req2), 'no override → field absent, shell defaults apply');
+  assert.ok(!('deny_label' in req2));
+  bridge.handleResponse(String(req2.id), false);
+  assert.equal(await plain, false);
+});

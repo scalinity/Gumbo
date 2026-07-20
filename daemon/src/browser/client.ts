@@ -74,6 +74,15 @@ export class BrowserClient {
   private newPages: Page[] = [];
   private generation = 0;
   private refs = new Map<string, RefInfo>();
+  private closedListeners = new Set<() => void>();
+
+  /** Fires whenever the automation Chrome goes away (the user quitting it included — that
+   *  is the interesting case: mid-handoff it means "never mind", and the manager declines
+   *  the pending prompt instead of letting it linger). Returns an unsubscribe. */
+  onContextClosed(cb: () => void): () => void {
+    this.closedListeners.add(cb);
+    return () => this.closedListeners.delete(cb);
+  }
 
   /** Launch the automation Chrome on the persistent profile. Idempotent per task — every
    *  tool call ensures it, only the first does work. closeTask() quits Chrome, so between
@@ -101,10 +110,12 @@ export class BrowserClient {
         throw new Error(`Could not launch Google Chrome on the automation profile: ${msg} — if an automation-profile window is already open (e.g. installing an extension), close it and retry.`);
       }
       // the user quitting the automation Chrome must not wedge the lane — reset so the
-      // next task relaunches cleanly ('close' fires however Chrome went away).
+      // next task relaunches cleanly ('close' fires however Chrome went away), and tell
+      // whoever is listening (a pending handoff declines itself).
       this.context.on('close', () => {
         this.context = null;
         this.activePage = null;
+        for (const cb of [...this.closedListeners]) cb();
       });
       this.context.on('page', (page) => {
         this.newPages.push(page); // popups/new tabs — the settle step switches + reports

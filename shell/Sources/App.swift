@@ -252,7 +252,9 @@ final class GumboController {
                         detail: msg["detail"] as? String ?? "",
                         body: msg["body"] as? String ?? "",
                         timeoutMs: msg["timeout_ms"] as? Double ?? 60_000,
-                        rememberHost: msg["remember_host"] as? String ?? "")
+                        rememberHost: msg["remember_host"] as? String ?? "",
+                        confirmLabel: msg["confirm_label"] as? String ?? "Approve",
+                        denyLabel: msg["deny_label"] as? String ?? "Deny")
                 }
             case "confirm_cancel":
                 if let id = msg["id"] as? String {

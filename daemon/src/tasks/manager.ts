@@ -6,6 +6,7 @@ import type { Store, TaskRow } from '../events/store.ts';
 import { runSubagent, type SubagentKind } from '../agents/openai-runner.ts';
 import { ClaudeRunner, type ClaudeRunnerOpts, type ClaudeSessionRunner } from '../agents/claude-runner.ts';
 import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
+import { getBrowserClient } from '../browser/client.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
 /** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod).
@@ -118,17 +119,30 @@ export class TaskManager {
       taskType === 'mac'
         ? async (reason: string) => {
             this.setTaskStatus(id, 'needs_input', reason);
+            // the user closing the automation browser mid-handoff IS his answer (live-demo
+            // polish): decline promptly (confirm_cancel dismisses the notch panel) instead
+            // of letting the prompt linger to its multi-minute timeout. Local controller:
+            // fires on task abort OR browser close, and never aborts the task itself.
+            const local = new AbortController();
+            const onTaskAbort = () => local.abort();
+            abort.signal.addEventListener('abort', onTaskAbort, { once: true });
+            const unsubBrowser = getBrowserClient().onContextClosed(() => local.abort());
             try {
               return await standDown!(() => this.escalate(
                 id, title,
-                { title: 'Your turn — tap Done when finished', detail: reason, timeoutMs: config.mac.handoffTimeoutMs },
-                abort.signal,
+                {
+                  title: 'Your turn — tap Done when finished', detail: reason,
+                  timeoutMs: config.mac.handoffTimeoutMs, confirmLabel: 'Done', denyLabel: 'Cancel',
+                },
+                local.signal,
               ));
             } finally {
+              unsubBrowser();
+              abort.signal.removeEventListener('abort', onTaskAbort);
               // Restore 'running' only if the task is still live. On a kill-switch/cancel
-              // DURING the handoff, escalate resolves false and finish() hasn't run yet, so
-              // finished.has(id) is still false — the abort check (mirroring reviewPlan)
-              // stops a spurious running→cancelled flicker on the bubble/dashboard (🟡).
+              // DURING the handoff, cancelComputerTasks has already finished the task
+              // ('cancelled', first-writer-wins) — both guards skip the restore, so the
+              // bubble/dashboard never flickers running→cancelled (🟡).
               if (!this.finished.has(id) && !abort.signal.aborted) this.setTaskStatus(id, 'running', 'handoff finished');
             }
           }

@@ -226,6 +226,10 @@ export interface EscalationRequest {
   /** M7 host confirms: label a "Remember <host>" toggle that writes the approval through
    *  to the allowlist (mac/hosts) so the site never asks again. */
   rememberHost?: string;
+  /** Button label overrides — a handoff's affirmative is "Done", not "Approve" (live-demo
+   *  polish 2026-07-20). Shell defaults: Approve / Deny. */
+  confirmLabel?: string;
+  denyLabel?: string;
 }
 
 // Mirrors the SDK's PermissionResult without importing its types into every caller.
