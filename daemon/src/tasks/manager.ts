@@ -389,6 +389,14 @@ export class TaskManager {
       if (task?.kind !== 'computer') continue;
       this.store.addEvent(id, 'mac.kill_switch', { reason });
       this.cancel(id);
+      // Label 'cancelled' HERE, not in the runner's rejection path: the abort resolves a
+      // pending notch confirm as a plain deny, which reaches the model as a normal tool
+      // refusal — live demo: the loop survived the abort, wrote a farewell report, and
+      // finishWithReport('done') won the label race. finish() is idempotent (first writer
+      // wins), so the runner's own settlement no-ops afterward; its finally still tears
+      // the browser down. This is what makes the kill switch a HARD stop, audibly and
+      // in the store, the instant the user touches the machine.
+      this.finish(id, 'cancelled', { reason: `kill_switch:${reason}` });
     }
   }
 

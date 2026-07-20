@@ -266,3 +266,15 @@ test('makeStandDown re-arms even when the confirm throws, and the error propagat
   );
   assert.deepEqual(calls, [true, false], 'a throwing confirm must not leave the kill switch soft');
 });
+
+test('kill switch labels a computer task cancelled IMMEDIATELY — the runner cannot relabel it later (live demo: farewell report won as done)', async () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'gumbo-mgr-db-')), 'gumbo.db');
+  const store = new Store(dbPath);
+  const macBridge = { taskStarted: () => { throw new Error('stub — no live run in tests'); }, taskFinished: () => {}, setHandoff: () => {} };
+  const manager = new TaskManager(store, async () => false, async () => false, fakeFactory(async () => ({ parked: false, report: '' })) as never, macBridge as never);
+  const task = manager.spawnSubagent('Browse', 'go somewhere', 'mac');
+  manager.cancelComputerTasks('human_input'); // same tick — before the runner settles either way
+  assert.equal(store.getTask(task.id)?.status, 'cancelled', 'labeled at kill-switch time, not eventually');
+  await settle();
+  assert.equal(store.getTask(task.id)?.status, 'cancelled', 'the runner settling later must not relabel the task');
+});
