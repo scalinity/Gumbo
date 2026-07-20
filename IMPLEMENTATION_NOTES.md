@@ -2301,3 +2301,22 @@ bottleneck — accumulation is.
   exit, teardown-relaunch clean.
 - Still landing in the companion shell commit: kill-switch RE-ARM GRACE — run 1 died to trailing
   mouse drift right after the user clicked Approve (a hand doesn't freeze at the click frame).
+- **Demo close-out (same night):** the full login-handoff workflow VERIFIED end-to-end (goto →
+  click Sign in → handoff Done → notifications read), then the logged-in replay VERIFIED — the
+  persistent profile answered "who am I logged in as" with zero prompts, uBlock active. Late
+  finds, all fixed same-session: the model kept ENDING at login walls even past the tool-result
+  nudge (a third path shape — the signed-out homepage has no login-ish URL), so the runner now
+  BOUNCES a login-shaped inability ending once when request_handoff was never called
+  (needsHandoffBounce, history-concat continuation — deterministic exit guard beats any trigger
+  heuristic); handoff buttons say Done/Cancel (label overrides ride the confirm protocol as
+  optional fields); quitting the automation browser mid-handoff auto-declines the pending prompt
+  (BrowserClient.onContextClosed → local abort → the existing confirm_cancel dismiss); the voice
+  tier pre-opened a task's page in the user's REGULAR Chrome (the M6 "ONE command" routing example
+  became a decoy-window bug once the browser lane existed — mac_do's description now forbids
+  pre-opening pages a computer task will drive); blank automation browser = the DEFINED normal
+  start (never a finding, never a reason to stop). Also live-learned: the user's filtering DNS
+  blackholes clients2.google.com, which breaks Web-Store installs with a lying "check internet
+  connection" (allowlist it — extension AUTO-UPDATES are silently broken under that block); the
+  profile singleton fails loudly if the manually-opened automation window is left open (by
+  design — close it, the task launches its own). M7 demo checklist COMPLETE — the remaining
+  gate to merge is the user's call.
