@@ -659,6 +659,77 @@ M14 is the keystone of the extension (its effect journal underlies M12's outcome
 replay fixtures, and every later autonomy increase) and can interleave after M10; M15–M17 are
 independent and opportunistic.
 
+**Same-day review pass (2026-07-20):** the user asked which additions were limitations in disguise;
+four real costs surfaced, and rather than recording mitigations the arc was REDESIGNED under five
+cross-cutting laws (next section). Where any phase's text conflicts with a law, **the law wins.**
+
+### Cross-cutting architecture: the friction economy (2026-07-20)
+
+The four identified costs: label creep taxing the commonest workflow (read web → send); abstention
+cold-start nag (no history → pessimistic bounds on everything); the per-tool effect-adapter tax +
+preview beats on a voice-first agent; and gate-interaction bugs — the exact class the M7 live demos
+produced (the confirm × kill-switch Catch-22). Each traces to an internet shape generalized past
+its assumptions. This system has ONE principal, one machine, ~five action channels, ~five egress
+sinks, a voice surface, and (post-M14) cheap undo — the laws below are those facts, made binding.
+
+**Law 1 — One gate, one prompt.** Layers never decide; they emit FACTS (effect class, task
+source-set, constitution matches, evidence tier, sink). One pure `verdict()` — the natural
+evolution of the M4 policy table + M6 gateScript, absorbing existing gates as phases touch them,
+never via big rewrite — maps facts to exactly one of `auto | announce | confirm(card) |
+deny(reason)`. At most one prompt per action, rendered from the verdict's card (what it does, what
+it read, what the evidence is, how it reverses); every verdict requiring the user's input drives the
+same kill-switch stand-down bracket (the generalized makeStandDown lesson). Because verdict() is
+pure over enumerable facts, the interaction matrix is a table-driven `node --test` — hundreds of
+fact combinations asserting one-verdict/no-double-prompt — so gate collisions become test failures
+instead of live-demo surprises.
+
+**Law 2 — Friction follows irrecoverability; egress is irreversible.** Prompts are priced by the
+cost of being wrong — never by novelty, category, or provenance alone. Reversible + receipted →
+`announce`: act, say what happened in one sentence, keep "undo that" armed — even when tainted,
+even on day one. `confirm` is reserved for compensatable/irreversible effects. Information leaving
+the machine (send, POST, form submit, a URL built from task-read content) is irreversible BY
+INFORMATION regardless of local state — the M7 literal-URL rule generalized — which is what keeps
+injection blast radius on the auto/announce tiers bounded to recoverable local state. Evidence
+only ever LOOSENS: cold start equals the status quo's gates; nothing ever earns a new prompt for
+being new.
+
+**Law 3 — Effects attach to channels, not tools.** Five action channels carry defaults, so every
+tool inherits preview/receipt/undo/verify from its channel for free: filesystem (APFS snapshot +
+audit-touched paths); browser (settle-diff = the receipt; browserActDecision = the class source);
+AX/script (gateScript class → effect class; audit line + before/after capture = receipt; undo
+honestly "none" where true); provider HTTP (idempotency + reconcile ONCE per provider client,
+shared by its tools); connector writes (the only bespoke compensations, arriving one at a time via
+M11). The sandboxed coding lane already has its own containment + git-snapshot story. Full
+PREPARED→COMMIT_UNKNOWN→reconcile journaling applies ONLY where lost-response ambiguity exists
+(remote commitments); local synchronous channels journal as audit + snapshot/diff refs. And
+previews are SENTENCES, not modals — a voice agent's preview is phrasing: confirm-class speaks its
+one-liner before; announce-class speaks the receipt after. A new tool costs what it cost in M7.
+
+**Law 4 — Provenance is a task source-set, checked at sinks.** No per-value labels plumbed through
+model context. Each task keeps a monotone source-set of origins ingested (user | web:host |
+screen:app | file:path | memory:sensitivity-class); the ~five egress sinks check it at the
+boundary, plus a containment check that secret-class material read this task is not inside an
+outbound payload. Tainted egress defaults to an INFORMED CONFIRM ("this draft contains text from
+nytimes.com — send?"), not a deny. Precedence: immutable maxima (secrets never egress unconfirmed;
+no payment authority; TCC untouched) > defaults > the user's constitution adjusts everything between
+— his standing rules pre-approve his own recurring flows (trusted recipients, known patterns),
+which is where the read-web→send tax goes to die. Source-sets reset per task; creep is
+structurally impossible.
+
+**Law 5 — No silent negatives.** Any cheap filter (local-model triage, channel-indexed intention
+triggers) degrades to "caught by the next sweep," never to nothing: a local "uninteresting" still
+lands in the observations table for the morning brief's bulk skim; a daily sweep re-evaluates
+every armed intention so an unindexed cue is at worst a late catch, and a promise going stale
+surfaces before it silently expires. Coverage gaps are stated at arm time, not discovered at the
+miss.
+
+**Rejected generalizations (named so they stay rejected):** per-value label lattices in model
+context (FIDES is multi-principal machinery; one principal, five sinks here); per-tool EffectSpec
+adapter interfaces (microservice Saga ceremony imposed on local synchronous actions);
+COMMIT_UNKNOWN journaling for local files (a network concept); confidence gates that ADD friction
+under novelty (evidence graduates autonomy — via constitution drafts the user ratifies — it never
+manufactures new asks).
+
 ### M9 — Memory & the model of the user (specced 2026-07-19)
 
 Both research passes ranked this the #1 missing capability. Gumbo keeps a complete sqlite event log
@@ -734,22 +805,24 @@ they're just missing provenance.
   daemon — stamp each with a source class (`user | web | screen | file`) in the event log. The first
   `web`/`screen` ingestion flips the task's `tainted` flag. Biba-style integrity labeling grafted onto
   existing gates — days, not weeks — not a CaMeL-style plan interpreter.
-- **Upgrade path: two-axis labels, still deterministic (amended 2026-07-20 — both external reports
-  independently landed on FIDES-style lattices,
-  [arxiv 2505.23643](https://arxiv.org/abs/2505.23643)).** The bit becomes a pair carried on memory
-  rows and task variables: `confidentiality ∈ {public, personal, secret}` × `integrity ∈ {trusted,
-  untrusted}`, joined toward the more restrictive on mix. A one-dimensional bit misses the cross
-  cases the pair catches: web-derived (untrusted) data flowing into a Gmail send, or a *personal*
-  memory retrieved for one task leaking into a web-search query. Sinks declare what they accept
-  (cloud research model: public only; send tools: personal only when destination+purpose match the
-  approved action; local-only content NEVER silently cloud — M15 enforces the same rule from the
-  routing side). Declassification is an explicit recorded event — FIDES' capacity idea: a verified
-  boolean or short enum is safe to release where raw text is not. M9's source column IS the
-  integrity axis — one signal, two consumers. This is labels-on-values through the existing gates,
-  NOT the rejected CaMeL/NOVA interpreter (both reports drew the same line); if labels alone prove
-  leaky in practice, the recorded escalation path is a daemon-side content broker handing workers
-  typed *projections* (named fields, purpose-bound) instead of raw sensitive text — build only on
-  demonstrated need.
+- **Upgrade path: two AXES, carried by the task, checked at the sinks (amended 2026-07-20;
+  redesigned same day under Law 4).** Both external reports landed on FIDES-style label lattices
+  ([arxiv 2505.23643](https://arxiv.org/abs/2505.23643)) — the right *idea* (confidentiality and
+  integrity are different questions) in the wrong *shape* for n-of-1: per-value labels plumbed
+  through model context are multi-principal machinery, and join-toward-restrictive converges on
+  everything-untrusted within a week (the read-web→send tax). Gumbo instead keeps Law 4's task
+  source-set — integrity axis = which untrusted origins this task read (the taint bit above,
+  pluralized to `web:host / screen:app / file:path`); confidentiality axis = which sensitivity
+  classes it touched (from M9's columns) — and enforces at the ~five egress sinks: tainted egress →
+  informed confirm with the source banner; secret-class containment in an outbound payload → the
+  immutable line; personal-sensitivity content in a web-search query → sink policy, same pattern.
+  Declassification stays an explicit recorded event (FIDES' capacity idea: a verified boolean or
+  short enum releases where raw text does not), and the user's constitution pre-approves his own
+  recurring flows between the maxima and the defaults. Cross cases a single bit misses are still
+  caught — web-derived data flowing into a Gmail send, a personal memory leaking into a search
+  query — but at the boundary, with zero plumbing through the orchestrator. NOT the rejected
+  CaMeL/NOVA interpreter (both reports drew the same line); the content-broker/typed-projection
+  escalation stays recorded for the day sink checks demonstrably leak — build only on evidence.
 - **the user's constitution: user-authored rules compiled into the same policy table (new,
   2026-07-20 — AgentSpec, ICSE 2026, showed the shape and its load-bearing caveat).** Repeated
   corrections ("never do that without asking") become durable, inspectable law instead of memories
@@ -878,7 +951,11 @@ proactive consumers plus the etiquette that keeps them from being an annoyance. 
   confirmation within 24 h"). Cheap deterministic watch → candidate; a cheap model verifies the
   semantic condition; etiquette (above) decides when the user hears; any resulting *action* rides the
   normal gates. Pending intentions are visible and one-tap cancellable in the dashboard; low-value
-  ones expire aggressively.
+  ones expire aggressively. Two Law-5 guards close the silent-miss hole channel-indexing opens: at
+  arm time Gumbo NAMES what it will watch ("I'll check mail for this — not your texts"), so the
+  coverage gap is explicit up front; and a daily sweep re-evaluates every armed intention
+  regardless of channels — an unindexed cue is at worst a late catch, and a promise going stale
+  surfaces before it silently expires.
 
 **Demo:** Gumbo stays silent through a screen-shared meeting, then at the first PTT after: "while you
 were presenting — two things: your 3pm moved to 4, and the invoice you were watching for arrived."
@@ -918,16 +995,20 @@ mechanism, not a parallel learning system).
   ([arxiv 2601.07767](https://arxiv.org/abs/2601.07767)) shows models "almost never abstain" even
   when abstention is mathematically optimal, and AgentAbstain's best paired act/abstain accuracy was
   ~59%, including *post-hoc* abstention after the irreversible act. The model's self-reported
-  confidence is not a boundary — which corroborates Gumbo's whole gating philosophy).** So the
-  ladder is deterministic policy, fed by *local empirical evidence*: a tiny calibrator over the audit
-  trail Gumbo already writes — conservative Beta-binomial success estimates per action family with
-  hierarchical fallback (exact tool+subtype → tool+effect class → effect class → safe prior), acting
-  on the lower confidence bound, never trained or explored on irreversible actions. Weak evidence on
-  a reversible act → inspect state first; unresolved evidence on a compensatable act → ask;
-  irreversible → the existing confirm regardless of any estimate; no verification path → abstain or
-  demand an explicit mandate. Spoken/shown as evidence, not theater: "37 of 40 similar calendar
-  inserts verified, but this one has an external invitee I haven't handled — showing the preview,"
-  never a fake "92% confident."
+  confidence is not a boundary — which corroborates Gumbo's whole gating philosophy).** Redesigned
+  same day under Law 2 so the cold start cannot nag: **evidence GRADUATES autonomy; it never adds
+  asks.** Day one equals today's gates exactly — reversible acts `announce` (undo is the safety
+  net, not a question), compensatable/irreversible keep their existing confirms. The tiny local
+  calibrator (conservative Beta-binomial per action family, hierarchical fallback exact
+  tool+subtype → tool+effect class → effect class → safe prior, lower confidence bound, never
+  trained or explored on irreversible outcomes) does exactly two things: (a) weak evidence on a
+  *compensatable* act → inspect state first, and only ask if inspection leaves it unresolved; (b)
+  strong verified history → Gumbo DRAFTS a graduation rule — "40 of 40 of these verified; stop
+  asking for this exact class?" — which activates only through the M10 constitution ceremony, so
+  autonomy expands as the user-ratified, versioned, revocable law, never silently. No verification
+  path → abstain or demand an explicit mandate (unchanged). Spoken/shown as evidence, not theater:
+  "37 of 40 similar calendar inserts verified, but this one has an external invitee I haven't
+  handled — showing the preview," never a fake "92% confident."
 - **Offline injection-regression suite (2026-07-20; replaces any continuous red-team ambition).**
   A periodic `node --test` sweep of the gates against a recorded injection corpus (the M6/M7 bypass
   variants are already pinned; grow the corpus from the wild), riding the same harness as the
@@ -959,15 +1040,27 @@ this layer or shouldn't ship.
 
 - **Effect classes on every mutating tool.** `read | reversible | compensatable | irreversible`,
   declared per tool (browser submit: irreversible; file move: reversible; calendar insert:
-  compensatable). The class feeds the existing policy table, M13's autonomy ladder, and the preview
-  wording — one taxonomy, three consumers.
-- **A durable effect journal in sqlite, hash-chained.** PREPARED (exact args + arg hash +
-  precondition evidence + idempotency key) → COMMITTING → COMMITTED → VERIFIED, with an explicit
-  **COMMIT_UNKNOWN** for lost responses. The iron rule: a COMMIT_UNKNOWN step is *reconciled* —
-  reuse the provider idempotency key where one exists, else inspect external state, else stop for
-  the user — **never blindly retried** (that is how agents double-send). Crash recovery resumes from
-  the journal and never re-executes a committed external action; replay-for-debugging consumes
-  recorded outputs only and categorically blocks live shell actions.
+  compensatable) — with Law 2's rider that *information egress is irreversible* regardless of local
+  state. The class feeds verdict(), M13's graduation, and the preview wording — one taxonomy, three
+  consumers.
+- **Channel defaults, not per-tool adapters (Law 3 — the de-generalization that keeps this
+  buildable by one person).** Effect behavior attaches to the five action channels, so every tool
+  inherits preview/receipt/undo/verify from its channel for free: filesystem = snapshot +
+  audit-touched paths (below); browser = settle-diff receipts, `browserActDecision` as the class
+  source; AX/script = `gateScript` class → effect class, audit line + before/after capture as the
+  receipt, undo honestly "none" where true; provider HTTP = idempotency + reconcile once per
+  provider client; connector writes = the only bespoke compensations, arriving one at a time (M11).
+  A new tool costs what a tool cost in M7 — its channel already knows how to be an effect.
+- **A durable effect journal in sqlite, hash-chained — full ceremony only where lost-response
+  ambiguity exists (Law 3): provider HTTP, connector writes, browser submits.** PREPARED (exact
+  args + arg hash + precondition evidence + idempotency key) → COMMITTING → COMMITTED → VERIFIED,
+  with an explicit **COMMIT_UNKNOWN** for lost responses. The iron rule: a COMMIT_UNKNOWN step is
+  *reconciled* — reuse the provider idempotency key where one exists, else inspect external state,
+  else stop for the user — **never blindly retried** (that is how agents double-send). Local
+  synchronous channels (file moves, AX acts, in-page clicks) journal as audit + snapshot/diff
+  refs — their outcomes are observable, and COMMIT_UNKNOWN is a network concept. Crash recovery
+  resumes from the journal and never re-executes a committed external action; replay-for-debugging
+  consumes recorded outputs only and categorically blocks live shell actions.
 - **Single-use effect permits.** A confirm's approval binds to the exact argument hash and expires;
   the shell accepts only a matching permit for TCC actions. The model cannot mint one, and "approve
   whatever is pending" is structurally impossible.
@@ -977,6 +1070,9 @@ this layer or shouldn't ship.
   inverse (move the file back) → compensation (cancel the reservation) → corrective follow-up
   (send the correction) → irreversible: preserve evidence and name the next safe human action.
   Compensation executes from receipts in dependency order — never from a freshly generated plan.
+  And previews are SENTENCES, not modals (Law 3): confirm-class speaks its one-liner before the
+  act; announce-class acts and speaks the receipt after, "undo that" armed — zero added beats on
+  the reversible majority of a voice-first agent's day.
 - **APFS local snapshots as the filesystem checkpoint (Claude report's top pick — macOS gives this
   nearly free).** Before any task the gate classes risky, the shell runs `tmutil localsnapshot`
   (~0.01 s, copy-on-write, no Time Machine destination needed) and the snapshot id lands in the
@@ -1028,7 +1124,11 @@ orchestrator — this is a *worker* lane under the tool boundary, never a second
   framing (summarization/extraction/classification — not world knowledge): watcher-triage cheap
   stage (M12), memory sensitivity tagging + PII redaction (M9), semantic trigger verification
   (M12), injection pre-scan of untrusted text as advisory defense-in-depth (never the boundary —
-  M10's rule), the M9 privacy-fork embedding alternative, short voice summaries.
+  M10's rule), the M9 privacy-fork embedding alternative, short voice summaries. Local jobs are
+  chosen to be *verifiable or non-final*, and a local verdict is never silently final (Law 5): a
+  local "uninteresting" still lands in observations for the brief's bulk skim, failed schema
+  validation falls back to cloud (unless `local_only` — then `BLOCKED_BY_MODEL`, said aloud), so
+  the small model's variance costs latency, never loss.
 - **Prompt-cache economics as a stated discipline.** Stable prefix (system + tool schemas + policy)
   first, volatile observation last, cache breakpoints after the stable block, never a
   timestamp/task-id early; the act→observe computer-use loop keeps its prefix pinned across steps.

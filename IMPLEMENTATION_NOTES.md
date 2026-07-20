@@ -2366,3 +2366,47 @@ anti-recommendations never reversed, corroborations recorded here rather than re
 - **Sequencing note added to the arc header:** M14 can interleave after M10 (receipts want labels;
   M12 outcome closure and M13 replay fixtures want the journal); M15–M17 are independent and
   opportunistic. Phase-range references updated M1–M13 → M1–M17.
+
+### Friction-economy redesign — the user's limitation review → five binding laws (2026-07-20)
+
+the user read the folded arc and asked the question a review should: which of these are limitations
+dressed as improvements? Four held up (read-web→send label tax; abstention cold-start nag;
+per-tool effect-adapter tax + preview beats on a voice agent; gate-interaction bugs — the class
+the same day's live demos produced). His directive: don't note them, REDESIGN them away — and
+don't blindly import internet conventions generalized past their assumptions into an n-of-1
+system. The result is SPEC §"Cross-cutting architecture: the friction economy" — five laws that
+bind M9–M17 (law wins over phase text) — plus surgical amendments to M10/M12/M13/M14/M15.
+
+The de-generalization table (what the internet shape assumes vs what Gumbo actually is):
+- **FIDES per-value label lattices** assume multiple principals and arbitrary dataflow. Gumbo has
+  ONE principal and ~5 egress sinks → provenance became a per-task source-set checked at sinks +
+  a secret-containment check on outbound payloads; nothing plumbs through model context; the set
+  resets per task, so label creep is structurally impossible. Informed-confirm (with source
+  banner), not deny; the constitution pre-approves the user's recurring flows.
+- **Saga/2PC per-endpoint ceremony** assumes distributed services with lost-response ambiguity.
+  Most Gumbo mutations are local and synchronous → effects attach to the FIVE CHANNELS
+  (filesystem/browser/AX-script/provider-HTTP/connector-writes) with inherited
+  preview/receipt/undo/verify; full COMMIT_UNKNOWN journaling only for remote commitments. New
+  tools stay an-afternoon cheap — the report's per-tool EffectSpec interface is explicitly a
+  rejected generalization.
+- **Confidence-gates-actions** assumes fleet-scale caution is free. At n-of-1, cold-start
+  pessimism = nagging → inverted to GRADUATION: day one equals today's gates exactly; evidence
+  can only loosen (inspect-first on weak compensatables; "40/40 verified — stop asking?" drafts a
+  constitution rule the user ratifies). Autonomy expansion is always ratified, versioned, revocable
+  law. Evidence never manufactures an ask.
+- **Each-safety-feature-owns-behavior** is how the confirm×kill-switch Catch-22 happened →
+  Law 1: layers emit facts, ONE pure verdict() decides (auto | announce | confirm | deny), at most
+  one prompt per action, input-requiring verdicts drive the one stand-down bracket, and the
+  interaction matrix is a table-driven test (enumerable facts → collisions become test failures,
+  not live-demo surprises).
+- **Heartbeat-vs-nothing monitoring** → Law 5 (no silent negatives): local-model triage and
+  channel-indexed intentions degrade to next-sweep late catches, never to nothing; coverage gaps
+  stated at arm time.
+- New verdict tier: **announce** (act + one-sentence spoken receipt + standing "undo that") — the
+  reversible majority of a voice agent's day gets ZERO added beats; previews are sentences
+  (phrasing, not modals). Law 2's rider closes the obvious exploit: information egress is
+  irreversible-by-information regardless of local state (the M7 literal-URL rule generalized), so
+  the auto/announce tiers stay injection-bounded to recoverable local state.
+
+Committed as the same-day companion to the research fold; the fold's own entry above stands
+unchanged.
