@@ -34,7 +34,13 @@ export type MacAction =
   | { kind: 'screenshot'; app: string | null; region: [number, number, number, number] | null; out_path: string } // PNG to a daemon-supplied workspace path
   | { kind: 'point'; verb: 'click' | 'double_click' | 'right_click'; x: number; y: number } // vision-lane action at global point coords
   | { kind: 'cursor_to'; x: number; y: number } // pure visualization: fly the ghost cursor (browser-lane acts ride CDP, not HID — the ghost is their only visible trace)
-  | { kind: 'activate'; app: string }; // bring an app to the FRONT via the shell's AX grant (the system suppresses plain open/activate — Foreground.swift)
+  | { kind: 'activate'; app: string } // bring an app to the FRONT via the shell's AX grant (the system suppresses plain open/activate — Foreground.swift)
+  // M8 teaching: flip the shell's kill-switch tap into RECORD mode — the user's untagged
+  // input becomes the demonstration (streamed back as teach_event), never an abort. The
+  // stop ack arrives AFTER the shell flushes its pending typing burst, so the daemon has
+  // every step by the time record_stop resolves (ordering is load-bearing — manager.ts).
+  | { kind: 'record_start' }
+  | { kind: 'record_stop' };
 
 /** SPEC §M6 typed errors (mirrors SearchError.kind — callers branch on kind, never message
  *  strings). The lane-level ones: secure_field is the executor's hard refusal,
@@ -99,7 +105,11 @@ export type InboundMessage =
   // shell (M6): kill switch fired — untagged HID input (the user touched the machine), the
   // abort hotkey, or the kill switch failing to arm (fail closed). The daemon cancels every
   // running computer-use task.
-  | { type: 'mac_abort'; reason: 'human_input' | 'hotkey' | 'kill_switch_unavailable' };
+  | { type: 'mac_abort'; reason: 'human_input' | 'hotkey' | 'kill_switch_unavailable' }
+  // shell (M8): one semantically-resolved demonstration step from the record-mode tap
+  // (role/label/identifier — never coordinates, and secure-field content never leaves the
+  // shell). Untrusted-shaped hand-built JSON — sanitized in tasks/teach.ts before use.
+  | { type: 'teach_event'; step: unknown };
 
 // Statuses a bubble can show; 'running' and 'needs_input' are the live ones (M4).
 export type BubbleStatus = 'running' | 'needs_input' | 'done' | 'failed' | 'cancelled';
@@ -144,4 +154,8 @@ export type OutboundMessage =
   // shell (M7): cooperative handoff — the user is performing a step HIMSELF (login,
   // permission dialog). The kill switch stands down (his input is the handoff, not an
   // abort) and the ghost cursor hides until the handoff ends.
-  | { type: 'mac_handoff'; active: boolean };
+  | { type: 'mac_handoff'; active: boolean }
+  // shell (M8): teaching state, resync-broadcast on every hello like mac_task — a shell
+  // that (re)connects while the daemon is mid-teach re-arms its recorder; active:false
+  // stops a recorder whose daemon-side teach session died (restart, cancel).
+  | { type: 'mac_teach'; active: boolean };

@@ -168,6 +168,15 @@ export const config = {
     // not seconds. Deny-on-timeout stays: an unanswered handoff wraps the task up cleanly.
     handoffTimeoutMs: 300_000,
   },
+  // M8 watch-me teaching: the shell's kill-switch tap flips to RECORD mode and streams
+  // the user's demonstration back as semantic steps (role/label/identifier — never
+  // coordinates, never secure-field content). Caps are LOUD stops, never silent
+  // truncation (Law 5): hitting one ends the recording with the reason announced.
+  teach: {
+    maxSteps: 400, // a demonstration is dozens of steps; hundreds means a forgotten recorder
+    maxDurationMs: 10 * 60_000, // auto-stop — a demo is minutes, not hours
+    valueMaxChars: 400, // per-step typed-text cap (sanitize)
+  },
   // M7 browser lane: Playwright/CDP on a DEDICATED PERSISTENT automation profile
   // (~/Gumbo/browser/profile) — never the user's live Chrome (locked decision: anti-bot
   // flags CDP sessions; a burned live profile is unacceptable blast radius). The profile

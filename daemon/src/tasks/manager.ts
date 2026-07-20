@@ -8,6 +8,7 @@ import { ClaudeRunner, type ClaudeRunnerOpts, type ClaudeSessionRunner } from '.
 import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import type { MacBridge } from '../ws/mac.ts';
+import { sanitizeTeachStep, teachingReport, type TeachStep } from './teach.ts';
 
 /** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod).
  *  The signal fires if the task is cancelled while the confirm is pending. */
@@ -78,17 +79,7 @@ export class TaskManager {
    *  default web/writing agent. */
   spawnSubagent(title: string, brief: string, taskType: SubagentKind = 'research'): TaskRow {
     if (taskType === 'mac' && !this.macBridge) throw new Error('Mac control is unavailable (no shell bridge wired).');
-    // One computer task at a time: there is ONE screen/keyboard — concurrent tasks fight
-    // over the same apps (live demo: three overlapping wallpaper tasks drove System
-    // Settings against each other). Same spirit as assertCwdFree for Claude sessions.
-    if (taskType === 'mac') {
-      for (const otherId of this.aborts.keys()) {
-        const other = this.store.getTask(otherId);
-        if (other?.kind === 'computer') {
-          throw new Error(`a computer-use task ("${other.title}") is already driving the Mac; wait for it to finish or cancel it first`);
-        }
-      }
-    }
+    if (taskType === 'mac') this.assertMacFree();
     const id = randomUUID().slice(0, 8);
     const workspace = join(config.home.tasks, id);
     mkdirSync(workspace, { recursive: true });
@@ -392,6 +383,128 @@ export class TaskManager {
     this.store.addEvent(id, 'task.finished', { status, ...(payload as object) });
     const task = this.store.getTask(id);
     if (task) this.onFinished(task);
+  }
+
+  /** One computer task at a time: there is ONE screen/keyboard — concurrent tasks fight
+   *  over the same apps (live demo: three overlapping wallpaper tasks drove System
+   *  Settings against each other). Same spirit as assertCwdFree for Claude sessions.
+   *  M8: a teaching session registers as a kind:'computer' task row, so this one scan
+   *  covers task-vs-task, task-vs-teaching, and teaching-vs-task alike. */
+  private assertMacFree() {
+    for (const otherId of this.aborts.keys()) {
+      const other = this.store.getTask(otherId);
+      if (other?.kind === 'computer') {
+        throw new Error(`a computer-use task ("${other.title}") is already driving the Mac; wait for it to finish or cancel it first`);
+      }
+    }
+  }
+
+  // ——— M8 watch-me teaching ———
+  // A teach session is a REAL kind:'computer' task row with no runner: the one-task rule
+  // covers both directions for free, cancelComputerTasks (kill switch) reaches it, the
+  // boot reaper closes a recording that died with the daemon, and stop rides
+  // finishWithReport → the existing announce path.
+  private teaching: {
+    taskId: string; name: string; title: string; workspace: string;
+    steps: TeachStep[]; timer: NodeJS.Timeout; stopping?: boolean;
+  } | null = null;
+
+  /** Begin recording a demonstration. Resolves once the shell's recorder is ARMED —
+   *  fail-closed: if the tap can't arm, the teach task fails and this throws (never a
+   *  silently un-recorded "recording"). */
+  async startTeaching(name: string): Promise<TaskRow> {
+    if (!this.macBridge) throw new Error('Mac control is unavailable (no shell bridge wired).');
+    if (this.teaching) throw new Error(`already recording "${this.teaching.name}" — stop or cancel it first`);
+    this.assertMacFree();
+    const id = randomUUID().slice(0, 8);
+    const workspace = join(config.home.tasks, id);
+    mkdirSync(workspace, { recursive: true });
+    const now = Date.now();
+    const title = `Teaching: ${name}`;
+    const task: TaskRow = { id, kind: 'computer', title, status: 'running', workspace, created_at: now, updated_at: now };
+    this.store.createTask(task);
+    this.store.addEvent(id, 'task.created', { title, brief: `watch-me demonstration: ${name}`, kind: 'computer', teaching: true });
+    const abort = new AbortController();
+    this.aborts.set(id, abort);
+    // Abort = cancel (kill switch / voice cancel / dashboard): stop the shell recorder,
+    // discard the steps, close the row. finish() may already have run
+    // (cancelComputerTasks labels first) — it's idempotent.
+    abort.signal.addEventListener('abort', () => {
+      if (this.teaching?.taskId !== id) return;
+      this.clearTeaching();
+      this.finish(id, 'cancelled', { reason: 'teaching cancelled' });
+    }, { once: true });
+    const res = await this.macBridge.request({ kind: 'record_start' }, { signal: abort.signal });
+    if (!res.ok) {
+      this.finish(id, 'failed', { error: `recording could not start: ${res.output}` });
+      throw new Error(`recording could not start: ${res.output}`);
+    }
+    const timer = setTimeout(() => {
+      this.stopTeaching('time limit reached').catch((err: unknown) => {
+        this.store.addEvent(id, 'session.error', { message: `teach auto-stop: ${String(err)}` });
+      });
+    }, config.teach.maxDurationMs);
+    timer.unref();
+    this.teaching = { taskId: id, name, title, workspace, steps: [], timer };
+    this.macBridge.setTeaching(true);
+    return task;
+  }
+
+  /** One demonstration step streamed from the shell's record-mode tap. Untrusted-shaped
+   *  (hand-built Swift JSON) — sanitized here. Hitting the step cap stops the recording
+   *  LOUDLY (Law 5: never silently truncate a demonstration). */
+  teachEvent(raw: unknown) {
+    const t = this.teaching;
+    if (!t) return; // stale/late event after stop — wire noise, not a signal
+    const step = sanitizeTeachStep(raw);
+    if (!step) return;
+    // Steps DO land while stopping: the shell's final typing-burst flush arrives between
+    // the record_stop send and its ack — that window is the whole point of the ordering.
+    t.steps.push(step);
+    this.store.addEvent(t.taskId, 'teach.step', { step });
+    if (!t.stopping && t.steps.length >= config.teach.maxSteps) {
+      this.stopTeaching('step limit reached').catch((err: unknown) => {
+        this.store.addEvent(t.taskId, 'session.error', { message: `teach auto-stop: ${String(err)}` });
+      });
+    }
+  }
+
+  /** End the recording and land its report (announce path included). Ordering is
+   *  load-bearing: the shell flushes its pending typing burst BEFORE answering
+   *  record_stop, and both ride the same socket — so by the time the ack resolves,
+   *  every teach_event has already been ingested. Clear teaching only after. */
+  async stopTeaching(note?: string): Promise<{ name: string; stepCount: number }> {
+    const t = this.teaching;
+    if (!t) throw new Error('no recording is active');
+    if (t.stopping) throw new Error('the recording is already being stopped');
+    t.stopping = true;
+    clearTimeout(t.timer);
+    await this.macBridge?.request({ kind: 'record_stop' });
+    if (this.teaching !== t) throw new Error('the recording was cancelled');
+    this.teaching = null;
+    this.macBridge?.setTeaching(false);
+    this.finishWithReport(t.taskId, t.title, t.workspace, teachingReport(t.name, t.steps, note));
+    return { name: t.name, stepCount: t.steps.length };
+  }
+
+  /** Discard an active recording (voice "never mind", shell disconnect). No-op false
+   *  when nothing is recording. */
+  cancelTeaching(_reason: string): boolean {
+    const t = this.teaching;
+    if (!t) return false;
+    return this.cancel(t.taskId); // → abort → the listener clears state + finishes 'cancelled'
+  }
+
+  /** Tear down teaching state (cancel path). The shell-side stop is fire-and-forget
+   *  here — the daemon's state is authoritative, and a shell that missed the stop gets
+   *  mac_teach:false on its next hello (resync). */
+  private clearTeaching() {
+    const t = this.teaching;
+    if (!t) return;
+    clearTimeout(t.timer);
+    this.teaching = null;
+    this.macBridge?.setTeaching(false);
+    void this.macBridge?.request({ kind: 'record_stop' });
   }
 
   /** M6 kill switch: untagged HID input (the user) or the abort hotkey — stop every

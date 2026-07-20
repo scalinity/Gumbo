@@ -11,9 +11,16 @@ final class MacBridge {
     /// Send a JSON frame back to the daemon (wired to WSClient.sendJSON in App.swift).
     var onReply: (([String: Any]) -> Void)?
 
+    /// M8: the notch shows a persistent "Watching…" while the recorder is live (SPEC:
+    /// recording must be visibly indicated the whole time). Wired in App.swift.
+    var onRecordingChanged: ((Bool) -> Void)?
+
     private let executor = AXExecutor()
     private let ghost = GhostCursor()
     private let killSwitch = KillSwitch()
+    private lazy var recorder = Recorder(executor: executor)
+    /// Main-thread only, like sessionArmed.
+    private var recordingActive = false
     // AX + scripts run off the main thread (dense traversal / a blocking child process
     // would jank the notch). Serial so the ref-map generation stays coherent.
     private let work = DispatchQueue(label: "ai.scalinity.gumbo.mac.bridge")
@@ -24,6 +31,11 @@ final class MacBridge {
         killSwitch.onFire = { [weak self] reason in
             self?.ghost.hide()
             self?.reply(["type": "mac_abort", "reason": reason])
+        }
+        // M8: each semantic step the recorder resolves rides the wire immediately —
+        // fire-and-forget like mac_abort; the daemon sanitizes and buffers.
+        recorder.onStep = { [weak self] step in
+            self?.reply(["type": "teach_event", "step": step])
         }
     }
 
@@ -58,6 +70,15 @@ final class MacBridge {
                 }
             }
             return true
+        case "mac_teach":
+            // M8 resync: a shell that (re)connected mid-teach re-arms its recorder;
+            // active:false stops a recorder whose daemon-side session died (restart,
+            // cancel, disconnect). Broadcast — no correlation id to answer.
+            let active = msg["active"] as? Bool ?? false
+            DispatchQueue.main.async {
+                if active { self.resumeRecording() } else { self.stopRecordingLocal() }
+            }
+            return true
         default:
             return false
         }
@@ -79,6 +100,17 @@ final class MacBridge {
                 result = ScreenVision.perform(action)
             case "point":
                 result = self.performPoint(action)
+            case "record_start":
+                // M8: arm the tap in record mode. Main-thread (tap runloop + UI flag),
+                // synchronously from this worker so the ack carries the real outcome.
+                result = DispatchQueue.main.sync { self.startRecording() }
+            case "record_stop":
+                // Flushes the pending typing burst BEFORE this ack goes out — the daemon
+                // counts on that ordering to have every step when the ack resolves.
+                result = DispatchQueue.main.sync { () -> [String: Any] in
+                    self.stopRecordingLocal()
+                    return AXResult(ok: true, output: "stopped", errorKind: nil, health: nil).wire()
+                }
             case "activate":
                 // Bring an app to the front via the AX grant (the system suppresses plain
                 // open/activate). Runs on main (AppKit/AX foregrounding is main-thread work).
@@ -143,6 +175,13 @@ final class MacBridge {
     private var sessionArmed = false
 
     private func armSession() {
+        // M8 defensive: the daemon guarantees teaching and tasks never coexist — if a
+        // mac_task still arrives mid-recording, refuse rather than convert the recorder
+        // into an abort tap under the user's demonstrating hands.
+        guard killSwitch.mode != .record else {
+            NSLog("MacBridge: refusing to arm a task session while recording")
+            return
+        }
         // Fail CLOSED: if the kill switch can't arm (PostEvent grant missing), we must not
         // let the task drive the machine with no human-input abort — tell the daemon to
         // cancel it, and don't show the ghost cursor (nothing will be driving).
@@ -160,7 +199,61 @@ final class MacBridge {
     private func disarmSession() {
         sessionArmed = false
         killSwitch.handoffActive = false // a task ending mid-handoff must not leave the tap soft
-        killSwitch.disarm()
+        // M8: recording owns the tap — resync broadcasts a mac_task active:false on every
+        // shell hello, and that must not tear down an active recording mid-teach.
+        if killSwitch.mode != .record { killSwitch.disarm() }
         ghost.hide()
+    }
+
+    // MARK: M8 recording lifecycle (main thread)
+
+    private func startRecording() -> [String: Any] {
+        guard !sessionArmed else {
+            return AXResult.failure("out_of_scope", "A computer task is driving the Mac — cannot record now.").wire()
+        }
+        guard !recordingActive else {
+            return AXResult(ok: true, output: "already recording", errorKind: nil, health: nil).wire()
+        }
+        killSwitch.mode = .record
+        killSwitch.onRecordEvent = { [weak self] raw in self?.recorder.ingest(raw) }
+        // Fail CLOSED, like armSession: teaching without a live tap would be a silently
+        // un-recorded "recording" — the daemon fails the teach session on this ack.
+        guard killSwitch.arm() else {
+            killSwitch.mode = .abort
+            killSwitch.onRecordEvent = nil
+            return AXResult.failure("ax_unavailable", "The event tap could not be created (PostEvent grant missing) — cannot record.").wire()
+        }
+        recorder.start()
+        recordingActive = true
+        onRecordingChanged?(true)
+        return AXResult(ok: true, output: "recording", errorKind: nil, health: nil).wire()
+    }
+
+    private func stopRecordingLocal() {
+        guard recordingActive else { return }
+        recorder.stop() // synchronous flush — final burst lands before any stop ack
+        killSwitch.disarm()
+        killSwitch.mode = .abort
+        killSwitch.onRecordEvent = nil
+        recordingActive = false
+        onRecordingChanged?(false)
+    }
+
+    private func resumeRecording() {
+        guard !recordingActive else { return }
+        let result = startRecording()
+        // A resync re-arm that fails must be LOUD: the daemon believes it's teaching.
+        // mac_abort cancels every kind:'computer' task — the teach session included —
+        // which is exactly the honest failure.
+        if (result["ok"] as? Bool) != true {
+            reply(["type": "mac_abort", "reason": "kill_switch_unavailable"])
+        }
+    }
+
+    /// The daemon is gone (socket dropped): an active recording has nowhere to stream —
+    /// stop it and clear the indicator. Daemon-side, the teach session dies on its own
+    /// socket-close handler; a reconnect gets the truth re-stated via mac_teach resync.
+    func handleSocketDropped() {
+        DispatchQueue.main.async { self.stopRecordingLocal() }
     }
 }

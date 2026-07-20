@@ -200,6 +200,9 @@ hub.onMessage((msg, role) => {
     // M6 kill switch: the user touched the machine (or hit the hotkey) while a computer-use
     // task was driving it — cancel every running computer task, instantly and audibly.
     manager.cancelComputerTasks(String(msg.reason ?? 'human_input'));
+  } else if (msg.type === 'teach_event' && role === 'shell') {
+    // M8: one demonstration step from the record-mode tap — sanitized inside teachEvent.
+    manager.teachEvent((msg as { step?: unknown }).step);
   } else if (msg.type === 'image_edit_request' && role === 'shell') {
     // M5.5: typed edit from the viewer panel — no realtime session involved; the
     // completion (or failure) is spoken through the same proactive announce path, and
@@ -230,6 +233,10 @@ hub.onClose((role) => {
     orchestrator.handlePlaybackState(false);
     imageContext.set(null);
     fileContext.set(null);
+    // M8: an active recording has no recorder anymore — die loudly (Law 5: a dead
+    // teaching session must never look like it's still recording). The shell stops its
+    // own side on socket drop; a reconnecting shell gets mac_teach:false via resync.
+    manager.cancelTeaching('the shell disconnected mid-recording');
   }
 });
 

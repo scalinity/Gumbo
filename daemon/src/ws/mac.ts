@@ -121,12 +121,25 @@ export class MacBridge {
   }
   private handoffActive = false;
 
+  /** M8 teaching state: while active, the shell's tap runs in RECORD mode (the user's
+   *  input is the demonstration). Edge-triggered like setHandoff; teaching and computer
+   *  tasks are mutually exclusive (manager), so one flag suffices. */
+  setTeaching(active: boolean) {
+    if (this.teachingActive === active) return;
+    this.teachingActive = active;
+    this.hub.broadcast({ type: 'mac_teach', active }, 'shell');
+  }
+  private teachingActive = false;
+
   /** A shell that (re)connects mid-task must arm its kill switch immediately —
    *  broadcast the current state on every hello (shell relaunches are routine).
    *  Handoff state rides along: reconnecting mid-handoff must NOT abort on the user's
-   *  in-progress typing. */
+   *  in-progress typing. M8: teach state is UNCONDITIONAL like mac_task — a shell
+   *  still recording for a restarted (teach-less) daemon must be told to stop, and a
+   *  fresh shell mid-teach must re-arm its recorder. */
   resync() {
     this.hub.broadcast({ type: 'mac_task', active: this.activeTasks > 0 }, 'shell');
     if (this.handoffActive) this.hub.broadcast({ type: 'mac_handoff', active: true }, 'shell');
+    this.hub.broadcast({ type: 'mac_teach', active: this.teachingActive }, 'shell');
   }
 }

@@ -326,3 +326,79 @@ test('set_reminder rejects non-local ISO shapes that Date.parse would read as UT
     assert.match(result, /must be a LOCAL date-time/, `must reject "${bad}"`);
   }
 });
+
+// M8: teaching rides ONE new realtime tool (start/stop/cancel are actions, not tools) and
+// the raw teach/record primitives stay off the registry like the AX/browser ones.
+test('M8: teach_procedure is registered; record primitives never leak to the realtime registry', () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  assert.ok(names.includes('teach_procedure'), 'teach_procedure missing from the realtime registry');
+  for (const banned of ['record_start', 'record_stop', 'teach_event']) {
+    assert.ok(!names.includes(banned), `${banned} is wire/subagent machinery, never a realtime tool`);
+  }
+});
+
+test('M8: teach_procedure start requires a name; lifecycle calls route to the manager', async () => {
+  const calls: string[] = [];
+  const manager = {
+    startTeaching: async (name: string) => { calls.push(`start:${name}`); return { id: 't1' }; },
+    stopTeaching: async () => { calls.push('stop'); return { name: 'demo', stepCount: 3 }; },
+    cancelTeaching: () => { calls.push('cancel'); return true; },
+  };
+  const tools = createOrchestratorTools(
+    manager as never,
+    {} as never,
+    {
+      scheduler: {} as never,
+      announce: async () => {},
+      imageContext: { get: () => null } as never,
+      fileContext: { get: () => null } as never,
+      presentFile: (() => true) as never,
+      openImage: (() => true) as never,
+      macBridge: {} as never,
+      confirmMacDo: (async () => false) as never,
+    },
+  );
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+
+  const noName = await teach.invoke({}, JSON.stringify({ action: 'start', name: null }));
+  assert.match(noName, /name is needed/i);
+  assert.deepEqual(calls, [], 'no manager call without a name');
+
+  const started = await teach.invoke({}, JSON.stringify({ action: 'start', name: 'file expenses' }));
+  assert.match(started, /watching the user/i);
+  const stopped = await teach.invoke({}, JSON.stringify({ action: 'stop', name: null }));
+  assert.match(stopped, /3 steps/);
+  const cancelled = await teach.invoke({}, JSON.stringify({ action: 'cancel', name: null }));
+  assert.match(cancelled, /discarded/i);
+  assert.deepEqual(calls, ['start:file expenses', 'stop', 'cancel']);
+});
+
+test('M8: teach_procedure surfaces manager refusals as spoken text (busy Mac, no recording)', async () => {
+  const manager = {
+    startTeaching: async () => { throw new Error('a computer-use task ("Browse") is already driving the Mac; wait for it to finish or cancel it first'); },
+    stopTeaching: async () => { throw new Error('no recording is active'); },
+    cancelTeaching: () => false,
+  };
+  const tools = createOrchestratorTools(
+    manager as never,
+    {} as never,
+    {
+      scheduler: {} as never,
+      announce: async () => {},
+      imageContext: { get: () => null } as never,
+      fileContext: { get: () => null } as never,
+      presentFile: (() => true) as never,
+      openImage: (() => true) as never,
+      macBridge: {} as never,
+      confirmMacDo: (async () => false) as never,
+    },
+  );
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  assert.match(await teach.invoke({}, JSON.stringify({ action: 'start', name: 'x' })), /already driving the Mac/);
+  assert.match(await teach.invoke({}, JSON.stringify({ action: 'stop', name: null })), /no recording is active/);
+  assert.match(await teach.invoke({}, JSON.stringify({ action: 'cancel', name: null })), /No recording is active/);
+});

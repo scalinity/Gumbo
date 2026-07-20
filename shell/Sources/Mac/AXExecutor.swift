@@ -25,6 +25,20 @@ struct AXResult {
     }
 }
 
+/// M8: what the watch-me recorder captures about an element the user touched — structure
+/// only (labels/roles/identifiers), never a value read, never coordinates. isSecure
+/// (AXSecureTextField) is decided HERE, next to the other AX reads, so the recorder's
+/// sensitivity gate uses the same truth as the executor's act-time hard refuse.
+struct AXHitInfo {
+    let appName: String
+    let windowTitle: String?
+    let role: String
+    let subrole: String?
+    let name: String?
+    let identifier: String?
+    let isSecure: Bool
+}
+
 /// The AX engine: owns the ref→element map (one generation per snapshot — live refs are
 /// never cached across snapshots), reads compacted trees, drives the dispatch ladder, and
 /// returns before/after diffs. All AX traffic runs on a private serial queue off the shell
@@ -523,6 +537,90 @@ final class AXExecutor {
             guard let element = refs[ref] else { return nil }
             return frameOf(element)
         }
+    }
+
+    // MARK: M8 recorder support — element-at-point + focused element (read-only)
+
+    /// The element under a screen point (global top-left coords, same space as
+    /// AXPosition and the tap's event.location), climbed to the nearest interactive
+    /// ancestor. Nil when nothing resolvable is there (the recorder degrades to a
+    /// low-fidelity step, never an error).
+    func hitTest(at point: CGPoint) -> AXHitInfo? {
+        queue.sync {
+            AXUIElement.systemWide.setMessagingTimeout(messagingTimeout)
+            var found: AXUIElement?
+            let err = AXUIElementCopyElementAtPosition(AXUIElement.systemWide, Float(point.x), Float(point.y), &found)
+            guard err == .success, let hit = found else { return nil }
+            return hitInfo(for: climbToInteractive(hit))
+        }
+    }
+
+    /// The focused UI element — what a typing burst lands in. Read at burst START so the
+    /// secure-field decision is made before any content exists to mishandle.
+    func focusedFieldInfo() -> AXHitInfo? {
+        queue.sync {
+            AXUIElement.systemWide.setMessagingTimeout(messagingTimeout)
+            var ref: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(AXUIElement.systemWide, kAXFocusedUIElementAttribute as CFString, &ref) == .success,
+                  let f = ref, CFGetTypeID(f) == AXUIElementGetTypeID()
+            else { return nil }
+            return hitInfo(for: (f as! AXUIElement))
+        }
+    }
+
+    /// Hit-tests land on leaves (the label INSIDE the button); climb to the control that
+    /// means something. A real control beats static text; static text (an interactive
+    /// role for state-verification reasons) is only the fallback when no control encloses it.
+    private func climbToInteractive(_ element: AXUIElement) -> AXUIElement {
+        var current = element
+        var textFallback: AXUIElement?
+        for _ in 0..<8 {
+            let role = stringAttr(current, kAXRoleAttribute) ?? ""
+            let subrole = stringAttr(current, kAXSubroleAttribute)
+            if AXNode.isInteractive(role: role, subrole: subrole) {
+                if role != kAXStaticTextRole { return current }
+                if textFallback == nil { textFallback = current }
+            }
+            guard let parent = parentOf(current) else { break }
+            current = parent
+        }
+        return textFallback ?? element
+    }
+
+    /// Structure-only descriptor for the recorder: labels, roles, identifiers — NEVER a
+    /// value read (recording captures what the user touched, not what it contained).
+    private func hitInfo(for element: AXUIElement) -> AXHitInfo? {
+        element.setMessagingTimeout(messagingTimeout)
+        let role = stringAttr(element, kAXRoleAttribute) ?? ""
+        guard !role.isEmpty else { return nil }
+        let subrole = stringAttr(element, kAXSubroleAttribute)
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        return AXHitInfo(
+            appName: NSRunningApplication(processIdentifier: pid)?.localizedName ?? "",
+            windowTitle: windowTitle(of: element),
+            role: role,
+            subrole: subrole,
+            name: stringAttr(element, kAXTitleAttribute) ?? stringAttr(element, kAXDescriptionAttribute),
+            identifier: stringAttr(element, kAXIdentifierAttribute),
+            isSecure: subrole == "AXSecureTextField"
+        )
+    }
+
+    private func windowTitle(of element: AXUIElement) -> String? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXWindowAttribute as CFString, &ref) == .success,
+              let w = ref, CFGetTypeID(w) == AXUIElementGetTypeID()
+        else { return nil }
+        return stringAttr((w as! AXUIElement), kAXTitleAttribute)
+    }
+
+    private func parentOf(_ element: AXUIElement) -> AXUIElement? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &ref) == .success,
+              let p = ref, CFGetTypeID(p) == AXUIElementGetTypeID()
+        else { return nil }
+        return (p as! AXUIElement)
     }
 
     // MARK: raw attribute reads

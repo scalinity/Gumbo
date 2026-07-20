@@ -495,6 +495,47 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     },
   });
 
+  // M8 watch-me teaching: the user demonstrates a task ONCE and the shell's tap records it
+  // semantically. The description is the router (start/stop/cancel are voice phrases, not
+  // separate tools — the registry stays lean, the M6 lesson).
+  const teachProcedure = tool({
+    name: 'teach_procedure',
+    description:
+      'Learn a Mac procedure by WATCHING the user demonstrate it himself. action "start" begins ' +
+      'recording his clicks and typing as a named procedure — use when he says "watch me", "let me ' +
+      'show you how", "I\'ll teach you"; needs a short name (infer one from what he says he\'s about ' +
+      'to demonstrate, e.g. "file expense report"). While recording, everything he does on the Mac ' +
+      'is the demonstration; passwords are never recorded. action "stop" ends and saves the ' +
+      'recording — use when he says "done", "that\'s it", "stop watching". action "cancel" discards ' +
+      'it ("never mind", "forget that"). Recording shows in the notch the whole time.',
+    parameters: z.object({
+      action: z.enum(['start', 'stop', 'cancel']),
+      name: z
+        .string()
+        .nullable()
+        .describe('Short procedure name, required for start (a few words); null for stop/cancel'),
+    }),
+    execute: async ({ action, name }) => {
+      try {
+        if (action === 'start') {
+          const trimmed = name?.trim();
+          if (!trimmed) return 'A name is needed to start — ask the user what to call this procedure.';
+          await manager.startTeaching(trimmed);
+          return `Recording — watching the user demonstrate "${trimmed}". Tell him to go ahead and to say "done" when he's finished.`;
+        }
+        if (action === 'stop') {
+          const done = await manager.stopTeaching();
+          return `Recording finished — captured ${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}". Confirm briefly to the user.`;
+        }
+        return manager.cancelTeaching('cancelled by the user')
+          ? 'Recording discarded — nothing was kept.'
+          : 'No recording is active.';
+      } catch (err) {
+        return `Could not do that: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  });
+
   // Hot path: Tavily, hard-capped at config.search.quickLookupTimeoutMs, no retries. The
   // description below IS the router between this and spawn_subagent — its wording is part
   // of the spec; don't loosen it.
@@ -537,6 +578,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
 
   return [
     spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, xLookupTool, macDo,
+    teachProcedure,
     generateImage, editImageTool, openImage, setReminder, listReminders, cancelReminder,
     listTasks, getTaskStatus, cancelTask, readReport, saveNote, presentFileTool, editFileTool,
   ];

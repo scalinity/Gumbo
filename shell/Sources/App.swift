@@ -147,6 +147,10 @@ final class GumboController {
         }
         // M6: mac_action results + kill-switch aborts ride back over the same socket.
         mac.onReply = { [weak self] json in self?.ws.sendJSON(json) }
+        // M8: the watch-me recorder pins a persistent "Watching…" badge on the notch,
+        // and a dropped daemon socket stops an active recording loudly.
+        mac.onRecordingChanged = { [weak self] active in self?.notch.setRecording(active) }
+        ws.onDisconnect = { [weak self] in self?.mac.handleSocketDropped() }
         ws.connect()
     }
 
