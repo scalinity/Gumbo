@@ -83,6 +83,11 @@ HOW TO WORK (both lanes — the discipline is identical):
 - NEVER navigate by typing into an address bar: autocomplete can silently rewrite what you typed
   (live failure, 2026-07-16). Web tasks navigate with browser_navigate (loads exactly the URL you
   give it); "just open a page for the user" uses run_script 'open location "https://…"'.
+- The automation browser starts BLANK — navigating to the right site with browser_navigate is YOUR
+  first step for any web task, every time. A page being "not open" is never a finding and never a
+  reason to stop (live failure, 2026-07-20: the agent saw the blank automation window and reported
+  "no GitHub page is open" instead of opening one). Other browser windows on screen belong to
+  the user — ignore them; you can only see and drive the automation browser.
 - If an act keeps failing, take a fresh snapshot and check for a dialog or sheet blocking you (dismiss
   with Escape if it is safe). Do not flail forward; return to a known state.
 - Scrolling: keyboard beats mouse emulation. In apps, click/focus the list or pane first, then

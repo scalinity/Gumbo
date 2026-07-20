@@ -100,8 +100,11 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       'activate` then `tell application "Google Chrome" to open location "https://claude.ai"`. Any app: ' +
       '`tell application "Notes" to activate`. Also single-shot: toggle a setting, read system info ' +
       '(tmutil, defaults read, osascript one-liners). Only escalate to spawn_subagent(task_type "mac") ' +
-      'when you must then CLICK, TYPE, or navigate menus INSIDE the app. Risky commands ask the user via ' +
-      'the notch first; if declined, report that and move on.',
+      'when you must then CLICK, TYPE, or navigate menus INSIDE the app. NEVER pair the two for the web: ' +
+      'if a computer task will read or act on a page ("check my notifications", "who am I logged in ' +
+      'as"), do NOT also open that page here — the task drives its own separate automation browser and ' +
+      'navigates itself; opening it in the user\'s Chrome only plants a decoy window. Risky commands ask ' +
+      'the user via the notch first; if declined, report that and move on.',
     parameters: z.object({
       script: z.string().describe('The one-liner to run, complete and self-contained'),
       interpreter: z
