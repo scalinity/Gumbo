@@ -122,3 +122,15 @@ test('task lifecycle broadcasts are edge-triggered and refcounted', () => {
     [true, false, false],
   );
 });
+
+test('M7: capture_denied round-trips sanitize as a branchable kind', async () => {
+  const { hub, sent } = fakeHub(true);
+  const bridge = new MacBridge(hub, 1000);
+  const p = bridge.request({ kind: 'ocr', app: null, region: null });
+  const req = sent.find((m) => m.type === 'mac_action');
+  assert.ok(req?.id);
+  bridge.handleResult(req!.id!, { ok: false, output: 'Screen Recording is not granted.', error_kind: 'capture_denied' });
+  const result = await p;
+  assert.equal(result.ok, false);
+  assert.equal(result.error_kind, 'capture_denied');
+});

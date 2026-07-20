@@ -154,6 +154,14 @@ export const config = {
     snapshotMaxElements: 400, // interactive elements per compacted snapshot the model sees
     maxTurns: 50, // computer-mode sub-agent step budget (SPEC §M6: default ~50)
     outputMaxChars: 262_144, // defensive cap on any single shell result payload
+    // M7 vision lane: one-shot ScreenCaptureKit capture (+ Vision OCR) budgets. The
+    // first capture triggers the Screen Recording TCC prompt, which can sit for a while —
+    // the RPC margin on top of this covers the round trip, and a denial comes back as
+    // typed capture_denied, never a hang.
+    captureTimeoutMs: 10_000,
+    // screen_look's nested vision-model query (capture → ask → text answer). Screenshots
+    // deliberately NEVER enter the loop context — this bounds the one-shot ask instead.
+    visionTimeoutMs: 60_000,
   },
   // M7 browser lane: Playwright/CDP on a DEDICATED automation profile — never the user's live
   // Chrome (locked decision: anti-bot flags CDP sessions; a burned live profile is

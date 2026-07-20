@@ -38,9 +38,12 @@ function byName(list: ToolLike[], name: string) {
   return t!;
 }
 
-test('the AX toolset exposes exactly the sub-agent primitives', () => {
+test('the AX toolset exposes exactly the sub-agent primitives (M7 adds the vision rungs)', () => {
   const names = tools(fakeBridge(() => ({ ok: true, output: '' }))).map((t) => t.name);
-  assert.deepEqual(names.sort(), ['ax_act', 'ax_query', 'ax_snapshot', 'check_permissions', 'run_script'].sort());
+  assert.deepEqual(
+    names.sort(),
+    ['ax_act', 'ax_query', 'ax_snapshot', 'check_permissions', 'run_script', 'screen_ocr', 'screen_look', 'click_point'].sort(),
+  );
 });
 
 test('a failing act surfaces the typed error_kind, with the stale_ref re-snapshot hint', async () => {
@@ -168,4 +171,66 @@ test('check_permissions reports the health state', async () => {
   const list = tools(fakeBridge(() => ({ ok: false, output: 'stale cache — relaunch', error_kind: 'ax_unavailable', health: 'stale_cache' })));
   const out = await byName(list, 'check_permissions').invoke({}, JSON.stringify({}));
   assert.match(out, /health=stale_cache/);
+});
+
+// ——— M7 vision lane ———
+
+test('screen_ocr sends an ocr action, audits kind capture, and translates capture_denied for the user', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'window "x" of App — 1 text lines:\nT1 "Wallpaper" @ (312,148) 88x22' }));
+  const out = await byName(tools(bridge), 'screen_ocr').invoke({}, JSON.stringify({ app: 'System Settings', region: null }));
+  assert.match(out, /T1 "Wallpaper" @ \(312,148\)/);
+  assert.deepEqual(bridge.calls[0], { kind: 'ocr', app: 'System Settings', region: null });
+  const audit = lastAudit()!;
+  assert.equal(audit.kind, 'capture');
+  assert.equal(audit.gate, 'auto');
+
+  const denied = fakeBridge(() => ({ ok: false, output: 'Screen Recording is not granted.', error_kind: 'capture_denied' as const }));
+  const deniedOut = await byName(tools(denied), 'screen_ocr').invoke({}, JSON.stringify({ app: null, region: null }));
+  assert.match(deniedOut, /Error \(capture_denied\)/);
+  assert.match(deniedOut, /Privacy & Security › Screen Recording/);
+});
+
+test('click_point maps buttons to point verbs, audits as an act, and shares the repetition guard', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'click at (10,20).' }));
+  const list = tools(bridge);
+  const args = JSON.stringify({ x: 10, y: 20, button: 'double' });
+  await byName(list, 'click_point').invoke({}, args);
+  assert.deepEqual(bridge.calls[0], { kind: 'point', verb: 'double_click', x: 10, y: 20 });
+  assert.equal(lastAudit()!.kind, 'act');
+  await byName(list, 'click_point').invoke({}, args);
+  const third = await byName(list, 'click_point').invoke({}, args);
+  assert.equal(bridge.calls.length, 2, 'the 3rd identical point click is short-circuited');
+  assert.match(third, /3 times/);
+});
+
+test('screen_look captures to the task workspace, then returns ONLY the vision answer (image never enters the loop)', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'captured window' }));
+  const asked: Array<[string, string]> = [];
+  const list = createMacTools('t1', bridge as never, new AbortController().signal, async () => false, {
+    visionQuery: async (path: string, question: string) => {
+      asked.push([path, question]);
+      return 'The selected wallpaper is "Sequoia Sunrise".';
+    },
+  }) as unknown as ToolLike[];
+  const out = await byName(list, 'screen_look').invoke({}, JSON.stringify({ question: 'which wallpaper is selected?', app: 'System Settings', region: null }));
+  assert.equal(out, 'The selected wallpaper is "Sequoia Sunrise".');
+  assert.equal(asked.length, 1);
+  assert.match(asked[0][0], /t1[/\\]vision-1\.png$/, 'screenshot path lands in the task workspace');
+  const shot = bridge.calls[0] as { kind: string; out_path: string };
+  assert.equal(shot.kind, 'screenshot');
+  assert.equal(shot.out_path, asked[0][0]);
+  const audit = lastAudit()!;
+  assert.equal(audit.kind, 'capture');
+  assert.match(String(audit.action), /screen_look/);
+});
+
+test('screen_look surfaces a capture failure without calling the vision model', async () => {
+  const bridge = fakeBridge(() => ({ ok: false, output: 'no window', error_kind: 'element_not_found' as const }));
+  let visionCalls = 0;
+  const list = createMacTools('t1', bridge as never, new AbortController().signal, async () => false, {
+    visionQuery: async () => ((visionCalls += 1), 'never'),
+  }) as unknown as ToolLike[];
+  const out = await byName(list, 'screen_look').invoke({}, JSON.stringify({ question: 'q', app: 'Nope', region: null }));
+  assert.match(out, /Error \(element_not_found\)/);
+  assert.equal(visionCalls, 0);
 });

@@ -57,9 +57,16 @@ final class MacBridge {
             guard let self else { return }
             let kind = action["kind"] as? String ?? ""
             let result: [String: Any]
-            if kind == "script" {
+            switch kind {
+            case "script":
                 result = self.runScript(action)
-            } else {
+            case "ocr", "screenshot":
+                // M7 vision lane — ScreenCaptureKit + Vision, blocking-bridged on this
+                // serial queue (never main). First use triggers the Screen Recording prompt.
+                result = ScreenVision.perform(action)
+            case "point":
+                result = self.performPoint(action)
+            default:
                 // For an act, fly the ghost cursor to the target frame first (pure
                 // visualization — the AX/pid rungs don't move the real pointer).
                 if kind == "act", let ref = action["ref"] as? String, let frame = self.executor.frame(ofRef: ref) {
@@ -69,6 +76,26 @@ final class MacBridge {
             }
             self.reply(["type": "mac_action_result", "id": id, "result": result])
         }
+    }
+
+    /// M7 vision-lane act: click at global point coords (from screen_ocr). The ghost flies
+    /// first and gets a beat to arrive (the AX path's double walk gives that delay
+    /// naturally; a point click would otherwise fire before the bloom lands). Global rung
+    /// by design — this lane exists precisely where per-element targeting failed.
+    private func performPoint(_ action: [String: Any]) -> [String: Any] {
+        guard let x = (action["x"] as? NSNumber)?.doubleValue, let y = (action["y"] as? NSNumber)?.doubleValue else {
+            return AXResult.failure("out_of_scope", "point needs x and y.").wire()
+        }
+        let verb = action["verb"] as? String ?? "click"
+        let point = CGPoint(x: x, y: y)
+        DispatchQueue.main.async { self.ghost.move(to: CGRect(x: point.x - 2, y: point.y - 2, width: 4, height: 4)) }
+        usleep(150_000)
+        switch verb {
+        case "right_click": SyntheticInput.click(at: point, pid: nil, button: .right)
+        case "double_click": SyntheticInput.click(at: point, pid: nil, clicks: 2)
+        default: SyntheticInput.click(at: point, pid: nil)
+        }
+        return AXResult(ok: true, output: "\(verb) at (\(Int(x)),\(Int(y))). No diff for point acts — verify with screen_ocr or ax_snapshot.", errorKind: nil, health: nil).wire()
     }
 
     private func runScript(_ action: [String: Any]) -> [String: Any] {

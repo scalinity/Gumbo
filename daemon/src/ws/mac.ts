@@ -5,7 +5,7 @@ import type { MacAction, MacActionResult, MacErrorKind, MacHealth } from './prot
 
 const ERROR_KINDS: ReadonlySet<string> = new Set([
   'element_not_found', 'stale_ref', 'ax_unavailable', 'timeout', 'out_of_scope',
-  'secure_field', 'script_error', 'aborted',
+  'secure_field', 'script_error', 'aborted', 'capture_denied',
 ] satisfies MacErrorKind[]);
 const HEALTH_STATES: ReadonlySet<string> = new Set(
   ['healthy', 'stale_cache', 'ax_disabled', 'not_granted'] satisfies MacHealth[],

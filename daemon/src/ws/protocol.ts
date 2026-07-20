@@ -17,20 +17,31 @@ export const AUDIO_TTS = 0x02;
 export type MacActVerb = 'press' | 'focus' | 'set_value' | 'type' | 'key' | 'show_menu' | 'wait_for';
 
 /** One shell-executed step. Nullable fields are per-verb: act needs ref (except wait_for,
- *  which matches on role+name); script carries its own hard timeout (Tahoe -1712 hangs). */
+ *  which matches on role+name); script carries its own hard timeout (Tahoe -1712 hangs).
+ *  M7 vision lane (ocr/screenshot/point): capture rides ScreenCaptureKit — the Screen
+ *  Recording TCC grant prompts on FIRST use, the last planned grant. `region` is a global
+ *  TOP-LEFT points rect [x,y,w,h]; ALL coordinate math (Retina DPR, multi-display,
+ *  Vision's bottom-left origin) stays SHELL-side, so the model only ever sees global
+ *  points it can hand straight back to `point` (the documented #1 offset-click cause,
+ *  structurally removed). */
 export type MacAction =
   | { kind: 'health' } // LIVE permission probe — AXIsProcessTrusted() has a stale-cache failure mode
   | { kind: 'snapshot'; app: string | null; max_elements: number } // compacted AX tree; app null = frontmost
   | { kind: 'query'; query: string; max_results: number } // grep the shell-held FULL tree for more (it never enters LLM context)
   | { kind: 'act'; verb: MacActVerb; ref: string | null; value: string | null; role: string | null; name: string | null; timeout_ms: number }
-  | { kind: 'script'; interpreter: 'osascript' | 'shortcuts'; script: string; timeout_ms: number };
+  | { kind: 'script'; interpreter: 'osascript' | 'shortcuts'; script: string; timeout_ms: number }
+  | { kind: 'ocr'; app: string | null; region: [number, number, number, number] | null } // on-device Vision OCR → text lines w/ global point centers
+  | { kind: 'screenshot'; app: string | null; region: [number, number, number, number] | null; out_path: string } // PNG to a daemon-supplied workspace path
+  | { kind: 'point'; verb: 'click' | 'double_click' | 'right_click'; x: number; y: number }; // vision-lane action at global point coords
 
 /** SPEC §M6 typed errors (mirrors SearchError.kind — callers branch on kind, never message
- *  strings). The last three are lane-level: secure_field is the executor's hard refusal,
- *  script_error a nonzero exit, aborted the task-cancel/kill-switch path. */
+ *  strings). The lane-level ones: secure_field is the executor's hard refusal,
+ *  script_error a nonzero exit, aborted the task-cancel/kill-switch path, capture_denied
+ *  the missing/declined Screen Recording grant (M7 — stop and tell the user; other capture
+ *  failures ride timeout/ax_unavailable). */
 export type MacErrorKind =
   | 'element_not_found' | 'stale_ref' | 'ax_unavailable' | 'timeout' | 'out_of_scope'
-  | 'secure_field' | 'script_error' | 'aborted';
+  | 'secure_field' | 'script_error' | 'aborted' | 'capture_denied';
 
 /** Permission health is a state machine, not a boolean: stale_cache = trusted-but-broken
  *  (relaunch fixes), ax_disabled = kAXErrorAPIDisabled, not_granted = never authorized. */

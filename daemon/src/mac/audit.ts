@@ -12,11 +12,14 @@ let logsDirReady = false;
  * Observations (snapshot, query, health, tab lists) are deliberately not audited; the
  * trail records what touched the machine, including declined confirms (gate 'declined')
  * — refusals are part of the security story. Browser lines carry the page URL (SPEC §M7:
- * the audit line carries the URL trail).
+ * the audit line carries the URL trail). EXCEPTION to the observation rule: screen
+ * captures (kind 'capture') audit even though they touch nothing — a screenshot/OCR is
+ * privacy-relevant in a way an AX read is not, and the trail must show when the screen
+ * was captured and whether pixels left the machine (screen_look's vision query).
  */
 export function auditMacAction(entry: {
   tier: 'hot' | 'subagent';
-  kind: 'script' | 'act' | 'browser';
+  kind: 'script' | 'act' | 'browser' | 'capture';
   /** The script text (scripts) or a verb+target summary (acts, browser actions). */
   action: string;
   /** How the gate resolved: auto-allowed, the user confirmed, or the user/timeout declined. */
