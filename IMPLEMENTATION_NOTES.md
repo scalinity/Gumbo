@@ -2162,3 +2162,40 @@ are the entire security boundary:
   copies — a shared helper is the right call, but extracting it across two working lanes right before
   the live demos, with the "precision refactor regresses" lesson fresh, is a separate change. Recorded
   so it isn't lost.
+
+### M7 SECOND review-address pass — /review-2 on the fix delta itself (2026-07-19)
+
+The twice-proven M6 discipline (re-review the fix delta; the FIRST address pass introduced
+M6's worst bug) paid off again: a second /review-2 (both Fable agents) over the first
+address commit (c3205ee..08d77dc) found that MY OWN `unresolvableNavTarget` fix was
+incompletely closed — the exact "fix reads correct but reopens the gate" class. Both agents
+corroborated; DB1 independently found a second variant. All addressed (daemon 350/1-skip,
+live smoke + shell build green):
+- **🔴 (corroborated) brittle nav-gate parse.** My first-pass `NAV_VERB` used `set\s+url\s+of`
+  and inspected only the token immediately after the first literal. Two reachable evasions of
+  the concat/indirection gate the pass CLAIMED to close: (a) the idiomatic definite article
+  `set the URL of …` broke the regex (CA1); (b) a `¬` line-continuation split the `&` onto the
+  next physical line, past the `startsWith('&')` check (DB1). `do JavaScript`/`execute
+  javascript` were in no list at all. **Lesson re-confirmed: a precise parser of a blocklist is
+  fragile — every reviewer found a new variant.** Fixed by ABANDONING the precise parse for an
+  over-approximation that fails SAFE by construction: fold `¬` continuations at the normalize
+  layer (so the gate AND extractFetchUrls see one statement — this also closed a clean
+  `open location ¬\n "unlisted"` that was escaping the host check entirely), article-tolerant
+  verb, JS-in-page always unresolvable, and treat ANY `&` in the nav statement as runtime-built
+  → confirm (a `&` inside the target literal's query string is excluded). The only residual is
+  over-confirm (a legit clean nav with a `&` in a trailing comment), which is harmless.
+- **🟡 dead select gate.** The first pass added a select-in-POST-form rule to browserActDecision
+  but browser-tools only fetched formMethod for click/press-enter, so the branch never ran in
+  production — the unit test passed by calling the pure function directly. This is the
+  "test mocks past the fix" trap: a green suite over illusory code. Fixed (select ∈ needsForm)
+  + an integration test that drives a real select THROUGH the tool.
+- **🔵s:** 413 body-cap bounds the append before socket teardown; ghost-cursor boundingBox
+  timeout 1500→400 ms so the cosmetic fly can't stall a real act on a stale ref.
+- **Self-audit of THIS pass (guarding against a third-order regression):** the nav-gate change
+  is now an over-approximation (any-& = confirm), which structurally removes the "precision bug"
+  class the reviews kept finding — the failure mode is over-confirm (safe), never under-confirm
+  (the hole). normalizeOsascript's `-e` unwrap is unchanged for non-`¬` scripts (suite confirms).
+  A third full /review-2 is available but the gate now fails safe by construction, so the natural
+  stopping point is reached; the remaining merge gates are the live demos with the user.
+- **Not pushed.** Feature-branch worktree, no remote; merge to main stays gated on the review
+  flow + live GUI demos.
