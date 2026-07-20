@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright-core';
+import { chromium, type BrowserContext, type Locator, type Page } from 'playwright-core';
 import { config } from '../config.ts';
 import { capSnapshot, diffSnapshots, encodeRefs, parseRef, refTable, stripForDiff, type RefInfo } from './snapshot.ts';
 
@@ -30,55 +30,87 @@ function failure(kind: BrowserErrorKind, output: string): BrowserResult {
   return { ok: false, error_kind: kind, output };
 }
 
-function stateFile(): string {
-  return join(config.home.browser, 'state.json');
+function profileDir(): string {
+  return join(config.home.browser, 'profile');
+}
+
+/** One-time profile seed, BEFORE Chrome ever writes it: the SPEC invariant is "no stored
+ *  passwords, ever" — with a persistent profile Chrome would offer to save what the user
+ *  types during a login handoff, so the password manager is disabled at the profile
+ *  level. Never touches an existing Preferences file (that is Chrome's live state). */
+function seedProfilePrefs(): void {
+  const prefs = join(profileDir(), 'Default', 'Preferences');
+  if (existsSync(prefs)) return;
+  mkdirSync(join(profileDir(), 'Default'), { recursive: true });
+  writeFileSync(prefs, JSON.stringify({ credentials_enable_service: false, profile: { password_manager_enabled: false } }));
 }
 
 /**
- * M7 browser lane: Playwright on a DEDICATED automation profile — never the user's live
- * Chrome (locked decision). HEADED via the installed Chrome (`channel:'chrome'`, no
- * bundled-browser download) so the user can watch, steer, and — in a handoff — act himself.
- * Auth is capture-once-replay: each task gets a FRESH context seeded from the persisted
- * storage state (cookies + localStorage); the state is re-captured when the task ends, so
- * a login performed during a task (handoff) is remembered for the next one. No stored
- * passwords, ever. Anti-bot walls are a clean typed failure — never an evasion arms race.
+ * M7 browser lane: Playwright on a DEDICATED PERSISTENT automation profile
+ * (~/Gumbo/browser/profile) — never the user's live Chrome (locked decision: anti-bot burns,
+ * the always-open debug port, the profile lock, his whole logged-in life as blast radius).
+ * HEADED via the installed Chrome (`channel:'chrome'`, no bundled-browser download) so
+ * the user can watch, steer, and — in a handoff — act himself.
+ *
+ * The profile PERSISTING (2026-07-20, the user's call — he wants uBlock) replaces the
+ * original capture-once-replay storage state and buys two things: logins stick the moment
+ * he performs them (Chrome owns the disk state — nothing for us to capture, nothing for a
+ * crash to lose), and extensions installed once from the Web Store ride along in every
+ * task (Playwright's default --disable-extensions is stripped for exactly that; branded
+ * Chrome no longer honors --load-extension side-loading, so Web-Store-into-profile is THE
+ * supported route). Chrome's password manager is disabled at profile creation ("no stored
+ * passwords, ever" survives the switch); the cookie store on disk is guarded like
+ * state.json was — the script-gate secret-store pattern and the Seatbelt deny both cover
+ * ~/Gumbo/browser wholesale. Anti-bot walls remain a clean typed failure — never an
+ * evasion arms race.
  *
  * Runs entirely in-daemon (no TCC), so unlike the AX lane there is no shell RPC — but the
  * act contract is the same: settle, then auto-return a before/after DIFF (verify by diff,
  * never by return code), with refs valid for exactly one snapshot generation.
  */
 export class BrowserClient {
-  private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private activePage: Page | null = null;
   private newPages: Page[] = [];
   private generation = 0;
   private refs = new Map<string, RefInfo>();
 
-  /** Launch (or reuse) the browser and open this task's fresh context. Idempotent per
-   *  task — every tool call ensures it, only the first does work. */
+  /** Launch the automation Chrome on the persistent profile. Idempotent per task — every
+   *  tool call ensures it, only the first does work. closeTask() quits Chrome, so between
+   *  tasks nothing is on screen and the profile is unlocked (the user can open it manually
+   *  to install an extension — but must close it again before the next task: Chrome's
+   *  profile singleton makes a concurrent launch fail loudly, which is correct). */
   async open(): Promise<void> {
-    if (!this.browser) {
+    if (!this.context) {
       mkdirSync(config.home.browser, { recursive: true });
+      seedProfilePrefs();
       try {
-        this.browser = await chromium.launch({ channel: 'chrome', headless: false });
+        this.context = await chromium.launchPersistentContext(profileDir(), {
+          channel: 'chrome',
+          headless: false,
+          viewport: null,
+          // Playwright disables extensions by default; the whole point of the persistent
+          // profile is that the user's uBlock (installed once, from the Web Store) rides
+          // along. No Singleton-lock auto-clearing on failure: Chrome self-heals STALE
+          // locks itself, and force-clearing a LIVE one would share the profile between
+          // two Chromes (corruption) — a loud failure is the safe outcome.
+          ignoreDefaultArgs: ['--disable-extensions'],
+        });
       } catch (err) {
-        throw new Error(`Could not launch Google Chrome for the automation profile: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+        const msg = err instanceof Error ? err.message.split('\n')[0] : String(err);
+        throw new Error(`Could not launch Google Chrome on the automation profile: ${msg} — if an automation-profile window is already open (e.g. installing an extension), close it and retry.`);
       }
       // the user quitting the automation Chrome must not wedge the lane — reset so the
-      // next task relaunches cleanly.
-      this.browser.on('disconnected', () => {
-        this.browser = null;
+      // next task relaunches cleanly ('close' fires however Chrome went away).
+      this.context.on('close', () => {
         this.context = null;
         this.activePage = null;
       });
-    }
-    if (!this.context) {
-      this.context = await this.newContextRecovering();
       this.context.on('page', (page) => {
         this.newPages.push(page); // popups/new tabs — the settle step switches + reports
       });
-      this.activePage = await this.context.newPage();
+      // A persistent context opens with Chrome's initial tab — adopt it, don't stack a second.
+      this.activePage = this.context.pages()[0] ?? (await this.context.newPage());
       this.newPages = []; // the initial page is not "new"
     }
     // Guarantee a live page even when the context survived but every tab closed (a
@@ -88,31 +120,6 @@ export class BrowserClient {
     if (!this.activePage || this.activePage.isClosed()) {
       const remaining = this.context.pages().filter((p) => !p.isClosed());
       this.activePage = remaining.length > 0 ? remaining[remaining.length - 1] : await this.context.newPage();
-    }
-  }
-
-  /** New context seeded from the persisted storage state — but a TRUNCATED state.json (a
-   *  crash mid-capture: storageState writes in place, not temp-then-rename) makes
-   *  newContext throw, which would wedge EVERY future browser task until the file is
-   *  removed by hand. Fail safe like hosts.ts does: on a seeded-launch failure, drop the
-   *  bad file and launch fresh (a lost session is re-earnable; a wedged lane is not). */
-  private async newContextRecovering(): Promise<BrowserContext> {
-    if (!existsSync(stateFile())) return this.browser!.newContext({ viewport: null });
-    try {
-      return await this.browser!.newContext({ storageState: stateFile(), viewport: null });
-    } catch (err) {
-      // Move the unusable file ASIDE rather than deleting it — corruption is the dominant
-      // cause, but a transient fault (EMFILE, disk hiccup, a momentary lock) also lands
-      // here, and a plain delete would silently discard live cookies re-earnable only by a
-      // fresh login (second-review 🟡). `.bad` preserves them for inspection/recovery; the
-      // next captureState overwrites state.json cleanly.
-      console.error('browser: stored session state was unusable, moving it aside and starting fresh:', err instanceof Error ? err.message.split('\n')[0] : err);
-      try {
-        renameSync(stateFile(), stateFile() + '.bad');
-      } catch {
-        rmSync(stateFile(), { force: true }); // rename failed (already gone / cross-device) — last resort
-      }
-      return this.browser!.newContext({ viewport: null });
     }
   }
 
@@ -398,38 +405,26 @@ export class BrowserClient {
     return this.snapshot();
   }
 
-  /** Persist the context's storage state — cookies + localStorage, no passwords. Called
-   *  at task end (and after a login handoff, Phase 3) so the NEXT run replays the session.
-   *  Written temp-then-rename so a crash mid-capture can't truncate the live file (rename
-   *  is atomic within a filesystem) — the read side (newContextRecovering) also self-heals,
-   *  but not leaving a torn file is the belt to that suspenders (review 🟡). */
-  async captureState(): Promise<void> {
-    if (!this.context) return;
-    mkdirSync(config.home.browser, { recursive: true });
-    const tmp = stateFile() + `.tmp`;
-    await this.context.storageState({ path: tmp });
-    renameSync(tmp, stateFile());
-  }
-
-  /** Task teardown: capture-then-close the context; the browser process stays warm for
-   *  the next task. Serialized with in-flight acts by Playwright itself (ops on a closed
-   *  context reject typed, which the tool layer surfaces as an aborted-style error). */
+  /** Task teardown: close the persistent context — this QUITS the automation Chrome
+   *  (Chrome flushes the profile to disk itself; a login performed mid-task is already
+   *  durable, no capture step). Serialized with in-flight acts by Playwright itself (ops
+   *  on a closed context reject typed, which the tool layer surfaces as an aborted-style
+   *  error). */
   async closeTask(): Promise<void> {
-    if (!this.context) return;
-    await this.captureState().catch((err) => console.error('browser state capture failed:', err));
-    await this.context.close().catch(() => {});
-    this.context = null;
+    const ctx = this.context;
+    if (!ctx) return;
+    this.context = null; // the 'close' listener clears these too — idempotent either way
     this.activePage = null;
     this.newPages = [];
+    await ctx.close().catch(() => {});
     this.generation += 1; // any ref the model still holds is now provably stale
     this.refs = new Map();
   }
 
-  /** Daemon shutdown: best-effort close; Playwright's exit handlers reap the child too. */
+  /** Daemon shutdown: same as task teardown — nothing outlives the persistent context
+   *  (Playwright's exit handlers reap a straggling child too). */
   async shutdown(): Promise<void> {
     await this.closeTask().catch(() => {});
-    await this.browser?.close().catch(() => {});
-    this.browser = null;
   }
 
   private mapError(err: unknown, what: string): BrowserResult {

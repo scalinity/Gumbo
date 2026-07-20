@@ -2261,3 +2261,43 @@ pass the 72.36% human baseline (Fable 5 / Mythos 5 ~85%), so Gumbo's model choic
 bottleneck — accumulation is.
 
 **NOT a build.** M9–M13 are design-only, specced-not-built, in the same status as M8. No code written.
+
+### M7 live-demo pass 2 — browser-lane demos with the user (2026-07-20)
+
+- **Confirm/kill-switch Catch-22 (live):** the host-approval confirm asks for the user's input while
+  the armed tap treats ALL his input as an abort — moving toward Approve killed the task. M6 never
+  hit this (hot-path confirms run with no task armed); M7's browser lane is the first coexistence.
+  Fix: `makeStandDown` (manager) — ONE counter-based bracket wrapping EVERY computer-task escalate
+  (host approvals, risky scripts, submit gates, handoff alike). Counter, not boolean: the SDK can
+  issue parallel tool calls, and the first confirm resolving must not re-arm under the second.
+- **Kill-switch label race (live):** the abort resolves a pending confirm as a deny, which reaches
+  the surviving model loop as a normal tool refusal — it wrote a farewell report and
+  `finishWithReport('done')` beat the rejection path. A task the user killed read as "successful".
+  Fix: `cancelComputerTasks` now `finish(id,'cancelled')`s at abort time; `finish` is idempotent
+  (first writer wins) so the runner's later settlement no-ops. Kill switch = hard stop, in the
+  store and audibly, the instant he touches the machine.
+- **Login-wall handoff refusal (live, twice):** the agent saw GitHub's signed-out page / sign-in
+  redirect and ended the task with "the user must sign in" — the system-prompt handoff rule never
+  fired (its trigger pattern-matched a *login form*, and none was on screen; then even broadened
+  prose failed). Lesson recorded: prompt rules fail at their TRIGGERS, and prose alone is too weak
+  for must-fire behaviors — moved the trigger into the tool result (`loginNudge`: goto/back/
+  switch_tab/snapshot append "call request_handoff NOW" when the LANDED url is a sign-in page;
+  segment-exact matching so `/blog/why-sso-matters` can't false-positive). Third use of the
+  next-attention-point pattern (steering, stall notes, now this).
+- **Persistent automation profile (the user's call — he wants uBlock):** running on his LIVE Chrome
+  was asked for and re-declined (anti-bot burn, permanently open debug port, profile singleton,
+  whole-logged-in-life blast radius — recorded in SPEC §M7). Instead the dedicated profile is now
+  persistent: `launchPersistentContext(~/Gumbo/browser/profile)` with `ignoreDefaultArgs:
+  ['--disable-extensions']` — verified against the INSTALLED playwright-core 1.61.1 source that
+  it passes `--disable-extensions` by default, and branded Chrome no longer honors
+  `--load-extension` side-loading, so Web-Store-install-into-profile is the only supported route.
+  state.json capture-once-replay machinery deleted (Chrome owns the disk state — a mid-handoff
+  login is durable as typed; `onHandoffDone` plumbing removed end-to-end). "No stored passwords,
+  ever" survives via a one-time Preferences seed (`credentials_enable_service:false`) written
+  only before Chrome's first run. No Singleton-lock auto-clearing: Chrome self-heals stale locks,
+  and force-clearing a live one would share the profile between two Chromes. Script-gate +
+  Seatbelt already denied `~/Gumbo/browser` wholesale — the profile inherited both, comments only.
+  Live smoke (real headed Chrome): flags stripped + right profile, prefs seed survives Chrome
+  exit, teardown-relaunch clean.
+- Still landing in the companion shell commit: kill-switch RE-ARM GRACE — run 1 died to trailing
+  mouse drift right after the user clicked Approve (a hand doesn't freeze at the click frame).

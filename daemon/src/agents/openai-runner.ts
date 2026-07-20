@@ -448,12 +448,9 @@ export async function runSubagent(opts: {
   try {
     const macToolset = isMac
       ? [
-          ...createMacTools(taskId, macBridge!, signal, confirmScript!, {
-            visionQuery,
-            requestHandoff,
-            // A login the user just performed becomes replayable browser state immediately.
-            onHandoffDone: () => browser!.captureState(),
-          }),
+          // A login the user performs during a handoff is durable the moment he types it —
+          // the persistent automation profile is Chrome's own disk state (no capture step).
+          ...createMacTools(taskId, macBridge!, signal, confirmScript!, { visionQuery, requestHandoff }),
           ...createBrowserTools(taskId, browser!, signal, confirmScript!, macBridge),
         ]
       : null;

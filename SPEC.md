@@ -522,9 +522,17 @@ Same loop, same guardrails, same audit — new LANES only; nothing here changes 
 
 - **Browser lane, in-page (the deferred Playwright/CDP channel):** a DEDICATED automation browser
   profile driven via Playwright/CDP — never the user's live profile (anti-bot systems flag CDP
-  sessions; a burned live profile is unacceptable blast radius). Auth = capture-once-replay:
-  the user logs in interactively once per site; storage state (cookies + localStorage) is persisted
-  and injected into fresh contexts — no stored passwords, ever. Tools mirror the AX contracts
+  sessions; a burned live profile is unacceptable blast radius; attaching to the live browser
+  would also require a permanently open debug port and fight Chrome's profile singleton — asked
+  and re-declined 2026-07-20). The automation profile is PERSISTENT (`launchPersistentContext`,
+  amended 2026-07-20 — the user wants uBlock): logins stick the moment he performs them (Chrome
+  owns the disk state; the original capture-once-replay storage-state machinery is retired), and
+  extensions he installs once from the Web Store ride along (Playwright's default
+  `--disable-extensions` is stripped; branded Chrome no longer honors `--load-extension`
+  side-loading, so Web-Store-into-profile is the supported route). Chrome's password manager is
+  disabled at profile creation — "no stored passwords, ever" holds; the on-disk cookie store is
+  secret-class like state.json was (script-gate pattern + Seatbelt deny cover `~/Gumbo/browser`
+  wholesale). Tools mirror the AX contracts
   exactly — `browser_snapshot` (a11y tree + one-generation refs; Playwright-MCP prior art),
   `browser_act` (settles, auto-returns post-action state, same typed `error_kind`s),
   `open_url`/`navigate` first-class — so the sub-agent learns ONE loop discipline across lanes.

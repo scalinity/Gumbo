@@ -25,9 +25,10 @@ export const home = {
   notes: join(agentHome, 'notes'), // agent-curated notes / knowledge (self-organization)
   db: join(agentHome, 'db'), // sqlite — deliberately outside the /files-served subtree
   logs: join(agentHome, 'logs'), // append-only JSONL audit trails — private, never served
-  // M7 automation-browser state: storage-state auth (session cookies!) + the remembered
-  // host allowlist. Secret-class — never /files-served, and read-denied to sandboxed
-  // Claude sessions (claude-runner readDenied) + the mac_do secret-store gate.
+  // M7 automation-browser state: the persistent Chrome profile (live session cookies on
+  // disk!) + the remembered host allowlist. Secret-class — never /files-served, and
+  // read-denied to sandboxed Claude sessions (claude-runner readDenied) + the mac_do
+  // secret-store gate.
   browser: join(agentHome, 'browser'),
   /** Subtrees exposed read-only via GET /files/<name>/… */
   served: ['tasks', 'images', 'notes'] as const,
@@ -167,12 +168,14 @@ export const config = {
     // not seconds. Deny-on-timeout stays: an unanswered handoff wraps the task up cleanly.
     handoffTimeoutMs: 300_000,
   },
-  // M7 browser lane: Playwright/CDP on a DEDICATED automation profile — never the user's live
-  // Chrome (locked decision: anti-bot flags CDP sessions; a burned live profile is
-  // unacceptable blast radius). Auth is capture-once-replay storage state (cookies +
-  // localStorage injected into a fresh context per task — no stored passwords, ever); the
-  // browser is HEADED so the user can watch and, in a handoff, act. Runs entirely in-daemon
-  // (no TCC involved), so unlike the AX lane there is no shell RPC underneath.
+  // M7 browser lane: Playwright/CDP on a DEDICATED PERSISTENT automation profile
+  // (~/Gumbo/browser/profile) — never the user's live Chrome (locked decision: anti-bot
+  // flags CDP sessions; a burned live profile is unacceptable blast radius). The profile
+  // persists across tasks (2026-07-20): logins stick as the user types them, and extensions
+  // he installs once (uBlock) ride along — Chrome's password manager is disabled at
+  // profile creation, so "no stored passwords, ever" holds. The browser is HEADED so
+  // the user can watch and, in a handoff, act. Runs entirely in-daemon (no TCC involved),
+  // so unlike the AX lane there is no shell RPC underneath.
   browser: {
     navTimeoutMs: 30_000, // page.goto budget — background lane, generous but bounded
     actTimeoutMs: 10_000, // per-element action (click/fill/…) incl. Playwright actionability wait

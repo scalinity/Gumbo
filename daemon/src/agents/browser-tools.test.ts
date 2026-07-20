@@ -200,3 +200,38 @@ test('typed failures surface the kind with a re-snapshot hint', async () => {
   assert.match(out, /Error \(stale_ref\)/);
   assert.match(out, /browser_snapshot/);
 });
+
+// ——— login-wall handoff nudge (live demo 2026-07-20: agent quit at GitHub's sign-in redirect twice) ———
+
+test('goto that LANDS on a sign-in page appends the request_handoff nudge (redirect-aware)', async () => {
+  const surface = fakeSurface({
+    navigate: async () => ({ ok: true, output: 'url: https://github.com/login\ntitle: Sign in to GitHub\n---\n(snapshot)' }),
+    currentUrl: () => 'https://github.com/login', // the LANDED url, not the requested one
+  });
+  rememberHost('github.com');
+  const out = await byName(tools(surface), 'browser_navigate').invoke({}, JSON.stringify({ action: 'goto', url: 'https://github.com/notifications', tab: null }));
+  assert.match(out, /request_handoff NOW/);
+  assert.match(out, /Do NOT end the task/);
+});
+
+test('browser_snapshot on a login-host page nudges; ordinary pages and lookalike paths do not', async () => {
+  const loginHost = fakeSurface({ currentUrl: () => 'https://accounts.google.com/v3/signin/identifier' });
+  rememberHost('accounts.google.com');
+  assert.match(await byName(tools(loginHost), 'browser_snapshot').invoke({}, '{}'), /request_handoff NOW/);
+
+  const ordinary = fakeSurface({ currentUrl: () => 'https://github.com/notifications' });
+  assert.doesNotMatch(await byName(tools(ordinary), 'browser_snapshot').invoke({}, '{}'), /request_handoff/);
+
+  // Segment must BE a keyword, not contain one — a blog post about SSO is not a login wall.
+  const lookalike = fakeSurface({ currentUrl: () => 'https://ok.test/blog/why-sso-matters' });
+  assert.doesNotMatch(await byName(tools(lookalike), 'browser_snapshot').invoke({}, '{}'), /request_handoff/);
+});
+
+test('a failed navigation never nudges (the error stands alone)', async () => {
+  const surface = fakeSurface({
+    navigate: async () => ({ ok: false, error_kind: 'timeout' as const, output: 'goto timed out' }),
+    currentUrl: () => 'https://github.com/login',
+  });
+  const out = await byName(tools(surface), 'browser_navigate').invoke({}, JSON.stringify({ action: 'goto', url: 'https://github.com/x', tab: null }));
+  assert.doesNotMatch(out, /request_handoff/);
+});

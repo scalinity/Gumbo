@@ -36,13 +36,12 @@ function present(result: MacActionResult): string {
  * before it burns the step budget looping.
  */
 /** Optional M7 wiring: requestHandoff pauses the task for the user's own step (manager owns
- *  the lifecycle — status flip, kill-switch stand-down, notch Done); onHandoffDone runs
- *  after an approved handoff (the runner captures browser storage state so a login he
- *  just performed is remembered). Both absent in tests that don't exercise them. */
+ *  the lifecycle — status flip, kill-switch stand-down, notch Done). A login he performs
+ *  during the handoff needs no capture step — the persistent automation profile is
+ *  Chrome's own disk state. Absent in tests that don't exercise it. */
 export interface MacToolDeps {
   visionQuery: VisionQuery;
   requestHandoff?: (reason: string) => Promise<boolean>;
-  onHandoffDone?: () => Promise<void>;
 }
 
 export function createMacTools(
@@ -304,9 +303,6 @@ export function createMacTools(
       if (!done) {
         return "the user declined (or didn't respond in time) — wrap up: report what you completed and what remains, and end the task.";
       }
-      // A login he just performed becomes replayable state (browser lane) — capture now,
-      // not at task end, so a later crash can't lose it.
-      await deps.onHandoffDone?.().catch(() => {});
       return 'the user says the step is done. VERIFY it before continuing: take a fresh snapshot (browser_snapshot / ax_snapshot / screen_ocr) and confirm the state advanced — e.g. the login form is gone.';
     },
   });

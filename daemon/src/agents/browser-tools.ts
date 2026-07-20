@@ -31,6 +31,34 @@ function present(result: BrowserResult): string {
   return `Error (${result.error_kind ?? 'unknown'})${hint}: ${result.output}`;
 }
 
+// Sign-in-page detection for the handoff nudge: a path segment that IS a login keyword
+// (never a substring — /blog/why-sso-matters must not match), or a hostname whose first
+// label is one (accounts.google.com, login.microsoftonline.com).
+const LOGIN_SEGMENT = /^\/(?:[^/]+\/)*(?:log[-_]?in|sign[-_]?in|sessions?|auth|authorize|oauth2?|sso|2fa|mfa|challenge)(?:\/|$)/i;
+const LOGIN_HOST = /^(?:login|log-in|signin|sign-in|auth|sso|accounts?|id|identity)\./i;
+
+/** Live failure 2026-07-20 (twice): the agent landed on GitHub's sign-in redirect and
+ *  ENDED the task with "the user must sign in" — the system-prompt handoff rule alone did
+ *  not fire. So the trigger rides the tool result itself, the same next-attention-point
+ *  trick as steering and the stall notes: every result that carries a fresh full snapshot
+ *  (goto / back / switch_tab / browser_snapshot) names the next move when the landed page
+ *  is a sign-in page. Acts return diffs, not snapshots — the model re-snapshots and the
+ *  nudge fires then. */
+function loginNudge(url: string | null): string {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    if (!LOGIN_SEGMENT.test(u.pathname) && !LOGIN_HOST.test(u.hostname)) return '';
+  } catch {
+    return '';
+  }
+  return (
+    "\n\nNOTE: this is a SIGN-IN page. Needing the user's identity is a handoff, not a dead end — " +
+    'call request_handoff NOW (tell him exactly what to log into) and continue after he finishes. ' +
+    'Do NOT end the task over a login.'
+  );
+}
+
 /**
  * M7 browser-lane toolset for the computer-use sub-agent. Mirrors the AX contracts —
  * snapshot→act→verify-by-diff, one-generation refs, typed errors, the same repetition +
@@ -77,7 +105,8 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
     parameters: z.object({}),
     async execute() {
       if (signal.aborted) return 'Task was cancelled.';
-      return present(await surface.snapshot());
+      const result = await surface.snapshot();
+      return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);
     },
   });
 
@@ -184,12 +213,14 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
           if (refusal) return refusal;
           const result = await surface.navigate(url);
           auditMacAction({ tier: 'subagent', kind: 'browser', action: `goto ${url}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url });
-          return present(result);
+          // Nudge on the LANDED url (currentUrl), not the requested one — the login case
+          // is usually a redirect away from what the model asked for.
+          return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);
         }
         case 'back': {
           const result = await surface.back();
           auditMacAction({ tier: 'subagent', kind: 'browser', action: 'back', gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url: surface.currentUrl() ?? undefined });
-          return present(result);
+          return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);
         }
         case 'list_tabs':
           return present(await surface.listTabs());
@@ -198,7 +229,7 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
           // like goto/back (review 🔵: switch_tab was the one navigation that was silent).
           const result = await surface.switchTab(tab ?? 1);
           auditMacAction({ tier: 'subagent', kind: 'browser', action: `switch_tab ${tab ?? 1}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url: surface.currentUrl() ?? undefined });
-          return present(result);
+          return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);
         }
       }
     },
