@@ -727,23 +727,38 @@ agent actually gets, and Gumbo can answer none today. The access recipes are ful
 shell-owns-TCC architecture is already the correct shape (independently validated by iMCP, which uses
 the exact GUI-owns-grants + bridge split).
 
-- **Read tools via the shell's TCC + node:sqlite — native, not third-party MCP servers.** Extend the
-  M6 MacBridge with read actions: EventKit calendar read + Contacts-framework search (shell-side, it
-  already owns Automation TCC); daemon-side read-only node:sqlite over Messages' `chat.db` and Mail's
-  Envelope Index (the documented recipe — JXA message/mail reading is broken/too-slow on recent macOS,
-  so direct SQLite reads are the field standard). Native tools keep the keys/TCC posture; third-party
-  MCP servers would not.
-- **Four realtime tools, read-only auto-allow.** `calendar_lookup`, `messages_lookup`, `mail_lookup`,
-  `contacts_lookup` — query live, persist nothing new, auto-run (reads are reversible). **Every send
-  stays behind the existing notch gates** (the M6 mail-send gate already exists). A contacts-enrichment
-  cache resolves numbers/emails to names so "who texted me" reads like a person would say it.
-- **The TCC + privacy trade-off, surfaced to the user up front.** Reading `chat.db` and the Mail index
-  needs **Full Disk Access** — a new, powerful grant and the biggest privacy-footprint increase in
-  Gumbo's arc. Minimal-first: one connector at a time, read-only, and FDA is presented as a deliberate
-  decision, not slipped in.
+- **Mail = Gmail via MCP (the user uses Gmail, not Apple Mail).** The `mail_lookup` connector is a Gmail
+  MCP server (e.g. the Google Workspace MCP), OAuth with **read-only Gmail scopes**, the token stored
+  in the daemon's secret store like every other provider key. **New seam:** this is the first MCP the
+  *voice/sub-agent* side consumes — today only the sandboxed Claude sessions speak MCP (via
+  `config.claude.mcpServers`), so the daemon gains a small MCP-client path for the realtime/sub-agent
+  tools (the alternative — a native Gmail API client under the provider conventions — is also viable
+  and keeps zero MCP on the voice side; MCP is the user's stated preference). **Upside:** because Gmail is
+  OAuth/API, mail needs **no Full Disk Access** — the FDA trade-off below shrinks to Messages only.
+  Sends stay behind the notch gate (read-only scopes make a send impossible without a scope escalation
+  the user explicitly approves). *Open build-time question:* if the user is Google-ecosystem for calendar
+  too, `calendar_lookup` can ride the same Google MCP/OAuth instead of EventKit — decide at build.
+- **The other connectors stay native, via the shell's TCC + node:sqlite.** Extend the M6 MacBridge with
+  read actions: EventKit calendar read + Contacts-framework search (shell-side — it already owns
+  Automation TCC); daemon-side read-only node:sqlite over Messages' `chat.db` (the documented recipe —
+  JXA message reading is broken/too-slow on recent macOS, so a direct SQLite read is the field
+  standard). Native tools keep the keys/TCC posture; only mail deliberately goes MCP because Gmail is
+  not a local store.
+- **Four realtime tools, read-only auto-allow.** `mail_lookup` (Gmail), `calendar_lookup`,
+  `messages_lookup`, `contacts_lookup` — query live, persist nothing new, auto-run (reads are
+  reversible). **Every send stays behind the existing notch gates** (the M6 mail-send gate already
+  exists; Gmail send, if ever added, is a gated write on an explicitly broadened scope). A
+  contacts-enrichment cache resolves numbers/emails to names so "who texted me" reads like a person
+  would say it.
+- **The TCC + privacy trade-off, surfaced to the user up front.** With mail on Gmail/OAuth, the only
+  connector needing **Full Disk Access** is Messages (`chat.db`) — still a powerful grant and the
+  biggest local-privacy step in Gumbo's arc, but now scoped to one connector, and Gmail adds an OAuth
+  token (a revocable, read-only-scoped credential) rather than whole-disk read. Minimal-first: one
+  connector at a time, read-only, each new grant a deliberate decision — not slipped in.
 
-**Demo:** "what did Mara text me yesterday, and am I free for lunch Thursday?" — answered from Messages
-+ Calendar in one turn, names resolved, nothing sent, nothing stored.
+**Demo:** "what did Mara text me yesterday, did my landlord email about the lease, and am I free for
+lunch Thursday?" — answered from Messages (native) + Gmail (MCP) + Calendar in one turn, names
+resolved, nothing sent, nothing stored.
 
 **Considered and rejected:** a multi-channel chat gateway / device-node pairing / skills marketplace
 (OpenClaw's growth surface) — every channel is an outward auth+exfil surface and multi-device pairing
