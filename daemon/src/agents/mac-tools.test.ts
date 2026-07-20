@@ -103,9 +103,9 @@ test('the stall detector fires on 3 consecutive no-change acts even when the act
   const r1 = await act.invoke({}, argsFor('g1e1'));
   const r2 = await act.invoke({}, argsFor('g1e2'));
   const r3 = await act.invoke({}, argsFor('g1e3'));
-  assert.doesNotMatch(r1, /not making progress/i);
-  assert.doesNotMatch(r2, /not making progress/i);
-  assert.match(r3, /not making progress/i, 'third consecutive empty diff must warn');
+  assert.doesNotMatch(r1, /switch to the vision lane/i);
+  assert.doesNotMatch(r2, /switch to the vision lane/i);
+  assert.match(r3, /switch to the vision lane/i, 'third consecutive empty diff must warn');
   assert.equal(bridge.calls.length, 3, 'the warning rides the result — no act is blocked');
 });
 
@@ -120,7 +120,7 @@ test('a real diff resets the stall streak', async () => {
   await act.invoke({}, argsFor('g1e3')); // real diff — resets
   empty = true;
   const r4 = await act.invoke({}, argsFor('g1e4'));
-  assert.doesNotMatch(r4, /not making progress/i, 'streak restarted after the real diff');
+  assert.doesNotMatch(r4, /switch to the vision lane/i, 'streak restarted after the real diff');
 });
 
 test('run_script unwraps a double-wrapped `osascript -e` body (demo fix)', async () => {
@@ -141,7 +141,7 @@ test('output TEXT saying "no observable change" cannot spoof the stall detector 
   const act = byName(tools(bridge), 'ax_act');
   const argsFor = (ref: string) => JSON.stringify({ verb: 'press', ref, value: null, role: null, name: null, timeout_ms: 5000 });
   const r3 = [await act.invoke({}, argsFor('a')), await act.invoke({}, argsFor('b')), await act.invoke({}, argsFor('c'))].at(-1)!;
-  assert.doesNotMatch(r3, /not making progress/i, 'text alone must never trip the detector');
+  assert.doesNotMatch(r3, /switch to the vision lane/i, 'text alone must never trip the detector');
 });
 
 test('run_script APPROVED path executes and audits gate=confirmed; declined audits gate=declined', async () => {

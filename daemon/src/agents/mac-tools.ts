@@ -135,9 +135,10 @@ export function createMacTools(
         noChangeStreak = 0;
         return (
           present(result) +
-          '\n\nNOTE: your last 3 actions all produced no observable change — you are not making progress. ' +
-          'Take a fresh ax_snapshot and switch strategy (a different element, a keyboard path, or run_script); ' +
-          "if this app can't be driven this way, stop and report that instead of continuing to try."
+          '\n\nNOTE: your last 3 actions all produced no observable change — this surface is very likely ' +
+          'AX-HOSTILE (elements present but unresponsive, e.g. a System Settings / Catalyst pane). SWITCH ' +
+          'TO THE VISION LANE NOW: call screen_ocr to read the pane, then click_point on the coordinates ' +
+          'it returns. Do not keep retrying ax_act or osascript one-liners on this surface.'
         );
       }
       return present(result);
