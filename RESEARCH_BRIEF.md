@@ -10,10 +10,23 @@ each re-run, reconcile the three lists against [`SPEC.md`](./SPEC.md):
 - Anything newly **specced** (new milestone) → add to "Planned."
 - Anything you evaluate and decline → add to "Rejected" with the reason.
 Stale lists make the researcher re-suggest things you've shipped — the whole value is fencing off
-covered ground so it spends effort on the frontier. Milestone source of truth: SPEC.md §M1–M13 +
-the "Deferred / out of scope" and IMPLEMENTATION_NOTES §"M9–M13 gap analysis" anti-recommendations.
+covered ground so it spends effort on the frontier. Milestone source of truth: SPEC.md §M1–M17 +
+the "Deferred / out of scope" and IMPLEMENTATION_NOTES §"M9–M13 gap analysis" + §"M9–M17
+external-research fold" anti-recommendations.
 
-**Last synced:** 2026-07-19 (against SPEC.md through M13 + the Gmail-MCP M11 amendment).
+**Last synced:** 2026-07-20 (against SPEC.md through M17). Since the 07-19 version: computer-use v2
+(M7: browser lane on a persistent automation profile, vision lane, cooperative handoff, voice
+steering) moved Planned → BUILT; the first external run of this brief (Claude Research + ChatGPT)
+was folded into SPEC, adding to PLANNED: M14 transactional effects + universal undo (effect
+classes/journal/receipts/permits + APFS-snapshot restore), M15 local-model tier + inference fabric
+(Apple FM/MLX, eligibility-first routing, prompt-cache discipline), M16 App Intents/Shortcuts
+action lane (+ OS-local inbound intents), M17 explicit ephemeral physical perception — and
+amending: M9 (claim ledger: source attribution, bitemporal validity, principled forgetting), M10
+(two-axis FIDES-style labels + the user's constitution DSL), M12 (intentions ledger with outcome
+closure), M13 (calibrated act/inspect/ask/abstain + offline injection suite). REJECTED grew:
+agentic-payment rails, A2A/remote delegation, remote thin-client approvals, per-user fine-tuning,
+learned gates/routers as primary boundaries, auto-activated model-drafted rules, speculative
+mutating execution, continuous red-teaming. A future research run must not re-propose any of this.
 
 ---
 
