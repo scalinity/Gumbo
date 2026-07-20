@@ -2410,3 +2410,80 @@ The de-generalization table (what the internet shape assumes vs what Gumbo actua
 
 Committed as the same-day companion to the research fold; the fold's own entry above stands
 unchanged.
+
+## M8 BUILT — computer use v3: teaching, procedure memory, scheduled routines (2026-07-20)
+
+Built to the locked SPEC §M8 under the five friction-economy laws, on worktree-m8-computer-use
+(daemon 421/1-skip; shell builds clean; live demos pending the user). An adversarial design-review
+pass ran BEFORE building and its corrections are load-bearing — recorded inline below. What is
+non-obvious and worth keeping:
+
+- **Teaching is a real `kind:'computer'` task row with no runner.** One choice bought three
+  behaviors: the one-task rule covers task↔teaching mutual exclusion in the existing scan, the
+  boot reaper closes a recording that died with the daemon, and stop rides finishWithReport →
+  the normal announce. Resist inventing a parallel "session" concept next time.
+- **The tap callback must stay thin (recorder).** AX calls block up to the 2 s messaging
+  timeout; a lagging tap callback triggers `tapDisabledByTimeout` and events in the disabled
+  window are SILENTLY lost. So `RecordedHID` extracts scalar CGEvent fields in the callback and
+  all hit-testing runs on the recorder's serial queue. A vanished element degrades to a
+  low-fidelity step, never an error.
+- **`flagsChanged` stays exempt in record mode too**: keyDown events carry chord flags (⌘S is
+  recoverable without tapping modifiers), and the exemption is what lets the user hold ⌃⌥ to say
+  "done" mid-demo without polluting the recording.
+- **Flush-before-ack ordering is load-bearing:** the shell flushes its pending typing burst
+  synchronously BEFORE answering `record_stop`, both ride one socket (FIFO), so
+  `manager.stopTeaching` awaits the ack and only THEN closes the session. The `stopping` guard
+  must not drop steps arriving in that window — that window is the whole point (a test pins it).
+- **Secrets never leave the shell.** Sensitivity is decided at burst START (focused element's
+  AXSecureTextField subrole OR the credential-label lexicon) before any content exists to
+  mishandle; secure bursts emit a content-free `secure_input`. The daemon re-applies the same
+  rule at sanitize (belt) and the compiler's deterministic post-pass maps it to a `handoff`
+  step — three layers, the shell one is the real boundary.
+- **Memory-table rebuild order (migration):** external-content FTS5 means the trigger drops
+  FIRST (`ALTER TABLE … RENAME` re-parses trigger bodies against the already-dropped FTS
+  table), copy with an explicit column list, `INSERT INTO memory_fts(memory_fts)
+  VALUES('rebuild')` at the end; explicit-id copy re-seeds AUTOINCREMENT. The `version` column
+  was added IN the same rebuild (free) — procedures version insert-only (update = version+1)
+  because the FTS sync trigger is AFTER INSERT only.
+- **Replay resolves through STRUCTURED seams, never snapshot text.** `AXNode.line()` doesn't
+  escape quotes and clips at 80 chars — a parser breaks on real labels, and screen-text values
+  choosing the acted-on element is an injection surface. Hence the `{kind:'resolve'}` wire
+  action (shell greps lastNodes, returns ONLY a ref; AMBIGUITY IS NOT-FOUND — never guess
+  between matches) and `BrowserClient.findRef` over the same refs map the submit gate reads.
+- **The engine never parses tool-result strings either**: mac/browser tools emit a structured
+  `ToolObservation` (ok/errorKind/noChange/declined) side-channel — the wire-flag `no_change`
+  lesson applied to the replay engine's decisions. Declined-gate ≠ drift: it ends the replay
+  cleanly ('stopped'); the fallback loop would hit the same denial.
+- **`wrapSteering` MUTATES invoke** — the replay engine must run on the unwrapped toolset
+  (wrap after), and queued steering itself triggers fallback so only the loop's wrapped tools
+  ever consume it (steering must never drain into a result nobody reads).
+- **The park bracket is the adversarial review's best catch:** an hour-long stand-down
+  (`setHandoff(true)` for the pause window) would suppress the kill switch while the user uses
+  his Mac normally, then the timeout-deny resumes driving under his hands. A parked routine
+  drops the mac_task refcount instead (tap disarmed — the task isn't driving), re-arms on
+  answer, and `KillSwitch.arm()` now starts the 1.5 s grace (a fresh arm is always adjacent to
+  some interaction of the user's — sharpest case: re-arm the instant he clicks Approve).
+- **ConfirmBridge.resync + waitForShell:** panel state dies with the shell; at 30 s windows a
+  relaunch was a non-event, at pause scale a routine would park invisibly until auto-deny. The
+  pending map now keeps the wire frame + deadline, re-presents with the REMAINING window on
+  hello, and `waitForShell` registers-without-broadcasting when no shell is connected (the
+  park), while deny-on-timeout stands untouched.
+- **EventKit exclusion for routines (review catch):** every re-armed occurrence is a fresh
+  pending row with a null twin id — `resyncEventKit` would mint one Reminders.app entry per
+  occurrence on every hello, forever. Routines are daemon-only firing by design (late on wake,
+  the honest M5 stance, stated in the tool description).
+- **Chain-of-rows recurrence, not in-place fire_at:** mutating in place leaves the row pending
+  across delivery (breaks mark-fired-before-deliver at-most-once — crash mid-delivery would
+  re-fire). Next-occurrence INSERT rides the same transaction; next fire computes from NOW (no
+  catch-up storms); cancelling the pending occurrence ends the series because chains only
+  advance at fire time.
+- **Away-items watermark reads the marker's PAYLOAD (`upTo`), not its seq** — events landing
+  between instruction-build and session-connect would otherwise vanish; consumption is written
+  only once the session actually OPENS (a failed connect leaves items for the next attempt).
+- **Registry cost:** M8 added THREE realtime tools (teach_procedure with start/stop/cancel/
+  save_last_run as actions, run_procedure, schedule_routine) — registry now 23 against SPEC
+  §10's standing ≤~10 risk. Routing held in unit tests; watch it in the live demos.
+- **Suite/idioms:** the unattended end-to-end test runs the WHOLE pipeline through the real
+  tool invokes (fire → queue → replay → gated run_script → parked escalate → done) — the M6
+  "test through the tool" lesson at pipeline scale. `config.teach`/`config.routines` values are
+  mutated+restored in tests (no injectable-config idiom exists; keep the restore in finally).
