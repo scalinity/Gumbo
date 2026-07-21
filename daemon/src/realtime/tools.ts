@@ -639,8 +639,14 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
           return `Recording — watching the user demonstrate "${trimmed}". Tell him to go ahead and to say "done" when he's finished.`;
         }
         if (action === 'stop') {
-          const done = await manager.stopTeaching();
-          return `Recording stopped (${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}"). Do NOT speak yet and do NOT pre-narrate ("distilling…", "I'll let you know when it's done") — the one-line "Learned …" summary will arrive on its own in a moment; deliver ONLY that, briefly, and nothing before it.`;
+          try {
+            const done = await manager.stopTeaching();
+            return `Recording stopped (${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}"). Do NOT speak yet and do NOT pre-narrate ("distilling…", "I'll let you know when it's done") — the one-line "Learned …" summary will arrive on its own in a moment; deliver ONLY that, briefly, and nothing before it.`;
+          } catch {
+            // Already stopped — the user likely finished by clicking the teaching orb and THEN also
+            // said "done". The procedure was already captured; never tell him nothing was stored.
+            return `Nothing is recording right now. If you JUST finished a demonstration (e.g. by clicking its orb), it's ALREADY SAVED — reassure the user it's captured and ready to run. Do NOT claim it wasn't saved.`;
+          }
         }
         if (action === 'save_last_run') {
           if (!deps.procedures) return 'Procedure saving is not wired up right now.';

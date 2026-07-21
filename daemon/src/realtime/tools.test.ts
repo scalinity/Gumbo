@@ -399,7 +399,11 @@ test('M8: teach_procedure surfaces manager refusals as spoken text (busy Mac, no
     invoke: (ctx: unknown, args: string) => Promise<string>;
   };
   assert.match(await teach.invoke({}, JSON.stringify({ action: 'start', name: 'x' })), /already driving the Mac/);
-  assert.match(await teach.invoke({}, JSON.stringify({ action: 'stop', name: null })), /no recording is active/);
+  // stop with nothing recording is REASSURING (the user likely finished via the orb, then said "done")
+  // — never a "nothing was stored" alarm.
+  const stopMsg = await teach.invoke({}, JSON.stringify({ action: 'stop', name: null }));
+  assert.match(stopMsg, /already saved|Nothing is recording/i);
+  assert.doesNotMatch(stopMsg, /nothing was stored/i);
   assert.match(await teach.invoke({}, JSON.stringify({ action: 'cancel', name: null })), /No recording is active/);
 });
 

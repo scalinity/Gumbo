@@ -193,9 +193,15 @@ final class BubbleController {
                 onToggle: { [weak self] in
                     guard let self else { return }
                     // The teaching orb's click ENDS teaching (it can't be usefully opened); every
-                    // other orb toggles its observability panel.
-                    if taskId == self.teachingTaskId { self.onFinishTeaching?(taskId) }
-                    else { self.toggle(taskId) }
+                    // other orb toggles its observability panel. Flip the orb to warm gold NOW so
+                    // the click has immediate feedback while the daemon distills the demonstration.
+                    if taskId == self.teachingTaskId {
+                        self.bubbles[taskId]?.model.finishing = true
+                        self.teachingTaskId = nil // a second click just toggles the panel, never re-fires
+                        self.onFinishTeaching?(taskId)
+                    } else {
+                        self.toggle(taskId)
+                    }
                 },
                 onDashboard: { [weak self] in self?.onOpenDashboard?(taskId) }))
         return panel
@@ -265,6 +271,11 @@ final class BubbleModel: ObservableObject {
     @Published var status: String
 
     var state: OrbState { OrbState(wire: status) }
+    /// M8: set the instant the user clicks the teaching orb to finish — renders the orb warm gold
+    /// ("registered, processing") until the task settles, so the click has immediate feedback and
+    /// he doesn't click again. Only overrides while still alive; a settled orb shows its real color.
+    @Published var finishing = false
+    var displayState: OrbState { finishing && state.isAlive ? .needsInput : state }
     @Published var expanded = false
     @Published var events: [BubbleEvent] = []
     @Published var settledAt: Date? // when the task left 'running' — drives the cooling ripple
@@ -461,7 +472,7 @@ struct OrbView: View {
     @ObservedObject var model: BubbleModel
     var diameter: CGFloat
 
-    private var palette: OrbPalette { OrbPalette.palette(for: model.state) }
+    private var palette: OrbPalette { OrbPalette.palette(for: model.displayState) }
 
     /// Flow speed + luminosity: running burns, done drifts calmly (never frozen —
     /// frozen reads as dead), failed smolders, cancelled is nearly out.
