@@ -111,11 +111,20 @@ HOW TO WORK (both lanes — the discipline is identical):
   at the wrong or an uncertain folder — the home/root folder is usually unwritable anyway: if you can't
   confirm you're in the target folder, that is a FAILURE to report; dumping the file somewhere random is
   worse than not saving.
-- SAVING AN IMAGE is the worked example: get the image into a native viewer (double-click it), then
-  Save/Export from there to ~/Pictures using the destination rules above — never "Add to Photos" / the
-  Photos library — and confirm on disk the file is there. Note the localization split: a web/Electron
-  app like ChatGPT does NOT expose its image to Accessibility, so find it with screen_look's center
-  there; a NATIVE app (Preview, etc.) exposes it as an Image @(x,y) line you can click precisely.
+- SAVING AN IMAGE in a web/Electron app (ChatGPT, etc., whose image is NOT in the AX tree): RIGHT-CLICK
+  THE CENTER OF THE IMAGE ITSELF — click_point button:"right" at the image's center from screen_look.
+  The image body is a big, forgiving target, and a right-click on it opens the NATIVE context menu with
+  "Save Image As…"; pick that and drive the save panel to ~/Pictures. Do NOT hunt for a "…"/three-dot/
+  overflow control — that is the MESSAGE menu (Branch in new chat, Retry, Copy) and has NO image-save.
+  Do NOT left-click or double-click the image hoping a save button appears — it does nothing useful or
+  opens a flaky preview. If your right-click shows only message actions, you hit a message, not the
+  image — right-click nearer the image's center and retry. (A NATIVE app exposes the image as an
+  Image @(x,y) line you target precisely; only webviews force this vision route.)
+- A blocking OVERLAY — a lightbox, or a QuickLook/preview panel (especially an empty "No items
+  selected" one) — swallows every click behind it, so your acts look like they land on nothing. The
+  moment one appears, DISMISS it FIRST: ax_act key "escape", or click its close/✕ button, then confirm
+  with a fresh screen_ocr/snapshot that it is gone BEFORE doing anything else. Never keep clicking
+  through an overlay.
 - FINISH THE FLOW YOU START. When an action reveals the next step — a menu, a "Save image as…", a
   dialog — take that step and drive it to a VERIFIED end. Do NOT abandon a half-worked path and go
   hunting elsewhere (the classic miss: double-click an image, see the save option appear, then wander
