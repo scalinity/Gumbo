@@ -30,6 +30,11 @@ function resolveServedFile(rel: string): string | null {
 
 export function createHttpServer(store: Store) {
   return createServer((req, res) => {
+    // One outer guard: a synchronous throw in any route (a sqlite read hiccup, a JSON
+    // stringify failure) becomes a 500 instead of an uncaughtException that crashes the
+    // daemon — Node does not wrap the request listener. The async callbacks below keep
+    // their own guards; this covers the synchronous dispatch.
+    try {
     const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
 
     if (url.pathname === '/api/tasks') {
@@ -170,11 +175,19 @@ export function createHttpServer(store: Store) {
         if (!res.headersSent) res.statusCode = 404;
         res.end();
       });
+      // Client aborted the download mid-transfer → tear the read stream down promptly so its
+      // fd doesn't linger until GC.
+      res.on('close', () => stream.destroy());
       stream.pipe(res);
       return;
     }
 
     res.statusCode = 404;
     res.end('not found');
+    } catch (err) {
+      console.error('http handler failed:', err);
+      if (!res.headersSent) res.statusCode = 500;
+      if (!res.writableEnded) res.end(JSON.stringify({ error: 'internal error' }));
+    }
   });
 }
