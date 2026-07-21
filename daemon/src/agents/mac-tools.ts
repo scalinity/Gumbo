@@ -267,8 +267,21 @@ export function createMacTools(
       }
       // The audit line records that pixels LEFT THE MACHINE (one vision-model query).
       auditMacAction({ tier: 'subagent', kind: 'capture', action: `screen_look ${target}: ${question.slice(0, 120)}`, gate: 'auto', ok: true, taskId });
+      // The screenshot is written at POINT resolution, so the model's pixel coordinates are
+      // already point units. Tell it the window's GLOBAL top-left so any coordinate it returns
+      // is a global point click_point can use directly (not a window-local one) — without this,
+      // a window offset from the screen origin makes every reported click miss by that offset.
+      const rectMatch = /\((-?\d+),(-?\d+)\s+(\d+)x(\d+)\)/.exec(shot.output ?? '');
+      let coordNote = '';
+      if (rectMatch) {
+        const [, x, y, w, h] = rectMatch.map(Number);
+        coordNote =
+          `\n\n(Coordinate frame: this image is a window whose top-left is GLOBAL point (${x},${y}), ` +
+          `size ${w}x${h}, rendered one pixel per point. Report EVERY click coordinate as a GLOBAL ` +
+          `point — add the (${x},${y}) offset to the in-image position — within x∈[${x}..${x + w}], y∈[${y}..${y + h}].)`;
+      }
       try {
-        return await deps.visionQuery(file, question, signal);
+        return await deps.visionQuery(file, question + coordNote, signal);
       } catch (err) {
         return `screen_look failed (${err instanceof Error ? err.message : String(err)}) — fall back to screen_ocr or report what you could not see.`;
       }
