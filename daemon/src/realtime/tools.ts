@@ -630,7 +630,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
           }
           const removed = store.deleteProcedure(row.name);
           store.addEvent(null, 'procedure.deleted', { name: row.name, versions: removed });
-          return `Deleted "${row.name}"${removed > 1 ? ` (all ${removed} versions)` : ''}. Confirm to the user.`;
+          return `Deleted "${row.name}"${removed > 1 ? ` (all ${removed} versions)` : ''}. Tell the user BY NAME what you removed — when he says "delete them all", name each one as it goes, so he knows exactly what's gone.`;
         }
         if (action === 'start') {
           const trimmed = name?.trim();
@@ -720,7 +720,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
             templateBrief(procedure, adaptText.slice(0, 500), notes?.trim() || null),
             'mac',
           );
-          return `Adapting "${row.name}" to that (internal task_id ${task.id} — never say it aloud): running it the intelligent way, guided by how you did it before. You'll be told when it finishes.`;
+          return `Adapting "${row.name}" to that (internal task_id ${task.id} — never say it aloud), running it the intelligent way. Give the user ONE short "on it" line — no elaborate promise about what you'll report; the result is delivered on its own the moment it finishes.`;
         }
         // FAITHFUL run: fast deterministic replay + parameter-fill, drift → intelligent
         // fallback, success-after-drift → self-heal.
@@ -728,7 +728,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
           `Replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${procedure.goal}.` +
           (notes?.trim() ? ` Run-specific notes from the user: ${notes.trim()}` : '');
         const task = manager.spawnSubagent(row.name, brief, 'mac', { procedure, notes: notes?.trim() || null });
-        return `Running the saved procedure "${row.name}" (internal task_id ${task.id} — never say it aloud). You will be told when it finishes.`;
+        return `Running "${row.name}" now (internal task_id ${task.id} — never say it aloud). Give the user ONE short line that you're on it (e.g. "Running your packing list") — do NOT promise a detailed report or describe what you'll check afterward; the result arrives on its own the moment it finishes.`;
       } catch (err) {
         return `Could not start that: ${err instanceof Error ? err.message : String(err)}`;
       }

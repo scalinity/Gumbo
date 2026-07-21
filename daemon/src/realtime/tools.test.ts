@@ -473,7 +473,7 @@ test('M8: run_procedure is registered and routes matches/misses correctly', asyn
     invoke: (ctx: unknown, args: string) => Promise<string>;
   };
   const hit = await runProc.invoke({}, JSON.stringify({ procedure: 'file expenses', notes: 'July', adapt: null }));
-  assert.match(hit, /Running the saved procedure "file expenses"/);
+  assert.match(hit, /Running "file expenses" now/);
   assert.equal(spawned.length, 1);
   assert.equal((spawned[0].replay as { notes: string }).notes, 'July');
 
@@ -529,7 +529,7 @@ test('M8: run_procedure `adapt` routes a VARIATION to template-mode, keeps faith
 
   // (2) adapt whitespace-only → treated as a FAITHFUL run (deterministic replay opt present).
   const faithful = await runProc.invoke({}, JSON.stringify({ procedure: 'packing list', notes: null, adapt: '   ' }));
-  assert.match(faithful, /Running the saved procedure "packing list"/);
+  assert.match(faithful, /Running "packing list" now/);
   assert.equal(spawned.length, 2);
   assert.ok((spawned[1].replay as { procedure?: unknown })?.procedure, 'a faithful run carries the replay opt');
 

@@ -182,6 +182,11 @@ export class Orchestrator {
   private localHadSpeech = false; // this armed window carried real speech (commit gate)
   private bargedIn = false; // one local barge-in per armed window
   private responding = false; // a response is in flight (thinking or speaking)
+  // A completion/proactive announce that arrives WHILE a response is in flight is held here and
+  // delivered on turn_done — firing it mid-turn collides with the one-active-response limit and
+  // the SDK's deferral drops the instructions, so the task "goes dark" (the model emits filler
+  // like "one moment" instead of the outcome). Latest wins if two stack up.
+  private pendingAnnounce: string | null = null;
   // The shell's speaker-queue state. Generation ends long before audible playback (a
   // multi-minute report read finishes generating in seconds), so 'speaking' and the
   // session's lifetime must track the shell's drain, not the model's turn.
@@ -451,6 +456,13 @@ export class Orchestrator {
           // hold 'speaking' until it reports its queue drained (playback_state).
           this.setState(this.armed ? 'listening' : this.shellDraining ? 'speaking' : 'idle');
           this.resetIdleTimer();
+          // Deliver an announce that arrived mid-turn now that the response slot is free —
+          // otherwise it was swallowed and the task went dark after "I'll let you know".
+          const pending = this.pendingAnnounce;
+          if (pending && this.session) {
+            this.pendingAnnounce = null;
+            this.injectLive(this.session, pending);
+          }
         });
         session.transport.on('connection_change', (status) => {
           if (status === 'disconnected' && this.session === session) {
@@ -459,6 +471,7 @@ export class Orchestrator {
             this.session = null;
             this.resetPtt();
             this.responding = false;
+            this.pendingAnnounce = null;
             this.persisted.clear();
             if (this.idleTimer) clearTimeout(this.idleTimer);
             this.store.addEvent(null, 'session.closed', { reason: 'transport_disconnected' });
@@ -691,8 +704,14 @@ export class Orchestrator {
     }
   }
 
-  /** Inject an out-of-band spoken response into the live session. */
+  /** Inject an out-of-band spoken response into the live session. If the model is mid-turn,
+   *  HOLD it until turn_done — delivering it now would collide with the active response and the
+   *  SDK's deferral drops these instructions, so the announce would be lost (task "goes dark"). */
   private injectLive(session: RealtimeSession, instructions: string) {
+    if (this.responding) {
+      this.pendingAnnounce = instructions;
+      return;
+    }
     const transport = session.transport as TransportLike;
     if (typeof transport.requestResponse === 'function') {
       transport.requestResponse({ instructions });
