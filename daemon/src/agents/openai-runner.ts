@@ -78,6 +78,14 @@ HOW TO WORK (both lanes — the discipline is identical):
   element focused, or the field isn't really editable). Do not move on as if it worked: re-focus the
   actual text area (a fresh snapshot, or click into the body first), or try a different method, and
   confirm the text is visible before continuing. Text you "typed" but never saw appear is not there.
+- APP AUTO-FORMATTING IS SUCCESS, NOT DRIFT. Many apps transform typed markup as you type it: Notes
+  turns a leading "- " (or "* ") into a bullet-list item, "1. " into a numbered item, "# " into a
+  heading; the literal "- " then DISAPPEARS from the field's text because it became styling. So when a
+  field reads "Gumbo" after you typed "- Gumbo", the app just FORMATTED it — the content landed, the
+  goal is met. Do NOT read that as the value not matching, do NOT call it drift or failure, do NOT redo
+  or undo it, and above all KEEP GOING to the remaining items. (If you are replaying a saved list this
+  way, the conversion is exactly what the demonstration did — continue typing the rest of the items;
+  each new line stays in the list automatically.)
 - COMPOSE, don't transcribe. When the task is to WRITE or CREATE content — an image prompt, a message,
   an email, a caption, a search query — you are the AUTHOR: write specific, vivid, high-quality text
   that fulfills the intent, and type THAT. If the user gives you creative latitude ("you pick the

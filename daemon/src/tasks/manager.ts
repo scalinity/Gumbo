@@ -207,6 +207,15 @@ export class TaskManager {
     const replayEvent = this.store.getLatestEventPayload(taskId, 'procedure.replay') as { outcome?: string } | null;
     if (replayEvent?.outcome !== 'fallback') return;
     if (this.store.getTask(taskId)?.status !== 'done') return;
+    // A TAUGHT procedure is the user's ground-truth demonstration — never let an auto-heal silently
+    // overwrite it with a drifted/adapted run. Spurious drift (e.g. Notes auto-formatting a typed
+    // "- " into a bullet, which the loop misread as failure) was corrupting freshly-taught lists
+    // down to a single item, every replay. Heal only a non-taught version; update a taught one by
+    // re-teaching.
+    if (this.store.getProcedure(procedureName)?.provider === 'taught') {
+      this.store.addEvent(taskId, 'procedure.heal_skipped', { name: procedureName, reason: 'latest version is taught — ground truth, re-teach to change it' });
+      return;
+    }
     this.healProcedure(procedureName, taskId).then(
       (result) => this.store.addEvent(taskId, 'procedure.healed', result),
       (err: unknown) => this.store.addEvent(taskId, 'session.error', { message: `procedure heal failed: ${String(err)}` }),

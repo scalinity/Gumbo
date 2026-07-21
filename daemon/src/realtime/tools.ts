@@ -640,7 +640,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         }
         if (action === 'stop') {
           const done = await manager.stopTeaching();
-          return `Recording finished — captured ${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}"; now distilling it into a procedure (the result will be announced). Confirm briefly to the user.`;
+          return `Recording stopped (${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}"). Do NOT speak yet and do NOT pre-narrate ("distilling…", "I'll let you know when it's done") — the one-line "Learned …" summary will arrive on its own in a moment; deliver ONLY that, briefly, and nothing before it.`;
         }
         if (action === 'save_last_run') {
           if (!deps.procedures) return 'Procedure saving is not wired up right now.';

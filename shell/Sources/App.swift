@@ -117,6 +117,7 @@ final class GumboController {
     private let reminders = RemindersBridge()
     private let quickText = QuickTextController()
     private let mac = MacBridge()
+    private var isTeaching = false // notch tap ends teaching (vs opens the dashboard) while true
     private lazy var dashboard = DashboardWindow()
 
     private var daemonState = "idle"
@@ -128,7 +129,13 @@ final class GumboController {
         wireAudio()
         wireWS()
         wireHotkeys()
-        notch.onTap = { [weak self] in self?.showDashboard() }
+        // Tapping the notch opens the dashboard — EXCEPT while teaching, when the notch shows the
+        // recording badge (which can't be "opened" anyway): a tap there ends the demonstration, so
+        // the user doesn't have to say "done". Same finish path as the voice tool, minus the chatter.
+        notch.onTap = { [weak self] in
+            guard let self else { return }
+            if self.isTeaching { self.ws.sendJSON(["type": "teach_finish"]) } else { self.showDashboard() }
+        }
         notch.installClickCatcher() // bare hardware notch opens the dashboard too
         // Bubble clicks expand in place (mini panel); the dashboard is its corner link.
         bubbles.onOpenDashboard = { [weak self] taskId in self?.showDashboard(taskId: taskId) }
@@ -165,7 +172,10 @@ final class GumboController {
         mac.onReply = { [weak self] json in self?.ws.sendJSON(json) }
         // M8: the watch-me recorder pins a persistent "Watching…" badge on the notch,
         // and a dropped daemon socket stops an active recording loudly.
-        mac.onRecordingChanged = { [weak self] active in self?.notch.setRecording(active) }
+        mac.onRecordingChanged = { [weak self] active in
+            self?.isTeaching = active // routes the notch tap to "finish teaching" while recording
+            self?.notch.setRecording(active)
+        }
         ws.onDisconnect = { [weak self] in self?.mac.handleSocketDropped() }
         ws.connect()
     }

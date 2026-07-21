@@ -236,6 +236,11 @@ hub.onMessage((msg, role) => {
   } else if (msg.type === 'teach_event' && role === 'shell') {
     // M8: one demonstration step from the record-mode tap — sanitized inside teachEvent.
     manager.teachEvent((msg as { step?: unknown }).step);
+  } else if (msg.type === 'teach_finish' && role === 'shell') {
+    // M8: the user tapped the recording badge to end the demonstration (the notch's finish
+    // affordance) instead of saying "done". Same path as the voice tool; ignore if nothing is
+    // recording (a stray tap after it already stopped). The "Learned …" announce rides finish().
+    manager.stopTeaching().catch(() => {});
   } else if (msg.type === 'image_edit_request' && role === 'shell') {
     // M5.5: typed edit from the viewer panel — no realtime session involved; the
     // completion (or failure) is spoken through the same proactive announce path, and
