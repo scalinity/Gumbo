@@ -2543,3 +2543,11 @@ each verified live; one real OS finding worth recording.
   app" copy was stale). Also pruned stale DerivedData: disposed m6/m7 worktree caches deleted
   (~/Library DerivedData keys per absolute project path — worktree flows leak orphans), M8's
   kept (worktree live), main's shell rebuilt in place since its product predated the M7 merge.
+- **Quit was doubly broken (same-day follow-up).** (1) The status-menu "Quit Gumbo" item
+  existed but `menu.items.forEach { $0.target = self }` retargeted it at the AppDelegate,
+  which doesn't implement `terminate(_:)` — auto-enablement sees a non-responding target and
+  disables the item. Quit must keep a nil target so the responder chain reaches NSApp; only
+  Open Dashboard gets an explicit target. (2) ⌘Q never worked anywhere: key equivalents
+  resolve through `NSApp.mainMenu`, which an LSUIElement app never gets for free — installed a
+  minimal invisible main menu holding just Quit. (Corollary for later: ⌘C/⌘V in the webview
+  composer likely need an Edit menu the same way.)
