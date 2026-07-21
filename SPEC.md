@@ -712,7 +712,7 @@ model context. Each task keeps a monotone source-set of origins ingested (user |
 screen:app | file:path | memory:sensitivity-class); the ~five egress sinks check it at the
 boundary, plus a containment check that secret-class material read this task is not inside an
 outbound payload. Tainted egress defaults to an INFORMED CONFIRM ("this draft contains text from
-nytimes.com — send?"), not a deny. Precedence: immutable maxima (secrets never egress unconfirmed;
+nytimes.com — send?"), not a deny. Precedence: hard limits (secrets never egress unconfirmed;
 no payment authority; TCC untouched) > defaults > the user's standing rules adjust everything
 between — they pre-approve his own recurring flows (trusted recipients, known patterns),
 which is where the read-web→send tax goes to die. Source-sets reset per task; creep is
@@ -735,7 +735,7 @@ an untrusted insider fail this test by construction: this system has none of tho
 
 **Rejected generalizations (named so they stay rejected):** per-value label lattices in model
 context (FIDES is multi-principal machinery; one principal, five sinks here); per-tool EffectSpec
-adapter interfaces (microservice Saga ceremony imposed on local synchronous actions);
+adapter interfaces (microservice Saga overhead imposed on local synchronous actions);
 COMMIT_UNKNOWN journaling for local files (a network concept); confidence gates that ADD friction
 under novelty (track record graduates autonomy — via standing-rule drafts the user approves — it
 never manufactures new asks).
@@ -802,8 +802,9 @@ for corpus-scale multi-hop QA; at n-of-1 scale hybrid BM25+vector wins on cost/s
 *bitemporal and source-attribution ideas* port as plain columns + two narrow lineage tables (claim
 derivations, memory-usage-per-effect) — provenance edges, not a graph (re-affirmed 2026-07-20; both
 external reports drew the same line). The columns ship with the phase; the two lineage tables
-build only when "why do you believe this" is actually asked. Monolithic memory rewrites — ACE's "context collapse"
-([arxiv 2510.04618](https://arxiv.org/abs/2510.04618)); updates are always deltas. A learned memory
+build only when "why do you believe this" is actually asked. Monolithic memory rewrites — ACE's
+"context collapse" ([arxiv 2510.04618](https://arxiv.org/abs/2510.04618)); updates are always
+deltas. A learned memory
 gate (MemGate-class, 2026 preprint) as the *primary* admission boundary — deterministic
 purpose/sensitivity/validity/supersession checks come first; a neural relevance ranker may later
 order what survives them, never replace them.
@@ -833,7 +834,8 @@ they're just missing provenance.
   classes it touched (from M9's columns) — and enforces at the ~five egress sinks: tainted egress →
   informed confirm with the source banner; secret-class containment in an outbound payload → the
   immutable line; personal-sensitivity content in a web-search query → sink policy, same pattern.
-  Declassification stays an explicit recorded event (FIDES' capacity idea: a verified boolean or
+  Releasing tainted/secret content past a sink stays an explicit recorded event (FIDES' capacity
+  idea: a verified boolean or
   short enum releases where raw text does not), and the user's standing rules pre-approve his own
   recurring flows between the maxima and the defaults. Cross cases a single bit misses are still
   caught — web-derived data flowing into a Gmail send, a personal memory leaking into a search
@@ -892,7 +894,7 @@ gate — the class that broke under adaptive attack; acceptable only as a cheap 
 on top, never as the boundary. Auto-activation of model-drafted standing rules (the AgentSpec
 recall gap makes silent activation a coverage illusion). A full security-typed language / label
 creep toward everything-untrusted — the DSL stays tiny and the escape hatch is an explicit,
-recorded declassification, not a loosened default.
+recorded release, not a loosened default.
 
 ### M11 — Personal-data connectors (specced 2026-07-19)
 
@@ -985,8 +987,9 @@ proactive consumers plus the etiquette that keeps them from being an annoyance. 
   approaching) — checked when that channel changes, never continuously polled. **Task done ≠
   outcome closed:** a submitted form without its confirmation mail, a sent invite never accepted, a
   requested refund not yet posted each stay open with an escalation deadline ("tell me if no
-  confirmation within 24 h"). Cheap deterministic watch → candidate; a cheap model verifies the
-  semantic condition; etiquette (above) decides when the user hears; any resulting *action* rides the
+  confirmation within 24 h"). A cheap deterministic watch fires the trigger (→ `TRIGGERED`); a
+  cheap model verifies the semantic condition; etiquette (above) decides when the user hears; any
+  resulting *action* rides the
   normal gates. Pending intentions are visible and one-tap cancellable in the dashboard; low-value
   ones expire aggressively. Two Rule-5 guards close the silent-miss hole channel-indexing opens: at
   arm time Gumbo NAMES what it will watch ("I'll check mail for this — not your texts"), so the
@@ -1247,7 +1250,7 @@ SoundAnalysis classifies 300+ sounds on-device;
 - **Local-first processing ladder.** Deterministic Vision OCR / barcode / document-rectangle /
   SoundAnalysis first; local VLM (FastVLM / mlx-vlm, or the M15 on-device model's image input) only
   when semantic interpretation is needed; cloud vision only behind an explicit, per-task release
-  (M10's declassification event). Returns a *typed observation* — source crop, capture hash,
+  (M10's explicit-release event). Returns a *typed observation* — source crop, capture hash,
   uncertainty flags — and deletes raw media unless the user says keep.
 - **Uses and refusals.** Read a serial number, summarize a whiteboard, compare a paper form to its
   PDF, identify a cable/port, extract package tracking, classify a beep (timer vs doorbell vs

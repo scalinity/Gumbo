@@ -14,7 +14,7 @@ covered ground so it spends effort on the frontier. Milestone source of truth: S
 the "Deferred / out of scope" and IMPLEMENTATION_NOTES §"M9–M13 gap analysis" + §"M9–M17
 external-research fold" anti-recommendations.
 
-**Last synced:** 2026-07-20 (against SPEC.md through M17). Since the 07-19 version: computer-use v2
+**Last synced:** 2026-07-21 (against SPEC.md through M17). Since the 07-19 version: computer-use v2
 (M7: browser lane on a persistent automation profile, vision lane, cooperative handoff, voice
 steering) moved Planned → BUILT; the first external run of this brief (Claude Research + ChatGPT)
 was folded into SPEC, adding to PLANNED: M14 transactional effects + universal undo (effect
@@ -22,11 +22,13 @@ classes/journal/receipts/permits + APFS-snapshot restore), M15 local-model tier 
 (Apple FM/MLX, eligibility-first routing, prompt-cache discipline), M16 App Intents/Shortcuts
 action lane (+ OS-local inbound intents), M17 explicit ephemeral physical perception — and
 amending: M9 (claim ledger: source attribution, bitemporal validity, principled forgetting), M10
-(two-axis FIDES-style labels + the user's constitution DSL), M12 (intentions ledger with outcome
+(two-axis FIDES-style labels + the user's standing-rules DSL), M12 (intentions ledger with outcome
 closure), M13 (calibrated act/inspect/ask/abstain + offline injection suite). REJECTED grew:
 agentic-payment rails, A2A/remote delegation, remote thin-client approvals, per-user fine-tuning,
 learned gates/routers as primary boundaries, auto-activated model-drafted rules, speculative
 mutating execution, continuous red-teaming. A future research run must not re-propose any of this.
+The spec's build filter is explicit: every sub-item must name the concrete moment in the user's day
+it serves; "a paper recommended it" is never a reason.
 
 ---
 
@@ -133,6 +135,13 @@ DELIBERATELY REJECTED (each was evaluated and declined — do NOT propose these)
 - Multi-channel chat gateways / device-node pairing / a skills marketplace (outward auth+exfil
   surface; multi-tenant infrastructure in disguise).
 - 24/7 screen/video recording; any telemetry or analytics whatsoever.
+- Enterprise-governance machinery at n-of-1: tamper-evident/hash-chained journals, statistical
+  autonomy calibrators before a felt need (manual user-approved graduation rules instead),
+  policy-activation review beyond one confirm card, workflow-engine state breadth for
+  personal intentions, up-front memory-curation/lineage machinery. Each defends against a
+  principal that doesn't exist here (a fleet, a team, an untrusted insider); the capability ships
+  without them. (The calibrator and the curation logic are deferred-until-felt, not permanently
+  rejected — built only on a demonstrated need, per SPEC M13/M9; the rest stay rejected.)
 
 ═══════════════════════════════════════════════════════════════════════
 HARD CONSTRAINTS (a recommendation that violates these is out of scope — say so)
