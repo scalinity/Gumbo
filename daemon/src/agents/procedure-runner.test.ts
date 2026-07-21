@@ -10,6 +10,7 @@ const { createMacTools } = await import('./mac-tools.ts');
 const { createBrowserTools } = await import('./browser-tools.ts');
 const { rememberHost } = await import('../mac/hosts.ts');
 const { Store } = await import('../events/store.ts');
+const { config } = await import('../config.ts');
 import type { ToolObservation } from './mac-tools.ts';
 import type { BrowserSurface } from './browser-tools.ts';
 import type { Procedure } from './procedures.ts';
@@ -259,4 +260,52 @@ test('replayed steps land in the tool.call/tool.result trace (self-heal must see
   assert.ok(calls.some((e) => (e.payload as { name?: string }).name === 'ax_act'), 'engine acts appear in the trace');
   assert.ok(calls.some((e) => (e.payload as { name?: string }).name === 'focus_app'), 'engine focus appears in the trace');
   assert.equal(calls.length, results.length, 'every call has its result');
+});
+
+test('app-launch resilience: a CLOSED target app is launched from the procedure apps and the replay stays deterministic (no fallback)', async () => {
+  const original = config.procedures.appLaunchWaitMs;
+  (config.procedures as { appLaunchWaitMs: number }).appLaunchWaitMs = 10; // keep the readiness poll fast
+  try {
+    let notesRunning = false;
+    const launches: string[] = [];
+    const h = harness({
+      bridge: (a) => {
+        if (a.kind === 'activate') {
+          return notesRunning
+            ? { ok: true, output: 'fronted Notes' }
+            : { ok: false, output: '"Notes" is not running', error_kind: 'element_not_found' };
+        }
+        if (a.kind === 'script') { launches.push(String(a.script)); notesRunning = true; return { ok: true, output: 'launched' }; }
+        if (a.kind === 'resolve') return { ok: true, output: 'g1e7' };
+        return { ok: true, output: '+ changed' };
+      },
+    });
+    const result = await h.run(AX_PROC); // AX_PROC.apps = ['Notes']
+    assert.equal(result.outcome, 'completed', 'a closed app must self-repair, not drift a faithful replay');
+    assert.ok(launches.some((s) => /tell application "Notes" to activate/.test(s)), 'the engine launched the app itself');
+    // The launch is recorded in the trace (so a later self-heal keeps the precondition step).
+    const scriptCalls = h.store.listEvents({ taskId: 'rp1' }).filter((e) => e.type === 'tool.call' && (e.payload as { name?: string }).name === 'run_script');
+    assert.equal(scriptCalls.length, 1);
+  } finally {
+    (config.procedures as { appLaunchWaitMs: number }).appLaunchWaitMs = original;
+  }
+});
+
+test('app-launch resilience: an app NOT in the procedure is never launched — it drifts to the intelligent loop', async () => {
+  const launches: string[] = [];
+  const h = harness({
+    bridge: (a) => {
+      if (a.kind === 'activate') return { ok: false, output: 'not running', error_kind: 'element_not_found' };
+      if (a.kind === 'script') { launches.push(String(a.script)); return { ok: true, output: 'launched' }; }
+      return { ok: true, output: 'x' };
+    },
+  });
+  const proc: Procedure = {
+    name: 'wrong app', goal: 'g', preconditions: [], apps: ['Mail'],
+    steps: [{ lane: 'ax', desc: 'click New', target: { app: 'Notes', role: 'AXButton', name: 'New Note' }, verb: 'click' }],
+  };
+  const result = await h.run(proc);
+  assert.equal(result.outcome, 'fallback', 'an unknown closed app degrades to the loop, never a hard failure');
+  assert.match((result as { reason: string }).reason, /not one of this procedure's apps/);
+  assert.equal(launches.length, 0, 'never launch an app outside the procedure set');
 });

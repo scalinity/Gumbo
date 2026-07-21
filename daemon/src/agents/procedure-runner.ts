@@ -92,12 +92,30 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     return { outcome: 'fallback', atStep: 0, reason: `parameter resolution failed: ${msg(err)}`, progress: '' };
   }
 
+  // A step's app is a real per-run precondition: it was open when the user taught this, but
+  // it may be closed now. So focus first; if it isn't running, LAUNCH it — but only an app
+  // this procedure actually uses (never an arbitrary name a drifted target could smuggle,
+  // and the unattended app-boundary stays honest), then wait for it to come up. A closed
+  // app should never drop a faithful replay into the fallback loop.
+  const knownApp = (app: string) => procedure.apps.some((a) => a.trim().toLowerCase() === app.trim().toLowerCase());
   const ensureApp = async (app: string | undefined): Promise<StepOutcome> => {
     if (!app || app === currentApp) return 'ok';
-    const obs = await invoke('focus_app', { app });
-    if (!obs?.ok) return { kind: 'drift', reason: `could not focus ${app} (${obs?.errorKind ?? 'no result'})` };
-    currentApp = app;
-    return 'ok';
+    let obs = await invoke('focus_app', { app });
+    if (obs?.ok) { currentApp = app; return 'ok'; }
+    if (!knownApp(app)) {
+      return { kind: 'drift', reason: `${app} is not running and is not one of this procedure's apps` };
+    }
+    // `activate` launches (if needed), fronts, and opens a default window — one osascript
+    // line, gate-auto (never a send/delete/sudo). The subsequent snapshot's own retry adds
+    // more slack for a slow cold launch.
+    await invoke('run_script', { interpreter: 'osascript', script: `tell application ${JSON.stringify(app)} to activate` });
+    for (let attempt = 0; attempt < config.procedures.appLaunchAttempts; attempt += 1) {
+      await sleep(config.procedures.appLaunchWaitMs, deps.signal);
+      if (deps.signal.aborted) throw new Error('cancelled');
+      obs = await invoke('focus_app', { app });
+      if (obs?.ok) { currentApp = app; return 'ok'; }
+    }
+    return { kind: 'drift', reason: `could not launch/focus ${app}` };
   };
 
   const AX_VERBS: Record<string, { verb: string; carriesValue: boolean }> = {

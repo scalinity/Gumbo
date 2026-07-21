@@ -182,6 +182,12 @@ export const config = {
   procedures: {
     compileTimeoutMs: 60_000,
     traceMaxChars: 24_000, // condensed tool.call/tool.result stream fed to the compiler
+    // Replay precondition resilience: if a step's target app isn't running (it was open
+    // when taught, or a prior run left it closed), the engine launches it — a closed app
+    // must never drift a faithful replay. Poll for readiness after the launch (a cold
+    // app takes a beat) before giving up to the intelligent fallback.
+    appLaunchAttempts: 4,
+    appLaunchWaitMs: 1000,
   },
   // M8 scheduled routines. The unattended policy is non-negotiable: a would-be-confirm
   // PAUSES the run (needs_input + pulse + parked notch confirm) until the user answers —

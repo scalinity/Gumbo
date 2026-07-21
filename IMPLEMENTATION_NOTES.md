@@ -2551,3 +2551,24 @@ each verified live; one real OS finding worth recording.
   resolve through `NSApp.mainMenu`, which an LSUIElement app never gets for free — installed a
   minimal invisible main menu holding just Quit. (Corollary for later: ⌘C/⌘V in the webview
   composer likely need an Edit menu the same way.)
+
+### M8 replay precondition resilience — auto-launch a closed target app (2026-07-21)
+
+the user's demo-prep question: a procedure shouldn't fail just because the world isn't in the exact
+state it was taught in (e.g. Notes was open at teach time, closed at replay time). The one broad
+DETERMINISTIC precondition gap was the target app not running: `ensureApp` only fronted a running
+app (focus_app → activate → Foreground.bringToFront is running-apps-only) and otherwise drifted the
+whole replay into the fallback loop on step 1 — functional but noisy, and it undercut the "look how
+clean this is" value. Fix: `ensureApp` now launches the app when focus fails — `run_script`
+osascript `tell application "X" to activate` (launches + fronts + opens a default window; one line,
+gate-auto) then polls focus_app for readiness (a cold app takes a beat) before proceeding. Scoped
+HARD to `procedure.apps`: never launch an arbitrary name a drifted target could smuggle, and the
+unattended app-boundary stays honest. The launch is recorded in the tool.call trace so a later
+self-heal keeps the precondition step. The full precondition taxonomy, recorded so the boundary is
+explicit: app-not-running → now self-repaired; app-running-but-not-frontmost → focus_app (already);
+browser page not open → compiler emits a goto-first step + BrowserClient.open adopts/creates a page
+(already); login required / app in a genuinely different sub-state → correctly DEGRADES to the
+intelligent fallback loop (not a failure — that's what the loop is for, and self-heal captures the
+improved path). So a faithful replay never hard-fails on an unmet precondition: it either
+self-repairs deterministically or degrades to intelligence. Daemon-only; 429/1-skip (+2 tests:
+closed-app self-launch stays deterministic, unknown app never launched → drifts).
