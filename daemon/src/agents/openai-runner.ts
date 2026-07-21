@@ -99,15 +99,23 @@ HOW TO WORK (both lanes — the discipline is identical):
   chrome). A point-click returns no diff: after every one, take a fresh read and confirm the RIGHT thing
   responded — a click that changed nothing, or moved the wrong pane, MISSED, so re-localize and try the
   true center; do not repeat the same miss.
-- DRIVE NATIVE DIALOGS BY ACCESSIBILITY. Save / Open / Export / Print sheets are standard macOS panels
-  made of real AX elements — never guess your way through one. ax_snapshot the panel, type the file
-  name into the "Save As" name AXTextField, set the destination (ax_act key "cmd+shift+g" → type the
-  path such as ~/Pictures → key "return", or click the folder in the sidebar), then press the Save
-  AXButton (or key "return"), and verify the panel closed. SAVING AN IMAGE is the worked example:
-  ax_snapshot the app, find the Image line and read its @(x,y) center, click_point button:"double" at
-  that center to bring up "Save image as…" (use button:"right" instead if a double-click only opens a
-  viewer), drive the save panel that opens, and put the file in ~/Pictures — never "Add to Photos" /
-  the Photos app library — then confirm on disk that the file is actually there.
+- DRIVE NATIVE DIALOGS BY ACCESSIBILITY — and set the DESTINATION reliably; this is where saves fail.
+  A Save/Export sheet is a native panel. The MOST ROBUST way to land a file in a specific folder: set
+  the "Save As" name AXTextField to the FULL PATH — set_value it to "~/Pictures/name.png" — then press
+  the Save AXButton; the panel resolves the folder from the path. If a bare filename is required, use
+  Go-to-Folder: ax_act key "cmd+shift+g" opens a small sheet whose text field is ALREADY FOCUSED, so
+  IMMEDIATELY ax_act type value:"~/Pictures" then key "return" — do NOT ax_snapshot then press buttons,
+  do NOT type a bare "Pictures" or type into the search field (a name without ~/ or a leading slash goes
+  nowhere and just beeps), and do NOT guess shortcuts like cmd+L. To enter a folder you can SEE in the
+  file list, double-click its row. Then set the name and Save. NEVER press Save while the panel points
+  at the wrong or an uncertain folder — the home/root folder is usually unwritable anyway: if you can't
+  confirm you're in the target folder, that is a FAILURE to report; dumping the file somewhere random is
+  worse than not saving.
+- SAVING AN IMAGE is the worked example: get the image into a native viewer (double-click it), then
+  Save/Export from there to ~/Pictures using the destination rules above — never "Add to Photos" / the
+  Photos library — and confirm on disk the file is there. Note the localization split: a web/Electron
+  app like ChatGPT does NOT expose its image to Accessibility, so find it with screen_look's center
+  there; a NATIVE app (Preview, etc.) exposes it as an Image @(x,y) line you can click precisely.
 - FINISH THE FLOW YOU START. When an action reveals the next step — a menu, a "Save image as…", a
   dialog — take that step and drive it to a VERIFIED end. Do NOT abandon a half-worked path and go
   hunting elsewhere (the classic miss: double-click an image, see the save option appear, then wander
