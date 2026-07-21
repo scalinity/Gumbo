@@ -75,6 +75,24 @@ const CONFIRM_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\b(diskutil|dd|mkfs|fdisk)\b/, reason: 'disk operation' },
 ];
 
+/** A de-obfuscated SHADOW of a script, for the pattern gate ONLY. bash removes empty quote
+ *  pairs, quotes, and backslash-escapes WITHIN a token before executing, so `cu''rl`, `.e""nv`,
+ *  `"cat"`, and `c\url` all reassemble to `curl`/`.env`/`cat` at exec time — AFTER the raw-string
+ *  patterns already looked, which is how the token-splitting evasions slip the gate. We run the
+ *  confirm patterns against this shadow IN ADDITION to the raw script (match on either → confirm).
+ *  Strictly additive: the raw script is always tested too, so the shadow can only ADD confirms,
+ *  never drop one — the module's accepted safe direction (a false positive just asks the user). It
+ *  is NOT fed to the executor; the executor runs the raw string. Newlines/separators survive
+ *  (only backslash-escapes and quotes fold), so the per-command scoping is unchanged. */
+function deobfuscateForGate(script: string): string {
+  return script
+    .normalize('NFKC')
+    .replace(/[​‌‍﻿]/g, '') // zero-width space / ZWNJ / ZWJ / BOM padding
+    .replace(/\\([^\n])/g, '$1') // backslash-escape within a token: c\url → curl (not line-continuation)
+    .replace(/''|""/g, '') // empty quote pairs bash deletes: cu''rl → curl
+    .replace(/['"]/g, ''); // remaining quotes: "cat" → cat, .e"nv → .env
+}
+
 const DELETE_COMMANDS = new Set(['rm', 'rmdir', 'unlink', 'shred', 'trash']);
 // $VAR / ${…} / $(…) / backticks — a target with these can't be resolved statically, so we
 // can't prove where it lands: confirm rather than guess (the supervisor's CA1 bypass).
@@ -141,8 +159,12 @@ function riskyDelete(command: string): string | null {
 
 /** Pure policy table for a mac_do script — exported for offline unit tests. */
 export function macDoDecision(script: string): MacPolicyResult {
+  // Test the confirm patterns against the raw script AND its de-obfuscated shadow, so a
+  // quote/backslash-split evasion (`cat .e''nv`, `cu''rl -d @.env …`) can't reassemble past
+  // the gate at exec time. Additive-only (raw is always tested): never drops a confirm.
+  const shadow = deobfuscateForGate(script);
   for (const { pattern, reason } of CONFIRM_PATTERNS) {
-    if (pattern.test(script)) return { route: 'confirm', reason };
+    if (pattern.test(script) || pattern.test(shadow)) return { route: 'confirm', reason };
   }
   // AppleScript that shells out (`do shell script "<cmd>"`) hides bash from the patterns
   // above — gate the inner command with the same table. The inner command has no nested
