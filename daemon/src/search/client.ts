@@ -74,7 +74,10 @@ export async function requestJson(opts: {
     }
     const detail = (await res.text().catch(() => '')).slice(0, 300);
     if (res.status === 401 || res.status === 403) {
-      throw new SearchError(opts.provider, 'auth', `HTTP ${res.status} — check API key. ${detail}`, res.status);
+      // Deliberately NOT including the response body: this message lands in the audit log's
+      // `error` field (search/audit.ts), and a 401/403 body can echo request material. Status
+      // + kind suffice — callers branch on kind, never on the message string.
+      throw new SearchError(opts.provider, 'auth', `HTTP ${res.status} — check API key`, res.status);
     }
     const kind: SearchErrorKind = res.status === 429 ? 'quota' : 'http';
     lastError = new SearchError(opts.provider, kind, `HTTP ${res.status}${detail ? ` — ${detail}` : ''}`, res.status);
