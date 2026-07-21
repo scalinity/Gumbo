@@ -783,7 +783,10 @@ mined. This is the phase that makes "personal" true — and it introduces no new
   stale high-impact claims, archive-not-delete by default — but "forget this" is real deletion
   (source text + FTS + vectors + derived claims), leaves a content-free deletion receipt, and flags
   any procedure/rule derived from the deleted claim for review instead of leaving it silently
-  intact. Nightly reflection (above) is where decay and contradiction-resolution run — no new job.
+  intact. **Build note:** the memory table is INSERT-ONLY today, and `memory_fts` syncs via an
+  AFTER-INSERT trigger alone — so M9's first DELETE/UPDATE path must add companion FTS triggers (or
+  the recall index silently desyncs). Nightly reflection (above) is where decay and
+  contradiction-resolution run — no new job.
   **Build order (the the user-moment test applied):** the COLUMNS land with the phase
   (cheap now, painful to retrofit), and the deletion receipt stays — its function is personal, not
   compliance: it lets Gumbo say "you asked me to forget that" instead of gaslighting. The curation
@@ -1109,7 +1112,11 @@ story, not the whole layer.
   synchronous channels (file moves, AX acts, in-page clicks) journal as audit + snapshot/diff
   refs — their outcomes are observable, and COMMIT_UNKNOWN is a network concept. Crash recovery
   resumes from the journal and never re-executes a committed external action; replay-for-debugging
-  consumes recorded outputs only and categorically blocks live shell actions.
+  consumes recorded outputs only and categorically blocks live shell actions. The journal needs no
+  tamper-evidence: the daemon is its only writer, and the sqlite `db/` dir is deliberately absent
+  from the Seatbelt writable set so a sandboxed session can't rewrite it either — a plain journal
+  recovers crashes just as well. (Build guard: never add `db/` to the sandbox writable set, or that
+  single-writer invariant collapses.)
 - **Single-use effect permits.** A confirm's approval binds to the exact argument hash and expires;
   the shell accepts only a matching permit for TCC actions. The model cannot mint one, and "approve
   whatever is pending" is structurally impossible.
