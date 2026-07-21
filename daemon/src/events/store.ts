@@ -176,10 +176,15 @@ export class Store {
       .prepare("SELECT id FROM tasks WHERE status = 'running'")
       .all() as Array<{ id: string }>;
     if (rows.length === 0) return [];
-    this.db
-      .prepare("UPDATE tasks SET status = 'failed', updated_at = ? WHERE status = 'running'")
-      .run(Date.now());
-    for (const { id } of rows) this.addEvent(id, 'task.finished', { status: 'failed', error: 'interrupted by daemon restart' });
+    // Atomic like the scheduler's mark-fired+event: a crash mid-loop must not leave tasks
+    // 'failed' with no matching finished-event in the feed. Listener isolation (addEvent)
+    // keeps a fan-out failure from spuriously rolling this back.
+    this.transaction(() => {
+      this.db
+        .prepare("UPDATE tasks SET status = 'failed', updated_at = ? WHERE status = 'running'")
+        .run(Date.now());
+      for (const { id } of rows) this.addEvent(id, 'task.finished', { status: 'failed', error: 'interrupted by daemon restart' });
+    });
     return rows.map((r) => r.id);
   }
 
@@ -209,7 +214,16 @@ export class Store {
       .prepare('INSERT INTO events (ts, task_id, type, payload) VALUES (?, ?, ?, ?)')
       .run(ts, taskId, type, JSON.stringify(payload ?? null));
     const event: EventRow = { seq: Number(result.lastInsertRowid), ts, task_id: taskId, type, payload };
-    for (const listener of this.listeners) listener(event);
+    // Isolate each listener: a throwing broadcast/bubble handler must never propagate back
+    // into a synchronous caller (a scheduler transaction, the boot reaper, TaskManager.finish)
+    // and crash the daemon — the row is already persisted, so a failed fan-out is non-fatal.
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error('event listener failed (continuing):', err);
+      }
+    }
     return event;
   }
 
@@ -221,7 +235,10 @@ export class Store {
       clauses.push('task_id = ?');
       params.push(opts.taskId);
     }
-    if (opts.beforeSeq) {
+    if (opts.beforeSeq !== undefined) {
+      // Guard on undefined, not falsiness: seq is a 1-based AUTOINCREMENT today so 0 is
+      // unreachable, but a future arithmetic cursor of 0 must mean "before the first row"
+      // (empty page), never "no cursor" (newest page).
       clauses.push('seq < ?');
       params.push(opts.beforeSeq);
     }
