@@ -121,25 +121,36 @@ export async function runImageEdit(opts: {
   await new Promise((resolve) => setImmediate(resolve));
   const short = echoForInstructions(prompt); // quoted inside live instructions — defanged (review 🔵)
   const scoped = strokes && strokes.length > 0;
-  try {
-    const out = await editImage(file, prompt, strokes);
-    store.addEvent(null, 'image.created', {
-      file: out,
-      prompt,
-      edited_from: file,
-      ...(scoped ? { selection: true } : {}),
-    });
-    await announce(
-      'the user, your image edit is done — the new version is up.',
-      `The image edit the user asked for ("${short}") just finished${scoped ? ' on the area he highlighted' : ''}; the new version is on screen and in his gallery. Tell him briefly — one sentence, no file names.`,
+  // The announce is best-effort and must NOT be able to flip a terminal: it runs OUTSIDE the
+  // editImage try, and its own rejection lands as a session.error, never a second terminal
+  // event. (DB1: with announce inside the try, a rejecting success-announce emitted BOTH
+  // image.created AND image.edit_failed and spoke a false "edit failed" for an edit already
+  // on screen — the exactly-one-terminal invariant held only by the announce path's luck.)
+  const speak = (cold: string, live: string) =>
+    announce(cold, live).catch((e: unknown) =>
+      store.addEvent(null, 'session.error', { message: `image edit announce: ${String(e)}` }),
     );
+  let out: string;
+  try {
+    out = await editImage(file, prompt, strokes);
   } catch (err) {
     // A dedicated failure event (not a bare session.error): the shell viewer keys on it
     // to leave its busy state, and the dashboard feed shows what failed and why.
     store.addEvent(null, 'image.edit_failed', { file, prompt, error: String(err) });
-    await announce(
+    await speak(
       'the user, heads up — that image edit failed.',
       `The image edit the user asked for ("${short}") failed. Tell him briefly and offer to try again.`,
     );
+    return;
   }
+  store.addEvent(null, 'image.created', {
+    file: out,
+    prompt,
+    edited_from: file,
+    ...(scoped ? { selection: true } : {}),
+  });
+  await speak(
+    'the user, your image edit is done — the new version is up.',
+    `The image edit the user asked for ("${short}") just finished${scoped ? ' on the area he highlighted' : ''}; the new version is on screen and in his gallery. Tell him briefly — one sentence, no file names.`,
+  );
 }
