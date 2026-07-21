@@ -140,20 +140,29 @@ HOW TO WORK (both lanes — the discipline is identical):
 - SAVING AN IMAGE has SEVERAL routes, and you do NOT report "couldn't save" until you have tried more
   than one. When a route dead-ends, BACK OUT (escape) and take the next — a single dead-end is not a
   failed goal. In order of preference:
-  (1) RIGHT-CLICK THE IMAGE ITSELF — the simplest route; try it FIRST, the moment the render is done.
-  click_point button:"right" at the image's center from screen_look (a webview like ChatGPT hides the
-  image from the AX tree, so use the pixel center; a NATIVE app exposes it as an Image @(x,y) line you
-  target precisely). The image body is big and forgiving, and its native context menu has "Save Image
-  As…" → drive the save panel to ~/Pictures. If the right-click shows only message actions (Branch in
-  new chat, Retry, Copy), you hit the message, not the image — click nearer the image center and retry.
-  (2) The app's DOWNLOAD/EXPORT control (e.g. ChatGPT's circular down-arrow over the image). If it opens
-  a macOS Quick Look preview (buttons "Share file" / "Open with Preview", identifiers like #QLControlOpen),
-  press "OPEN WITH PREVIEW" — that hands the image to Preview.app, where File > Export… (or cmd+s) saves
-  it to ~/Pictures. Do NOT press "Share file": a Share sheet (AirDrop/Mail/Messages/Copy) has NO Save by
-  design — if you land in one, escape and use another route.
-  EITHER route ends in a save/export panel: give it a BARE well-named filename, press Save at the DEFAULT
-  location, then mv the file to the asked-for folder with run_script — see the next rule. Do NOT try to
-  navigate the panel to the folder; that is the #1 reason a "saved" image lands in the wrong place.
+  (1) BEST — COPY THE IMAGE, then write it to disk yourself, bypassing every save panel. Right-click the
+  image center (click_point button:"right"; a webview like ChatGPT hides the image from the AX tree, so
+  use the pixel center from screen_look) and pick "Copy Image" — or in a Quick Look preview press its
+  "Copy" button. Then run_script interpreter "osascript" with EXACTLY this (only change the Title-Case
+  filename to fit the image):
+      set destFolder to POSIX path of (path to pictures folder)
+      set d to (the clipboard as «class PNGf»)
+      set f to open for access POSIX file (destFolder & "Surreal Alpine Observatory.png") with write permission
+      set eof f to 0
+      write d to f
+      close access f
+  The SHELL does the write, not the sandboxed app, so it lands in ~/Pictures under the name you chose —
+  no panel, no folder navigation, no mouse, and a locked home folder or an unwritable panel default can't
+  stop it. VERIFY with run_script: file "$HOME/Pictures/<name>.png" must report "PNG image data" and be
+  well over a few KB. If the osascript errors "Can't make some data into the expected type", the clipboard
+  held no image (the Copy didn't take) — redo the Copy, or fall through to (2). (If the right-click shows
+  only message actions — Branch in new chat, Retry, Copy-text — you hit the message, not the image; click
+  nearer the image center and retry.)
+  (2) FALLBACK — a save/export panel. Right-click → "Save Image As…", or the app's download control → a
+  Quick Look → "Open with Preview" → Preview's File > Export…. Do NOT press "Share file" (a Share sheet —
+  AirDrop/Mail/Messages/Copy — has no Save). Put a BARE Title-Case filename in the name field (never a
+  path — many panels save it LITERALLY), press Save at the panel's DEFAULT location, then mv it to
+  ~/Pictures with run_script (see the next rule). Do NOT navigate the panel's folder picker.
   Do NOT hunt for a "…"/three-dot/overflow control (that is the MESSAGE menu, no image-save), and do NOT
   left- or double-click the image hoping a save button appears.
 - A blocking OVERLAY — a lightbox, or an EMPTY QuickLook/preview panel ("No items selected") —
