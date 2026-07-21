@@ -40,6 +40,12 @@ export function makeStandDown(bridge: Pick<MacBridge, 'setHandoff'>) {
   };
 }
 
+// Ceiling on the finished-task id set. Ids leave on resume, but tasks never resumed would
+// otherwise accumulate for the daemon's lifetime. Far larger than any settle window, so the
+// idempotency guard (which only needs to cover a task's two near-simultaneous settle paths) is
+// never weakened by eviction.
+const FINISHED_TASK_CAP = 1000;
+
 export class TaskManager {
   private aborts = new Map<string, AbortController>();
   private finished = new Set<string>();
@@ -385,6 +391,11 @@ export class TaskManager {
   private finish(id: string, status: TaskRow['status'], payload: unknown) {
     if (this.finished.has(id)) return; // idempotent: never double-emit task.finished / double-announce
     this.finished.add(id);
+    if (this.finished.size > FINISHED_TASK_CAP) {
+      // Set preserves insertion order — evict the oldest finished id (long past re-settling).
+      const oldest = this.finished.values().next().value;
+      if (oldest !== undefined) this.finished.delete(oldest);
+    }
     this.aborts.delete(id);
     this.activeCwds.delete(id); // terminal → the project dir is free for a new session
     this.steering.delete(id); // undelivered steering dies with the task
