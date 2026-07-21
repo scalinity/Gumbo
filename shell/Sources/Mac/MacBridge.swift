@@ -112,13 +112,14 @@ final class MacBridge {
                     return AXResult(ok: true, output: "stopped", errorKind: nil, health: nil).wire()
                 }
             case "activate":
-                // Bring an app to the front via the AX grant (the system suppresses plain
-                // open/activate). Runs on main (AppKit/AX foregrounding is main-thread work).
+                // Open OR focus an app by (approximate) name — fuzzy-resolve against
+                // installed apps ("ChatGPT" → "ChatGPT Classic") and launch if not
+                // running. Runs on main (AppKit/AX foregrounding is main-thread work).
                 let app = action["app"] as? String ?? ""
-                let found = DispatchQueue.main.sync { app.isEmpty ? false : Foreground.bringToFront(app: app) }
-                result = found
-                    ? AXResult(ok: true, output: "brought \"\(app)\" to the front", errorKind: nil, health: nil).wire()
-                    : AXResult.failure("element_not_found", "\"\(app)\" is not running — launch it first (run_script: tell application \"\(app)\" to launch).").wire()
+                let resolved = DispatchQueue.main.sync { app.isEmpty ? nil : Foreground.openOrFront(app: app) }
+                result = resolved != nil
+                    ? AXResult(ok: true, output: "Opened \"\(resolved!)\".", errorKind: nil, health: nil).wire()
+                    : AXResult.failure("element_not_found", "No running or installed app matches \"\(app)\".").wire()
             case "cursor_to":
                 // M7 browser-lane cursor continuity: in-page acts happen over CDP (no HID
                 // at all), so the ghost is their only visible trace. Fire-and-forget.

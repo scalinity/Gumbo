@@ -51,6 +51,23 @@ function runBashDaemonSide(script: string, timeoutMs: number): Promise<BashResul
   });
 }
 
+/** The two idioms the model uses to OPEN/FOCUS an app, alone (no URL, no other verb).
+ *  Routed to the shell's fuzzy resolver so an approximate name ("ChatGPT" →
+ *  "ChatGPT Classic") resolves and the app launches if needed — raw `tell application` /
+ *  `open -a` need a near-exact name. A non-matching script runs verbatim (no regression). */
+export function pureAppOpenTarget(script: string, interpreter: MacInterpreter): string | null {
+  const s = script.trim();
+  if (interpreter === 'osascript') {
+    const m = /^tell application "([^"]+)" to activate$/i.exec(s);
+    return m ? m[1].trim() : null;
+  }
+  if (interpreter === 'bash') {
+    const m = /^open\s+-a\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(s);
+    return m ? (m[1] ?? m[2] ?? m[3]).trim() : null;
+  }
+  return null;
+}
+
 export interface MacDoDeps {
   macBridge: Pick<MacBridge, 'request'>;
   /** Notch confirm for a risky script; resolves false on deny/timeout (fail safe). */
@@ -83,6 +100,17 @@ export async function executeMacDo(
       auditMacAction({ tier: 'hot', kind: 'script', action: trimmed, gate: 'declined', ok: false, error: decision.reason });
       return `the user didn't approve that command (${decision.reason}), so I didn't run it.`;
     }
+  }
+
+  // Opening/focusing an app routes to the shell's fuzzy resolver (launches if needed,
+  // resolves approximate names) instead of running the raw exact-name script — so "open
+  // ChatGPT" finds "ChatGPT Classic" and launches Notes even when it's quit.
+  const appTarget = pureAppOpenTarget(trimmed, interpreter);
+  if (appTarget) {
+    const res = await deps.macBridge.request({ kind: 'activate', app: appTarget }, { timeoutMs: config.mac.rpcTimeoutMs });
+    auditMacAction({ tier: 'hot', kind: 'script', action: trimmed, gate, ok: res.ok, error: res.ok ? undefined : res.error_kind });
+    if (!res.ok) return `Couldn't open "${appTarget}" (${res.error_kind ?? 'error'})${res.output ? `: ${res.output}` : ''}.`;
+    return res.output || 'Done.';
   }
 
   const runBash = deps.runBash ?? runBashDaemonSide;

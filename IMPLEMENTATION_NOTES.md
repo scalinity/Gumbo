@@ -2594,3 +2594,39 @@ adapted task is titled "<name> (adapted)" (distinct in the task list, and if the
 picks it up as its own new procedure, which is the right emergent behavior). `adapt` is
 required-nullable like `notes` (the proven M5 shape); one adapt=null added to two pre-existing tests.
 Daemon-only; 431/1-skip (+2 tests: adapt routing all-edges, templateBrief HOW-vs-WHAT).
+
+### M8 live-demo failure sweep — app resolution, text fidelity, verification honesty, tenacity (2026-07-21)
+
+the user's demos surfaced five real gaps (logs referenced: mac-audit.jsonl, tasks 31307212/f1eee099):
+- **App-open brittleness.** "open ChatGPT" → the model opened chatgpt.com in Chrome, then
+  `tell application "ChatGPT" to activate` → script_error (the app is "ChatGPT Classic"). Fix: fuzzy
+  installed-app resolution — `Foreground.installedApp(named:)` (exact → prefix → shortest substring
+  over the standard app dirs) + `openOrFront` (front if running, else launch the resolved app via
+  openApplication + raise on the completion). `{kind:'activate'}` uses it, so focus_app now LAUNCHES
+  and resolves close names. The HOT lane bypassed all this (raw osascript), so `executeMacDo` now
+  routes a bare app-open idiom (`tell application "X" to activate` / `open -a "X"`, no URL) to the
+  same resolver (`pureAppOpenTarget`; a non-match runs verbatim — no regression). mac_do description:
+  prefer the installed APP over a website when the user names an app.
+- **set_value flattened formatting.** The replay bulk-wrote the whole note via `set_value` → title +
+  dash-bullets collapsed into one all-bold block (image). set_value is an AXValue write; the app's
+  live formatting only fires on real keystrokes. Compiler now: use `type` for typed content, NEVER
+  set_value; keep line breaks as separate `key`"return" steps; don't merge multi-line entry (the
+  returns ARE the structure).
+- **Spotlight → "activate Siri" garbage.** ⌘Space app-opens compiled to activating Siri. Compiler now
+  compiles any Spotlight/Launchpad/Dock/⌘Tab open to ONE clean `activate <app>` step naming the app
+  opened, never the launcher.
+- **FALSE SUCCESS (the worst).** A `type` that landed nowhere returned ok; the model then reported it
+  "created the note with the picnic items" — note was EMPTY. Loop instructions now: typing that
+  returns "(no observable change)" did NOT land; and REPORTING DONE IS A CLAIM — verify the intended
+  content is actually on screen (fresh snapshot/OCR) before claiming success; a truthful failure beats
+  a false success.
+- **Low tenacity.** The agent quit at the first failure instead of trying alternatives (the user: "it
+  needs to increase in tenacity"; vision-capture is one rung, not the whole ladder). New TENACITY
+  section: a failed attempt = a NEW approach, not a stop; ladders for open-app (focus_app → osascript
+  activate → open -a → Spotlight), enter-text (focus+click-into-body → AppleScript `make new note with
+  body` for scriptable apps → set_value last), and click (press → key/menu → vision). Only stop at
+  genuine exhaustion, a gate, or the budget. AppleScript-for-scriptable-apps is the key reliability
+  rung for the Notes case.
+Daemon hot-reloads; shell rebuilt. 432/1-skip (+1 app-open routing test). Honest residual: reliably
+typing into Notes' rich body is a hard AX target — the AppleScript rung + verify-before-done are the
+mitigation, but rich-text apps remain the stress case.

@@ -103,7 +103,11 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       'you MUST use osascript with `activate` (the app fronts itself). Example — "open Chrome and go to ' +
       'claude.ai" is one osascript that foregrounds AND navigates: `tell application "Google Chrome" to ' +
       'activate` then `tell application "Google Chrome" to open location "https://claude.ai"`. Any app: ' +
-      '`tell application "Notes" to activate`. Also single-shot: toggle a setting, read system info ' +
+      '`tell application "Notes" to activate`. When the user names an APP (ChatGPT, Slack, Notes…), open ' +
+      'the installed Mac APP, not a website — use `tell application "<name>" to activate`; Gumbo ' +
+      'resolves close/partial names to the installed app (say "ChatGPT" even if it is "ChatGPT Classic") ' +
+      'and launches it if needed. Only open a website when he names a site or URL. Also single-shot: ' +
+      'toggle a setting, read system info ' +
       '(tmutil, defaults read, osascript one-liners). Only escalate to spawn_subagent(task_type "mac") ' +
       'when you must then CLICK, TYPE, or navigate menus INSIDE the app. NEVER pair the two for the web: ' +
       'if a computer task will read or act on a page ("check my notifications", "who am I logged in ' +
