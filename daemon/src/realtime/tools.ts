@@ -600,16 +600,38 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       'it ("never mind", "forget that"). Recording shows in the notch the whole time. action ' +
       '"save_last_run": when Gumbo itself just finished a multi-step computer task and the user says ' +
       '"save that as a procedure" / "remember how you did that" — distills that run instead of a ' +
-      'demonstration (name: infer from his words or the task).',
+      'demonstration (name: infer from his words or the task). action "list": what procedures are ' +
+      'saved ("what have I taught you", "what procedures do you have"). action "delete": remove a ' +
+      'saved procedure by name ("delete the packing list", "forget how to file expenses") — needs the ' +
+      'name.',
     parameters: z.object({
-      action: z.enum(['start', 'stop', 'cancel', 'save_last_run']),
+      action: z.enum(['start', 'stop', 'cancel', 'save_last_run', 'list', 'delete']),
       name: z
         .string()
         .nullable()
-        .describe('Short procedure name — required for start, optional for save_last_run (defaults to the task title); null for stop/cancel'),
+        .describe('Short procedure name — required for start and delete, optional for save_last_run (defaults to the task title); null for stop/cancel/list'),
     }),
     execute: async ({ action, name }) => {
       try {
+        if (action === 'list') {
+          const rows = store.listProcedures();
+          if (rows.length === 0) return 'No procedures saved yet — teach one by saying "watch me…".';
+          return 'Saved procedures: ' + rows.map((p) => `"${p.name}"`).join(', ') + '.';
+        }
+        if (action === 'delete') {
+          const query = name?.trim();
+          if (!query) return 'Which procedure should I delete? Ask the user for the name.';
+          // Resolve an approximate name to a real one before deleting (never delete a guess
+          // silently): exact match, else the closest search hit.
+          const row = store.getProcedure(query) ?? store.searchProcedures(query, 1)[0];
+          if (!row) {
+            const saved = store.listProcedures(5).map((p) => `"${p.name}"`).join(', ');
+            return `No saved procedure matches "${query}". ${saved ? `Saved: ${saved}.` : 'Nothing is saved.'}`;
+          }
+          const removed = store.deleteProcedure(row.name);
+          store.addEvent(null, 'procedure.deleted', { name: row.name, versions: removed });
+          return `Deleted "${row.name}"${removed > 1 ? ` (all ${removed} versions)` : ''}. Confirm to the user.`;
+        }
         if (action === 'start') {
           const trimmed = name?.trim();
           if (!trimmed) return 'A name is needed to start — ask the user what to call this procedure.';

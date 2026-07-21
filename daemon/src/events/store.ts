@@ -99,6 +99,12 @@ export class Store {
       CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memory BEGIN
         INSERT INTO memory_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
       END;
+      -- The companion DELETE trigger the insert-only design deferred — deleteProcedure
+      -- (procedure management) is the first delete path, so the external-content FTS index
+      -- must be told or it desyncs. IF NOT EXISTS so DBs migrated before this get it on boot.
+      CREATE TRIGGER IF NOT EXISTS memory_fts_delete AFTER DELETE ON memory BEGIN
+        INSERT INTO memory_fts(memory_fts, rowid, title, body) VALUES ('delete', old.id, old.title, old.body);
+      END;
       -- M4: Claude Code session ids persist so a session survives the daemon (tsx-watch
       -- restarts are constant) — send_to_session revives a dead task by resuming its
       -- session id in its original cwd with its original brief.
@@ -161,6 +167,7 @@ export class Store {
     this.transaction(() => {
       this.db.exec(`
         DROP TRIGGER IF EXISTS memory_fts_insert;
+        DROP TRIGGER IF EXISTS memory_fts_delete;
         DROP TABLE IF EXISTS memory_fts;
         ALTER TABLE memory RENAME TO memory_old;
         CREATE TABLE memory (
@@ -174,6 +181,9 @@ export class Store {
         CREATE VIRTUAL TABLE memory_fts USING fts5(title, body, content='memory', content_rowid='id');
         CREATE TRIGGER memory_fts_insert AFTER INSERT ON memory BEGIN
           INSERT INTO memory_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+        END;
+        CREATE TRIGGER memory_fts_delete AFTER DELETE ON memory BEGIN
+          INSERT INTO memory_fts(memory_fts, rowid, title, body) VALUES ('delete', old.id, old.title, old.body);
         END;
         INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');
       `);
@@ -285,6 +295,14 @@ export class Store {
          ) ORDER BY ts DESC LIMIT ?`,
       )
       .all(limit) as unknown as ProcedureRow[];
+  }
+
+  /** M8 procedure management: delete a saved procedure by name (ALL its versions). The
+   *  AFTER DELETE trigger keeps memory_fts consistent. Returns how many rows were removed
+   *  (0 = no such procedure). */
+  deleteProcedure(name: string): number {
+    const result = this.db.prepare("DELETE FROM memory WHERE kind = 'procedure' AND query = ?").run(name);
+    return Number(result.changes);
   }
 
   /** M8 recall — the memory table's FIRST reader. FTS over title+body (any version may

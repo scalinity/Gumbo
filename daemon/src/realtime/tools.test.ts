@@ -653,3 +653,37 @@ test('M8 fix: save_last_run skips replay/routine runs — "save that" means the 
   await teach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'check invoices' }));
   assert.deepEqual(saved, ['orig1'], 'the replay run must be skipped in favor of the original');
 });
+
+test('M8: teach_procedure list + delete manage saved procedures', async () => {
+  const deleted: string[] = [];
+  const store = {
+    listProcedures: () => [{ name: 'packing list' }, { name: 'file expenses' }],
+    getProcedure: (n: string) => (n === 'packing list' ? { name: 'packing list', version: 2, body: '{}' } : undefined),
+    searchProcedures: (q: string) => (/pack/i.test(q) ? [{ name: 'packing list', version: 2, body: '{}' }] : []),
+    deleteProcedure: (n: string) => { deleted.push(n); return 2; },
+    addEvent: () => {},
+  };
+  const manager = { cancelTeaching: () => false };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never, announce: async () => {},
+    imageContext: { get: () => null } as never, fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never, openImage: (() => true) as never,
+    macBridge: {} as never, confirmMacDo: (async () => false) as never,
+  });
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+
+  const list = await teach.invoke({}, JSON.stringify({ action: 'list', name: null }));
+  assert.match(list, /"packing list".*"file expenses"/);
+
+  // delete resolves an approximate name to the real one, then removes all versions.
+  const del = await teach.invoke({}, JSON.stringify({ action: 'delete', name: 'the packing list' }));
+  assert.match(del, /Deleted "packing list" \(all 2 versions\)/);
+  assert.deepEqual(deleted, ['packing list']);
+
+  // delete without a name refuses; a no-match lists what exists and deletes nothing.
+  assert.match(await teach.invoke({}, JSON.stringify({ action: 'delete', name: null })), /Which procedure/);
+  assert.match(await teach.invoke({}, JSON.stringify({ action: 'delete', name: 'water the lawn' })), /No saved procedure matches/);
+  assert.deepEqual(deleted, ['packing list'], 'a no-match never deletes');
+});

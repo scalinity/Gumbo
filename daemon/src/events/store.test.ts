@@ -234,3 +234,21 @@ test('M8 fix: the memory_kind_query index exists on fresh DBs AND survives the r
   const raw3 = new DatabaseSync(oldPath);
   assert.ok(hasIndex(raw3), 'the rebuild migration must recreate the index (the rename carried the old one to memory_old and the drop killed it)');
 });
+
+test('M8: deleteProcedure removes all versions and keeps the FTS index consistent', () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'gumbo-del-')), 'gumbo.db');
+  const s = new Store(dbPath);
+  s.saveProcedure({ taskId: null, name: 'packing list', title: 'packing list — draft in Notes', body: '{"v":1}', provider: 'taught' });
+  s.saveProcedure({ taskId: null, name: 'packing list', title: 'packing list — draft in Notes', body: '{"v":2}', provider: 'healed' });
+  s.saveProcedure({ taskId: null, name: 'file expenses', title: 'file expenses — submit', body: '{}', provider: 'taught' });
+  assert.ok(s.getProcedure('packing list'));
+  assert.ok(s.searchProcedures('packing').some((p) => p.name === 'packing list'), 'FTS finds it before delete');
+
+  const removed = s.deleteProcedure('packing list');
+  assert.equal(removed, 2, 'both versions deleted');
+  assert.equal(s.getProcedure('packing list'), undefined, 'gone from the exact reader');
+  assert.equal(s.searchProcedures('packing').length, 0, 'gone from the FTS index too (companion delete trigger)');
+  assert.ok(s.getProcedure('file expenses'), 'other procedures untouched');
+
+  assert.equal(s.deleteProcedure('never existed'), 0, 'deleting a missing procedure is a clean 0');
+});
