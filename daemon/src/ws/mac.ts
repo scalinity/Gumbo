@@ -124,12 +124,16 @@ export class MacBridge {
   /** M8 teaching state: while active, the shell's tap runs in RECORD mode (the user's
    *  input is the demonstration). Edge-triggered like setHandoff; teaching and computer
    *  tasks are mutually exclusive (manager), so one flag suffices. */
-  setTeaching(active: boolean) {
+  setTeaching(active: boolean, taskId?: string) {
     if (this.teachingActive === active) return;
     this.teachingActive = active;
-    this.hub.broadcast({ type: 'mac_teach', active }, 'shell');
+    this.teachingTaskId = active ? (taskId ?? null) : null;
+    // Carry the teaching task id so the shell can route a click on THAT task's orb to "finish
+    // teaching" (the user's chosen affordance) instead of opening the dashboard.
+    this.hub.broadcast({ type: 'mac_teach', active, task_id: this.teachingTaskId }, 'shell');
   }
   private teachingActive = false;
+  private teachingTaskId: string | null = null;
 
   /** A shell that (re)connects mid-task must arm its kill switch immediately —
    *  broadcast the current state on every hello (shell relaunches are routine).
@@ -140,6 +144,6 @@ export class MacBridge {
   resync() {
     this.hub.broadcast({ type: 'mac_task', active: this.activeTasks > 0 }, 'shell');
     if (this.handoffActive) this.hub.broadcast({ type: 'mac_handoff', active: true }, 'shell');
-    this.hub.broadcast({ type: 'mac_teach', active: this.teachingActive }, 'shell');
+    this.hub.broadcast({ type: 'mac_teach', active: this.teachingActive, task_id: this.teachingTaskId }, 'shell');
   }
 }

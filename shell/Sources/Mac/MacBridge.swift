@@ -14,6 +14,12 @@ final class MacBridge {
     /// M8: the notch shows a persistent "Watching…" while the recorder is live (SPEC:
     /// recording must be visibly indicated the whole time). Wired in App.swift.
     var onRecordingChanged: ((Bool) -> Void)?
+    /// M8: the teaching task's id while recording (from mac_teach) — App routes a click on THAT
+    /// task's orb to "finish teaching" instead of opening the dashboard. Main-thread only.
+    private(set) var teachingTaskId: String?
+    /// Fires (on main) when teachingTaskId changes, so App can tell BubbleController which orb ends
+    /// the demonstration on click. Carries nil when teaching stops.
+    var onTeachingTaskChanged: ((String?) -> Void)?
 
     private let executor = AXExecutor()
     private let ghost = GhostCursor()
@@ -79,7 +85,10 @@ final class MacBridge {
             // active:false stops a recorder whose daemon-side session died (restart,
             // cancel, disconnect). Broadcast — no correlation id to answer.
             let active = msg["active"] as? Bool ?? false
+            let taskId = msg["task_id"] as? String
             DispatchQueue.main.async {
+                self.teachingTaskId = active ? taskId : nil
+                self.onTeachingTaskChanged?(self.teachingTaskId)
                 if active { self.resumeRecording() } else { self.stopRecordingLocal() }
             }
             return true

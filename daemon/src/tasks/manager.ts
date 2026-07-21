@@ -643,7 +643,7 @@ export class TaskManager {
     }, config.teach.maxDurationMs);
     timer.unref();
     this.teaching = { taskId: id, name, title, workspace, steps: [], timer };
-    this.macBridge.setTeaching(true);
+    this.macBridge.setTeaching(true, id); // id → the shell, so the teaching orb's click finishes it
     return task;
   }
 

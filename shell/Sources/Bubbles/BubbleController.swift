@@ -13,6 +13,11 @@ final class BubbleController {
     /// M5.5: reports the y just below the orb stack after every layout, so the image
     /// thumbnails (ImageBubbleController) can stack directly beneath the task orbs.
     var onStackBottomChange: ((CGFloat) -> Void)?
+    /// M8: while set, a click on THIS task's orb ends the demonstration instead of expanding the
+    /// panel — the teaching orb can't be usefully "opened", so the user repurposes its click to
+    /// "done". Set by App from the daemon's mac_teach; cleared when teaching stops.
+    var teachingTaskId: String?
+    var onFinishTeaching: ((String) -> Void)?
 
     static let collapsedSize = NSSize(width: 84, height: 84)
     static let expandedSize = NSSize(width: 332, height: 408)
@@ -185,7 +190,13 @@ final class BubbleController {
         panel.contentView = FirstMouseHostingView(
             rootView: BubbleRootView(
                 model: model,
-                onToggle: { [weak self] in self?.toggle(taskId) },
+                onToggle: { [weak self] in
+                    guard let self else { return }
+                    // The teaching orb's click ENDS teaching (it can't be usefully opened); every
+                    // other orb toggles its observability panel.
+                    if taskId == self.teachingTaskId { self.onFinishTeaching?(taskId) }
+                    else { self.toggle(taskId) }
+                },
                 onDashboard: { [weak self] in self?.onOpenDashboard?(taskId) }))
         return panel
     }
