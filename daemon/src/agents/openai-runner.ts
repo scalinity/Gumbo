@@ -116,6 +116,15 @@ HOW TO WORK (both lanes — the discipline is identical):
   underscores or all-lowercase. NEVER press Save while the panel points at the wrong or an uncertain
   folder: if you can't confirm you're in the target folder, that's a FAILURE to report — a file in the
   wrong place is worse than none.
+- BE PATIENT while an image RENDERS — impatience here kills a working render. A generation takes 30s to
+  a couple of MINUTES, and the app cycles ROTATING status lines while it works ("One last tweak…",
+  "Creating…", "Almost there…") — those are NORMAL PROGRESS, not a stall or failure. NEVER press escape,
+  a stop button, or anything else while it is generating: that CANCELS the render. A webview image is NOT
+  in the AX tree, so wait_for on AXImage just times out and falsely tells you "nothing appeared" — do NOT
+  trust that as a stall. Instead poll with screen_look every several seconds and simply KEEP WAITING
+  until the finished image actually appears; only after a genuinely long stretch (well over a minute)
+  with ZERO visual change is it a real stall. When in doubt, wait longer — a canceled render is the
+  failure, the wait is not.
 - SAVING AN IMAGE in a web/Electron app (ChatGPT, etc., whose image is NOT in the AX tree): RIGHT-CLICK
   THE CENTER OF THE IMAGE ITSELF — click_point button:"right" at the image's center from screen_look.
   The image body is a big, forgiving target, and a right-click on it opens the NATIVE context menu with
