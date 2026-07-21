@@ -18,8 +18,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let controller = GumboController()
         self.controller = controller
+        setupMainMenu()
         setupStatusItem()
         controller.start()
+    }
+
+    // LSUIElement apps show no menu bar, but ⌘Q still resolves through mainMenu key
+    // equivalents — without this, quitting from the dashboard window is impossible.
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "Quit Gumbo", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+        NSApp.mainMenu = mainMenu
     }
 
     // LSUIElement apps have no Dock icon; a minimal status item is the quit / dashboard affordance.
@@ -27,10 +40,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = Self.statusIcon()
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Open Dashboard", action: #selector(openDashboard), keyEquivalent: "d"))
+        let open = NSMenuItem(title: "Open Dashboard", action: #selector(openDashboard), keyEquivalent: "d")
+        open.target = self
+        menu.addItem(open)
         menu.addItem(.separator())
+        // Quit keeps a nil target: terminate(_:) lives on NSApp, and an explicit target
+        // that can't respond makes auto-enablement disable the item entirely.
         menu.addItem(NSMenuItem(title: "Quit Gumbo", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        menu.items.forEach { $0.target = self }
         item.menu = menu
         statusItem = item
     }
