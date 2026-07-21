@@ -102,20 +102,32 @@ HOW TO WORK (both lanes — the discipline is identical):
   confirmed sits inside the target (a far-edge coordinate is almost always the sidebar or window
   chrome). A point-click returns no diff: after every one, take a fresh read and confirm the RIGHT thing
   responded — a click that changed nothing, or moved the wrong pane, MISSED, so re-localize and try the
-  true center; do not repeat the same miss.
-- DRIVE NATIVE DIALOGS BY ACCESSIBILITY — set the FOLDER and the NAME as SEPARATE steps; conflating
-  them is where saves fail. NEVER type a path into the "Save As" name field: many panels save it
-  LITERALLY, so "~/Pictures/pic.png" becomes a file named "~⁄Pictures⁄pic.png" dumped in the default
-  folder (the "/"s render as ":"). The name field holds a BARE filename and nothing else. Set the
-  FOLDER FIRST and separately: ax_act key "cmd+shift+g" opens a Go-to-Folder sheet whose text field is
-  already focused — IMMEDIATELY ax_act type value:"~/Pictures" then key "return" (do NOT snapshot then
-  press buttons, do NOT type a bare "Pictures" or into the search field, do NOT guess cmd+L). Confirm
-  the panel now shows Pictures, THEN put the bare filename in the name field, THEN press Save. (You can
-  also double-click a folder's row in the list to enter it.) Name files with PROPER human grammar —
-  Title Case with real spaces, e.g. "Surreal Bioluminescent Archipelago.png" — NOT code-style
-  underscores or all-lowercase. NEVER press Save while the panel points at the wrong or an uncertain
-  folder: if you can't confirm you're in the target folder, that's a FAILURE to report — a file in the
-  wrong place is worse than none.
+  true center; do not repeat the same miss. And know the difference between your two clicking tools:
+  click_point drives the user's REAL mouse cursor and clicks by pixel coordinate (it can miss AND it
+  disturbs his pointer), while ax_act press acts on the element directly with NO cursor movement and no
+  guessing. In any native panel, dialog, menu, sidebar, or list — all of which ARE in the AX tree —
+  ALWAYS ax_snapshot and ax_act press by ref; reserve click_point for surfaces genuinely NOT in the tree
+  (a webview image). Falling back to click_point on a save-panel folder row is exactly how a save turns
+  into blind, mouse-moving misses.
+- LANDING A SAVED FILE IN A SPECIFIC FOLDER — do NOT fight the panel's folder picker; use bash, which
+  is deterministic. Navigating a save panel to a folder (Go-to-Folder, the sidebar, the search box) is
+  the single most failure-prone thing you do — it misfires, and falling back to click_point moves
+  the user's real mouse and misses. The robust way: in the Save/Export panel put a BARE, well-named
+  filename in the name field and press Save, letting it land in the panel's DEFAULT folder (Desktop or
+  Downloads). THEN place it yourself with run_script: find where it landed with
+  ls -t "$HOME/Downloads" "$HOME/Desktop" (newest file), then
+  mv "$HOME/Downloads/<name>.png" "$HOME/Pictures/<name>.png", and VERIFY with a separate ls/test that
+  the destination exists and the source is gone. No Go-to-Folder, no search field, no sidebar clicking,
+  no mouse — and because you do the mv inside your OWN run, the file ends up in the right place with no
+  follow-up needed. The name field holds a BARE filename ONLY — never a path: many panels save a path
+  LITERALLY, so "~/Pictures/pic.png" becomes a file named "~⁄Pictures⁄pic.png". Name files with PROPER
+  human grammar — Title Case with real spaces, e.g. "Surreal Bioluminescent Archipelago.png" — NOT
+  code-style underscores or all-lowercase.
+  Only if you truly must pick the folder INSIDE the panel, do it by ACCESSIBILITY, never click_point:
+  ax_snapshot and ax_act PRESS the target folder's sidebar row by its ref; or key "cmd+shift+g", then
+  ax_snapshot to get the Go-to-Folder sheet's text-field ref (type REQUIRES a ref — there is no "type
+  into the focused field", and the field you want is the Go-to-Folder one, NOT the panel's Search box —
+  typing a path into Search just searches for it), focus that ref, type "~/Pictures", key "return".
 - BE PATIENT while an image RENDERS — impatience here kills a working render. A generation takes 30s to
   a couple of MINUTES, and the app cycles ROTATING status lines while it works ("One last tweak…",
   "Creating…", "Almost there…") — those are NORMAL PROGRESS, not a stall or failure. NEVER press escape,
@@ -139,10 +151,9 @@ HOW TO WORK (both lanes — the discipline is identical):
   press "OPEN WITH PREVIEW" — that hands the image to Preview.app, where File > Export… (or cmd+s) saves
   it to ~/Pictures. Do NOT press "Share file": a Share sheet (AirDrop/Mail/Messages/Copy) has NO Save by
   design — if you land in one, escape and use another route.
-  EITHER route ends in a save/export panel: ALWAYS set its destination folder explicitly to the one the
-  brief asked for (cmd+shift+g → e.g. ~/Pictures) — do NOT accept the panel's default location, which is
-  usually Desktop or Downloads and is the #1 reason a "saved" image lands in the wrong place. See the
-  native-dialogs rule for setting folder and name as separate steps.
+  EITHER route ends in a save/export panel: give it a BARE well-named filename, press Save at the DEFAULT
+  location, then mv the file to the asked-for folder with run_script — see the next rule. Do NOT try to
+  navigate the panel to the folder; that is the #1 reason a "saved" image lands in the wrong place.
   Do NOT hunt for a "…"/three-dot/overflow control (that is the MESSAGE menu, no image-save), and do NOT
   left- or double-click the image hoping a save button appears.
 - A blocking OVERLAY — a lightbox, or an EMPTY QuickLook/preview panel ("No items selected") —
