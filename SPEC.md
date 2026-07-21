@@ -688,8 +688,9 @@ instead of live-demo surprises.
 cost of being wrong — never by novelty, category, or provenance alone. Reversible + receipted →
 `announce`: act, say what happened in one sentence, keep "undo that" armed — even when tainted,
 even on day one. `confirm` is reserved for compensatable/irreversible effects. Information leaving
-the machine (send, POST, form submit, a URL built from task-read content) is irreversible BY
-INFORMATION regardless of local state — the M7 literal-URL rule generalized — which is what keeps
+the machine (send, POST, form submit, a URL constructed from task-read content — not one found
+verbatim on a page, see M10) is irreversible BY INFORMATION regardless of local state — the M7
+literal-URL rule generalized — which is what keeps
 injection blast radius on the auto/announce tiers bounded to recoverable local state. Track
 record only ever LOOSENS: cold start equals the status quo's gates; nothing ever earns a new
 prompt for being new.
@@ -849,10 +850,15 @@ they're just missing provenance.
   system denies → built-in effect policy → the user's standing rules → per-task mandate → one-time
   confirm; a user rule may tighten freely but can never override a hard deny or unlock what the
   shell can't do. The voice model may DRAFT a rule; activation is a separate shell-owned confirm —
-  ONE card showing the rule's plain meaning plus two or three example outcomes
-  (allow/block/confirm), nothing more: the card IS the informed consent, and anything heavier is
-  change-review for an audience of one. AgentSpec's LLM-generated rules hit high precision but
-  ~71% recall, which is exactly why drafts never self-activate. Versioned, diffed, receipted.
+  the **activation card** — showing the rule's plain meaning, two or three example outcomes
+  (allow/block/confirm), and the one part a model-authored draft can't fake: what the rule WOULD
+  have done to the user's recent real actions (a deterministic replay against the audit log). That
+  replay is the informed-consent anchor — the plain-meaning text and examples are model-authored,
+  so a draft that originated in a tainted session could word them to look narrower than they are,
+  but the replay shows real past decisions the draft can't rewrite. Lean by design (no
+  compiled-predicate dump, no conflict matrix — one card, not a review board), but never lean
+  enough to drop the replay. AgentSpec's LLM-generated rules hit high precision but ~71% recall,
+  which is exactly why drafts never self-activate. Versioned, diffed, receipted.
 - **A stricter lane for tainted tasks in `gateScript` / the policy table.** Once tainted: network
   sends and `do shell script` route to the informed confirm regardless of the allowlist (Rule 4's
   default — escalation, not denial). URL navigation splits by SHAPE (following a link found on a
@@ -861,8 +867,14 @@ they're just missing provenance.
   normal gates; a **model-constructed** URL embedding content the task read is denied outright —
   that is the exfil shape (data smuggled through query params/subdomains, the M7 residual's
   principled fix), and a confirm there would be theater since the user can't meaningfully inspect an
-  encoded blob. The notch confirm renders a "this task has read untrusted web/screen content"
-  banner so the user's approval is *informed*, not blind.
+  encoded blob. Two invariants make "verbatim" load-bearing rather than a loophole: the match is a
+  byte-exact full-URL substring test against the WHOLE task source-set (no canonicalization, no
+  per-page scoping — a fuzzy or single-page match would let an attacker page satisfy it for a
+  smuggled URL and reopen exactly this hole), and a verbatim link still gets its destination
+  effect-classed before navigation — a literal link to a state-changing or capability endpoint (a
+  one-click reset in an email, an unsubscribe-all) takes the informed confirm even though it
+  crosses no exfil boundary. The notch confirm renders a "this task has read untrusted web/screen
+  content" banner so the user's approval is *informed*, not blind.
 - **Context minimization for the worst edge (optional).** Scrape/OCR results destined for a
   computer-use task pass through a quarantined summarize-to-facts call first (one of the six documented
   injection-defense patterns, [arxiv 2506.08837](https://arxiv.org/abs/2506.08837)) — the model acts on
