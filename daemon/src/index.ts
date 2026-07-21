@@ -16,6 +16,7 @@ import { acceptFileEditRequest } from './files/edit.ts';
 import { shutdownBrowser } from './browser/client.ts';
 import { rememberHost } from './mac/hosts.ts';
 import { createProcedureService } from './agents/procedures.ts';
+import { ensureDashboardDevServer } from './dashboard-dev.ts';
 import { Orchestrator } from './realtime/session.ts';
 
 const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY'].filter((k) => !process.env[k]);
@@ -318,4 +319,8 @@ if (reapedImages.length) {
 
 server.listen(config.port, config.host, () => {
   console.log(`gumbo daemon listening on http://${config.host}:${config.port} (ws: /ws)`);
+  // Clicking the notch opens a WKWebView on the Vite dev server — start it if it isn't
+  // already up so that always works with no manual `npm run dev:dashboard` (the user's
+  // friction ask). Best-effort; never blocks or crashes the daemon.
+  ensureDashboardDevServer();
 });
