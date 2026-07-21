@@ -20,7 +20,7 @@ undo. Every design decision flows from that shape — never from internet or ent
 conventions generalized past their assumptions.
 
 - **The the user-moment test (the binding build filter, SPEC §cross-cutting):** before building
-  any sub-item, name the concrete moment in the user's day it serves — "what did Mara text me",
+  any sub-item, name the concrete moment in the user's day it serves — "what did my sister text me",
   "undo that", "what's this beeping", "stop asking about this". "A paper recommended it" /
   "the field converged here" is context, never a reason. Mechanisms whose real audience is a
   fleet, a team, or an untrusted insider fail this test by construction: those principals do
@@ -40,7 +40,8 @@ conventions generalized past their assumptions.
 - **Vocabulary (binding, docs and code alike):** "rules" never "laws"; "the user's standing
   rules" never "constitution"; `decide()` never `verdict()`; "track record" / "history" never
   "evidence" as gating vocabulary; "activation card" never "ceremony"; the user "approves",
-  never "ratifies". Plain personal language over legal/compliance register, everywhere.
+  never "ratifies". Plain personal language over legal/compliance register, everywhere. Examples
+  use roles — "my sister", "the landlord", "the dentist" — never invented person names.
 - **Docs state the current design, not its history of removals.** When a design changes, write
   the new state cleanly — no "(previously X)" trails or references to what was cut. Dated
   provenance tags on the design itself (`(specced 2026-07-19)`, `(amended …)`) are fine and used

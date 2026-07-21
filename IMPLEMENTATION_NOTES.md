@@ -2600,3 +2600,39 @@ actual reducer job oQ8 is the *worst* deploy pick. Generic benchmarks inverted t
   provider client lives. SPEC M15 now states the oQ4 design directly.
 - Bake-off artifacts (fixtures, outputs, scorer) lived in the session scratchpad — ephemeral by
   design; the protocol above is enough to re-run against a future candidate.
+
+## Completion pass adopted — build sequence to done, three spec folds, example names retired (2026-07-21)
+
+The opposite pass to the trim: audited M9–M17 for under-built or missing capability against the
+completion goal. Verdict: the arc is structurally right-sized — the gaps were sequencing and
+implied-but-unscheduled items, not missing machinery. the user approved applying all of it.
+
+- **Adopted build sequence (critical path bold):** **0** M8 live demos → merge → push origin (M7 is
+  still local-only) → 1 routing-regression test set + 2 coding-session git-safety (both protect
+  already-shipped capability; build right after the M8 merge so the tests target the merged
+  registry) → **3** M9 slice 1 (core blocks, remember/search_memory over FTS, claims columns,
+  dashboard view, reflection consumer) + **4** always-alive (launchd daemon + shell login item —
+  now an M9 sub-item, since overnight reflection is the moment that makes it real) → **5** M10
+  (source-set + sink checks + URL provenance split + standing rules/activation card) → **6** M11
+  first connector + regex redactor + oQ4 worker → 7 Messages reply slice (now specced in M11) →
+  **8** M14 slice 1 on the first mutating channel → **9** M12 (ledger + etiquette + first watch;
+  brief once calendar+mail exist) → 10 second connector; 11 M9 slice 2 (sqlite-vec hybrid,
+  personal-note embeddings local-first), 12 M16 spike + one intent, 13 M17 — slotted on felt need.
+  Rough critical path ≈ 6–8 focused weeks; M16/M17 ≈ 2–3 more.
+- **Three spec folds (all small):** the Messages **reply slice** into M11 ("text her back 'on my
+  way'" — rides the existing M6 mac-channel send gate, confirm-class, alias-map re-hydration at
+  the executor; connector credentials stay read-only, so M11's header is now "read-first");
+  **always-alive** moved out of post-M17 deferred into M9 (launchd agent + login item — reboot →
+  PTT just works, and reflection actually runs overnight); the M9 **embedding privacy fork
+  resolved local-first** (the proven LocalAI venv makes a local embedding model near-free, so
+  personal notes never ship to a provider for recall).
+- **Open decisions before item 6 (the user's):** Messages-first (FDA, hits the defining moment) vs
+  Gmail-first (OAuth only, no FDA); Google Calendar vs EventKit; Gmail via MCP vs native client.
+- **Considered and not added** (the bar holding): local ASR with the on-disk parakeet model (no
+  moment — PTT + Realtime owns speech), resident model server (grow-on-need stands), wake word,
+  remote surfaces, generic monitors, rerankers/graph recall.
+- **Example-person names retired.** "Mara" turned out to be an invented example name that five spec
+  passes kept reusing — the user (reasonably) kept asking who she was. All demos and examples now use
+  roles ("my sister", "the landlord"), and the vocabulary rule in CLAUDE.md/AGENTS.md now bans
+  invented person names outright. Roles are also simply better spec-writing here: they name the
+  relationship the mechanism serves, not a fictional cast member.
