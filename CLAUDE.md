@@ -26,10 +26,10 @@ conventions generalized past their assumptions.
   fleet, a team, or an untrusted insider fail this test by construction: those principals do
   not exist here.
 - **The friction economy (five rules, SPEC §cross-cutting; rule wins over phase text):**
-  friction follows irrecoverability — reversible acts announce-and-undo instead of asking;
-  track record only ever loosens gates, never manufactures new asks; at most one prompt per
-  action, decided by one pure `decide()`; effects attach to channels, not tools; no silent
-  negatives.
+  friction follows irrecoverability — reversible acts announce-and-undo instead of asking, and
+  track record only ever loosens gates (never a new ask); at most one prompt per action, decided
+  by one pure `decide()`; effects attach to channels, not tools; provenance is a per-task
+  source-set checked at the egress sinks; no silent negatives.
 - **Never build (standing rejections — SPEC's rejected lists are load-bearing, check them
   before proposing anything governance-shaped):** hash-chained/tamper-evident journals,
   statistical autonomy calibrators ahead of a felt need, policy-activation review beyond one
@@ -41,9 +41,10 @@ conventions generalized past their assumptions.
   rules" never "constitution"; `decide()` never `verdict()`; "track record" / "history" never
   "evidence" as gating vocabulary; "activation card" never "ceremony"; the user "approves",
   never "ratifies". Plain personal language over legal/compliance register, everywhere.
-- **Docs state the current design, only.** When a design changes, write the new state cleanly
-  as if it were always so — no "(previously X)" trails, no references to removals.
-  IMPLEMENTATION_NOTES holds dated build history; SPEC holds the present.
+- **Docs state the current design, not its history of removals.** When a design changes, write
+  the new state cleanly — no "(previously X)" trails or references to what was cut. Dated
+  provenance tags on the design itself (`(specced 2026-07-19)`, `(amended …)`) are fine and used
+  throughout SPEC; it's removal-narration that belongs only in IMPLEMENTATION_NOTES.
 
 ## Layout
 
@@ -182,8 +183,9 @@ conventions generalized past their assumptions.
   escalation stays as the semantic layer for approved-host sends (git push). Keep all routes.
 - Full rationale, the nesting/network trade-offs, and the egress-proxy verification are in
   IMPLEMENTATION_NOTES §M4.1 (REBUILT + the egress-proxy entry) — read it before touching
-  sandbox/secret-path/network handling. On SDK/CLI upgrade, re-run `m41-spike/` (incl.
-  `proxy-ship-verify.mjs` for the MCP-through-proxy check) as a gate.
+  sandbox/secret-path/network handling. On SDK/CLI upgrade, re-verify the sandbox spawn seam and
+  the MCP-through-proxy path (the M4.1 spike checks, described in IMPLEMENTATION_NOTES §M4.1) as a
+  gate.
 
 ## Working rules
 
