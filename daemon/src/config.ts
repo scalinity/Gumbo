@@ -227,6 +227,10 @@ export const config = {
     // own timeout must comfortably outlast confirmTimeoutMs — otherwise the CLI could kill the
     // hook mid-confirm and the escalate-class action could slip. Seconds at the SDK boundary.
     hookTimeoutMs: 120_000,
+    // Per-call budget for the supervisor model answering a Claude question. Must sit
+    // comfortably BELOW hookTimeoutMs so a hung gpt-5.6-terra degrades to the safe default
+    // (and releases nothing it shouldn't) before the CLI force-kills the whole hook.
+    supervisorTimeoutMs: 90_000,
     maxTurns: 100, // runaway backstop, not a working budget
     // Plan-before-execute (the user, 2026-07-16): a fresh session first runs read-only in
     // plan mode, surfaces its plan for approval, and only then edits. Follow-ups (resumes)

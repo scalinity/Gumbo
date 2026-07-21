@@ -398,8 +398,15 @@ export class Supervisor {
     // can't both pass the check above and both spend a model call.
     this.interventions += 1;
     let answer: string;
+    // Bound the model call (repo convention: every external call carries a timeout). A hung
+    // gpt-5.6-terra must degrade to the safe default BEFORE the PreToolUse hook is force-killed
+    // at hookTimeoutMs — a force-kill mid-await would leave this reserved slot spent forever.
+    // Combined with the task signal: a real cancel still aborts + rethrows below; a timeout
+    // leaves the task signal un-aborted, so it falls through to the degrade path (counts to cap).
+    const timeoutSignal = AbortSignal.timeout(config.claude.supervisorTimeoutMs);
+    const budgeted = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     try {
-      answer = await this.runModel(questions, signal);
+      answer = await this.runModel(questions, budgeted);
     } catch (err) {
       if (signal?.aborted) {
         // Task cancelled mid-call — not a real intervention; propagate the cancellation.
