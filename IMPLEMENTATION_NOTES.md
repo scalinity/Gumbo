@@ -2509,3 +2509,41 @@ reasoning + provenance recorded here, not in SPEC.
   before anyone verified the NEED for it — the same failure the SOTA-completeness critique named, one
   level up. Asking the user the one collapsing question ("do you require never-cloud, or accept an
   ask-once policy?") was worth more than a fourth design round, and it retired an entire branch.
+
+## M9–M17 capability trim — implementation boundaries made explicit (2026-07-21)
+
+Applied the final 17-item audit trim to the planned milestones. `SPEC.md` now states only the current
+design; this log keeps the audit provenance and reasons.
+
+- **The roadmap now starts from the user's moments and the accepted cloud boundary.** Cloud-model
+  ingress is a disclosure sink under a standing per-connector/data-class grant. Disclosure is
+  classified by what reaches a new recipient, not by HTTP method, and Rule 3 promises cheap undo only
+  where Gumbo mediates the operation: copy-on-first-write for files and a temp git ref for coding.
+  APFS remains a proven-later upgrade.
+- **M9/M10 shed speculative standing machinery.** Reflection runs only after a deterministic
+  candidate check, sends only candidate logs, exposes undoable deltas, and creates no default daily
+  summary. Standing-rule history replay is grow-on-need; activation stays one scoped, versioned,
+  undoable card.
+- **M11 separates a useful first connector from bulk-reduction infrastructure.** Base mail lookup
+  uses scoped, capped snippets and a real read-only Gmail OAuth token held in macOS Keychain. Local
+  bulk reduction waits for M15 and a measured volume, latency, cost, or disclosure problem.
+- **M12 is a three-state personal intention ledger.** `ARMED → TRIGGERED → CLOSED` covers the named
+  reminder/watch moments; sweeps promise only declared, connected channels. Receipt-backed outcome
+  closure arrives with the relevant M14 action channel rather than pretending read-only watches can
+  observe every result.
+- **M14 promises receipts and undo only at executors Gumbo controls.** Every shell, browser,
+  provider, and connector executor enforces the permit. Remote recovery journals exist only for
+  mutating clients and keep the minimum recovery arguments; local filesystem undo covers intercepted
+  writes, while opaque app/shell saves say undo is unavailable. The private-calendar demo now
+  act-and-announces because deletion is immediate, reliable, and free to compensate.
+- **M15's digest contract accounts for every input item.** It returns included/omitted IDs, counts,
+  and a manifest, with capped source snippets reachable on demand; without that accounting Gumbo
+  cannot claim no-loss reduction. Prompt-cache layout is ongoing provider discipline, not a reason to
+  build a local-model phase.
+- **M16 treats an opaque Shortcut as one declared effect.** Its identity, input schema, and maximum
+  consequence are classified before invocation; its internals do not inherit Gumbo's gates or
+  receipts. The first demo stays on one verified Things action, with Spotlight surfaces deferred.
+- **M17 evidence matches the modality and the answer's limits.** Images retain the relevant crop and
+  uncertainty; audio retains the analyzed time span and confidence. Raw media stays local while
+  extracted text may reach Realtime under the standing grant, and the beep demo explicitly refuses
+  to rule out an alarm from a short clip.
