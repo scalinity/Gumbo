@@ -125,20 +125,28 @@ HOW TO WORK (both lanes — the discipline is identical):
   until the finished image actually appears; only after a genuinely long stretch (well over a minute)
   with ZERO visual change is it a real stall. When in doubt, wait longer — a canceled render is the
   failure, the wait is not.
-- SAVING AN IMAGE in a web/Electron app (ChatGPT, etc., whose image is NOT in the AX tree): RIGHT-CLICK
-  THE CENTER OF THE IMAGE ITSELF — click_point button:"right" at the image's center from screen_look.
-  The image body is a big, forgiving target, and a right-click on it opens the NATIVE context menu with
-  "Save Image As…"; pick that and drive the save panel to ~/Pictures. Do NOT hunt for a "…"/three-dot/
-  overflow control — that is the MESSAGE menu (Branch in new chat, Retry, Copy) and has NO image-save.
-  Do NOT left-click or double-click the image hoping a save button appears — it does nothing useful or
-  opens a flaky preview. If your right-click shows only message actions, you hit a message, not the
-  image — right-click nearer the image's center and retry. (A NATIVE app exposes the image as an
-  Image @(x,y) line you target precisely; only webviews force this vision route.)
-- A blocking OVERLAY — a lightbox, or a QuickLook/preview panel (especially an empty "No items
-  selected" one) — swallows every click behind it, so your acts look like they land on nothing. The
-  moment one appears, DISMISS it FIRST: ax_act key "escape", or click its close/✕ button, then confirm
-  with a fresh screen_ocr/snapshot that it is gone BEFORE doing anything else. Never keep clicking
-  through an overlay.
+- SAVING AN IMAGE has SEVERAL routes, and you do NOT report "couldn't save" until you have tried more
+  than one. When a route dead-ends, BACK OUT (escape) and take the next — a single dead-end is not a
+  failed goal. In order of preference:
+  (1) RIGHT-CLICK THE IMAGE ITSELF — the simplest route; try it FIRST, the moment the render is done.
+  click_point button:"right" at the image's center from screen_look (a webview like ChatGPT hides the
+  image from the AX tree, so use the pixel center; a NATIVE app exposes it as an Image @(x,y) line you
+  target precisely). The image body is big and forgiving, and its native context menu has "Save Image
+  As…" → drive the save panel to ~/Pictures. If the right-click shows only message actions (Branch in
+  new chat, Retry, Copy), you hit the message, not the image — click nearer the image center and retry.
+  (2) The app's DOWNLOAD/EXPORT control (e.g. ChatGPT's circular down-arrow over the image). If it opens
+  a macOS Quick Look preview (buttons "Share file" / "Open with Preview", identifiers like #QLControlOpen),
+  press "OPEN WITH PREVIEW" — that hands the image to Preview.app, where File > Export… (or cmd+s) saves
+  it to ~/Pictures. Do NOT press "Share file": a Share sheet (AirDrop/Mail/Messages/Copy) has NO Save by
+  design — if you land in one, escape and use another route.
+  Do NOT hunt for a "…"/three-dot/overflow control (that is the MESSAGE menu, no image-save), and do NOT
+  left- or double-click the image hoping a save button appears.
+- A blocking OVERLAY — a lightbox, or an EMPTY QuickLook/preview panel ("No items selected") —
+  swallows every click behind it, so your acts look like they land on nothing. The moment one appears,
+  DISMISS it FIRST: ax_act key "escape", or click its close/✕ button, then confirm with a fresh
+  screen_ocr/snapshot that it is gone BEFORE doing anything else. Never keep clicking through an overlay.
+  (Exception: a Quick Look preview that actually SHOWS your image and offers "Open with Preview" is NOT
+  an obstacle — it is a save route; use it per the saving rule instead of dismissing it.)
 - SUCCESS-ONLY CLEANUP IS CONDITIONAL — and this OVERRIDES your brief. A teardown step — quit/close the
   app, "exit cleanly", clear a draft — runs ONLY if the real goal actually succeeded and you POSITIVELY
   verified it. Verified means you SAW the artifact — an 'ls'/'test' that shows the saved file on disk at
