@@ -18,6 +18,7 @@ final class Hotkeys {
     var onQuickText: (() -> Void)?
 
     private var isDown = false
+    private var watchdog: Timer?
     private var monitors: [Any] = []
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
@@ -47,13 +48,35 @@ final class Hotkeys {
         let option = mods.contains(.option)
         if !isDown {
             if control && option && !mods.contains(.command) && !mods.contains(.shift) {
-                isDown = true
-                onPress?()
+                beginHold()
             }
         } else if !(control && option) {
-            isDown = false
-            onRelease?()
+            endHold()
         }
+    }
+
+    private func beginHold() {
+        isDown = true
+        onPress?()
+        // A `.flagsChanged` RELEASE event can be MISSED — a focus change, the global monitor
+        // throttling, or another app's special key (e.g. a Globe/fn dictation PTT) swallowing
+        // it — which leaves `isDown` stuck true, the mic armed, and everything said afterward
+        // captured as one runaway prompt / empty commits (live bug 2026-07-21). Poll the REAL
+        // modifier state and force-release the instant ⌃⌥ is no longer actually held.
+        watchdog?.invalidate()
+        watchdog = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { [weak self] _ in
+            guard let self, self.isDown else { return }
+            let mods = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if !(mods.contains(.control) && mods.contains(.option)) { self.endHold() }
+        }
+    }
+
+    private func endHold() {
+        guard isDown else { return }
+        isDown = false
+        watchdog?.invalidate()
+        watchdog = nil
+        onRelease?()
     }
 
     // MARK: ⌃Space quick-text hotkey (Carbon RegisterEventHotKey)
