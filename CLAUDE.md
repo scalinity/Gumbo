@@ -1,9 +1,49 @@
 # Gumbo — repo guide for Claude sessions
 
-Gumbo is the user's personal macOS voice agent. Design source-of-truth is [`SPEC.md`](./SPEC.md);
-running changelog + field notes live in [`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md) —
+Gumbo is a personal, always-alive macOS voice agent for a single user — the user — on this one
+machine. Talk to it; it orchestrates background sub-agents, supervises Claude Code sessions,
+generates images, sets reminders, and drives the Mac itself, all from the notch. Capability,
+efficiency, and presence are the product. Its gating stack (policy table + Seatbelt + egress
+proxy + notch confirms) exists to make MORE autonomy safe to ship — safety machinery here buys
+autonomy, it never spends it on governance for its own sake.
+
+Design source-of-truth is [`SPEC.md`](./SPEC.md) (M1–M7 built and merged; M8 built on a worktree,
+pending live demos + merge; M9–M17 planned); running build log + field notes live in
+[`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md) —
 **read it before building anything**, and append dated bullets there when you learn something
 non-obvious (record *why*, not just *what*).
+
+## What this is — and what it must never become
+
+One principal, one machine, ~five action channels, ~five egress sinks, a voice surface, cheap
+undo. Every design decision flows from that shape — never from internet or enterprise
+conventions generalized past their assumptions.
+
+- **The the user-moment test (the binding build filter, SPEC §cross-cutting):** before building
+  any sub-item, name the concrete moment in the user's day it serves — "what did Mara text me",
+  "undo that", "what's this beeping", "stop asking about this". "A paper recommended it" /
+  "the field converged here" is context, never a reason. Mechanisms whose real audience is a
+  fleet, a team, or an untrusted insider fail this test by construction: those principals do
+  not exist here.
+- **The friction economy (five rules, SPEC §cross-cutting; rule wins over phase text):**
+  friction follows irrecoverability — reversible acts announce-and-undo instead of asking;
+  track record only ever loosens gates, never manufactures new asks; at most one prompt per
+  action, decided by one pure `decide()`; effects attach to channels, not tools; no silent
+  negatives.
+- **Never build (standing rejections — SPEC's rejected lists are load-bearing, check them
+  before proposing anything governance-shaped):** hash-chained/tamper-evident journals,
+  statistical autonomy calibrators ahead of a felt need, policy-activation review beyond one
+  confirm card, workflow-engine state breadth for personal intentions, up-front
+  memory-curation/lineage machinery, platform-first substrate sequencing (effect layers arrive
+  per channel), and everything on SPEC's out-of-scope list (telemetry, multi-tenant anything,
+  payment rails, remote surfaces).
+- **Vocabulary (binding, docs and code alike):** "rules" never "laws"; "the user's standing
+  rules" never "constitution"; `decide()` never `verdict()`; "track record" / "history" never
+  "evidence" as gating vocabulary; "activation card" never "ceremony"; the user "approves",
+  never "ratifies". Plain personal language over legal/compliance register, everywhere.
+- **Docs state the current design, only.** When a design changes, write the new state cleanly
+  as if it were always so — no "(previously X)" trails, no references to removals.
+  IMPLEMENTATION_NOTES holds dated build history; SPEC holds the present.
 
 ## Layout
 
@@ -154,4 +194,5 @@ non-obvious (record *why*, not just *what*).
   properties or other non-erasable syntax).
 - Sandboxed runs can't write `~/Gumbo`; set `GUMBO_HOME=<scratchpad>` (and `GUMBO_PORT` to avoid
   colliding with a live daemon on 8737).
-- Gumbo addresses the user as **the user**. Minimal implementations only — no speculative features.
+- Gumbo addresses the user as **the user**. Minimal implementations only — no speculative features;
+  when in doubt, apply the the user-moment test.
