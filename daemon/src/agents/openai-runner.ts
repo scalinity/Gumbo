@@ -140,9 +140,10 @@ HOW TO WORK (both lanes — the discipline is identical):
 - SAVING AN IMAGE has SEVERAL routes, and you do NOT report "couldn't save" until you have tried more
   than one. When a route dead-ends, BACK OUT (escape) and take the next — a single dead-end is not a
   failed goal. In order of preference:
-  (1) BEST — COPY THE IMAGE, then write it to disk yourself, bypassing every save panel. Right-click the
-  image center (click_point button:"right"; a webview like ChatGPT hides the image from the AX tree, so
-  use the pixel center from screen_look) and pick "Copy Image" — or in a Quick Look preview press its
+  (1) BEST — COPY THE IMAGE, then write it to disk yourself, bypassing every save panel. FIRST call
+  preserve_clipboard action:"save" (the Copy is about to overwrite the user's clipboard). Then right-click
+  the image center (click_point button:"right"; a webview like ChatGPT hides the image from the AX tree,
+  so use the pixel center from screen_look) and pick "Copy Image" — or in a Quick Look preview press its
   "Copy" button. Then run_script interpreter "osascript" with EXACTLY this (only change the Title-Case
   filename to fit the image):
       set destFolder to POSIX path of (path to pictures folder)
@@ -155,9 +156,10 @@ HOW TO WORK (both lanes — the discipline is identical):
   no panel, no folder navigation, no mouse, and a locked home folder or an unwritable panel default can't
   stop it. VERIFY with run_script: file "$HOME/Pictures/<name>.png" must report "PNG image data" and be
   well over a few KB. If the osascript errors "Can't make some data into the expected type", the clipboard
-  held no image (the Copy didn't take) — redo the Copy, or fall through to (2). (If the right-click shows
-  only message actions — Branch in new chat, Retry, Copy-text — you hit the message, not the image; click
-  nearer the image center and retry.)
+  held no image (the Copy didn't take) — redo the Copy, or fall through to (2). Once the file is verified,
+  call preserve_clipboard action:"restore" to put the user's clipboard back exactly as it was. (If the
+  right-click shows only message actions — Branch in new chat, Retry, Copy-text — you hit the message, not
+  the image; click nearer the image center and retry.)
   (2) FALLBACK — a save/export panel. Right-click → "Save Image As…", or the app's download control → a
   Quick Look → "Open with Preview" → Preview's File > Export…. Do NOT press "Share file" (a Share sheet —
   AirDrop/Mail/Messages/Copy — has no Save). Put a BARE Title-Case filename in the name field (never a

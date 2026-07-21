@@ -34,6 +34,8 @@ export type MacAction =
   | { kind: 'screenshot'; app: string | null; region: [number, number, number, number] | null; out_path: string } // PNG to a daemon-supplied workspace path
   | { kind: 'point'; verb: 'click' | 'double_click' | 'right_click'; x: number; y: number } // vision-lane action at global point coords
   | { kind: 'cursor_to'; x: number; y: number } // pure visualization: fly the ghost cursor (browser-lane acts ride CDP, not HID — the ghost is their only visible trace)
+  | { kind: 'clipboard_snapshot' } // M8 image-save: losslessly save the user's clipboard before a "Copy Image" clobbers it
+  | { kind: 'clipboard_restore' } // M8 image-save: put the saved clipboard back after the file is written+verified
   | { kind: 'activate'; app: string } // bring an app to the FRONT via the shell's AX grant (the system suppresses plain open/activate — Foreground.swift)
   // M8 teaching: flip the shell's kill-switch tap into RECORD mode — the user's untagged
   // input becomes the demonstration (streamed back as teach_event), never an abort. The

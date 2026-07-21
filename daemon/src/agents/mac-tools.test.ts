@@ -42,7 +42,7 @@ test('the AX toolset exposes exactly the sub-agent primitives (M7 adds vision ru
   const names = tools(fakeBridge(() => ({ ok: true, output: '' }))).map((t) => t.name);
   assert.deepEqual(
     names.sort(),
-    ['ax_act', 'ax_query', 'ax_snapshot', 'check_permissions', 'focus_app', 'run_script', 'screen_ocr', 'screen_look', 'click_point', 'request_handoff'].sort(),
+    ['ax_act', 'ax_query', 'ax_snapshot', 'check_permissions', 'focus_app', 'run_script', 'screen_ocr', 'screen_look', 'click_point', 'request_handoff', 'preserve_clipboard'].sort(),
   );
 });
 

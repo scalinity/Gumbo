@@ -55,7 +55,17 @@ final class MacBridge {
             return true
         case "mac_task":
             let active = msg["active"] as? Bool ?? false
-            DispatchQueue.main.async { active ? self.armSession() : self.disarmSession() }
+            DispatchQueue.main.async {
+                if active {
+                    self.armSession()
+                } else {
+                    self.disarmSession()
+                    // Safety net (M8): if a save flow snapshotted the clipboard but the run
+                    // ended before it restored, put the user's clipboard back now. No-op if the
+                    // model already restored, or if nothing was snapshotted.
+                    PasteboardSnapshot.restore()
+                }
+            }
             return true
         case "mac_handoff":
             // M7: the user is doing a step himself — stand the kill switch down and hide
@@ -120,6 +130,18 @@ final class MacBridge {
                 result = resolved != nil
                     ? AXResult(ok: true, output: "Opened \"\(resolved!)\".", errorKind: nil, health: nil).wire()
                     : AXResult.failure("element_not_found", "No running or installed app matches \"\(app)\".").wire()
+            case "clipboard_snapshot":
+                // M8 image-save: preserve the user's clipboard before a "Copy Image" clobbers
+                // it. Main-thread (AppKit pasteboard), synchronous so the ack is truthful.
+                result = DispatchQueue.main.sync {
+                    PasteboardSnapshot.snapshot()
+                    return AXResult(ok: true, output: "clipboard saved", errorKind: nil, health: nil).wire()
+                }
+            case "clipboard_restore":
+                result = DispatchQueue.main.sync {
+                    PasteboardSnapshot.restore()
+                    return AXResult(ok: true, output: "clipboard restored", errorKind: nil, health: nil).wire()
+                }
             case "cursor_to":
                 // M7 browser-lane cursor continuity: in-page acts happen over CDP (no HID
                 // at all), so the ghost is their only visible trace. Fire-and-forget.

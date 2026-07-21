@@ -372,5 +372,23 @@ export function createMacTools(
     },
   });
 
-  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, focusApp, screenOcr, screenLook, clickPoint, requestHandoff];
+  const preserveClipboard = tool({
+    name: 'preserve_clipboard',
+    description:
+      "Save or restore the user's clipboard losslessly (every type — text, image, files). Call " +
+      "action:'save' RIGHT BEFORE you Copy an image to save it (the Copy overwrites his clipboard), " +
+      "then action:'restore' AFTER the file is written and verified — so his clipboard ends up exactly " +
+      'as he left it. It changes nothing on disk and needs no approval. Safety net: if you forget to ' +
+      'restore, his clipboard is restored automatically when the task ends.',
+    parameters: z.object({ action: z.enum(['save', 'restore']) }),
+    async execute({ action }) {
+      const result = await macBridge.request(
+        { kind: action === 'save' ? 'clipboard_snapshot' : 'clipboard_restore' },
+        { signal },
+      );
+      return present(result);
+    },
+  });
+
+  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, focusApp, screenOcr, screenLook, clickPoint, requestHandoff, preserveClipboard];
 }
