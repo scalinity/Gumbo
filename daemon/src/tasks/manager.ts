@@ -740,6 +740,13 @@ export class TaskManager {
     return false;
   }
 
+  /** True while any spawned task or teaching session is still in flight. The realtime session
+   *  stays alive across this so a completion announces through the live, OWNING path — not the
+   *  canned cold TTS, which can only read a fixed line and can't retry/fix a failure. */
+  hasActiveTasks(): boolean {
+    return this.aborts.size > 0;
+  }
+
   readReport(id: string): string | null {
     const task = this.store.getTask(id);
     if (!task) return null;

@@ -204,8 +204,10 @@ export class Orchestrator {
   private resetIdleTimer() {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
-      // Never tear the session down while the user is still hearing it speak.
-      if (this.shellDraining) this.resetIdleTimer();
+      // Never tear the session down while the user is still hearing it speak, OR while a task he
+      // just spawned is still running — its completion must come back through the live, OWNING
+      // announce path (the cold TTS fallback can only read a canned line, it can't retry/fix).
+      if (this.shellDraining || this.manager.hasActiveTasks()) this.resetIdleTimer();
       else this.closeSession();
     }, config.sessionIdleMs);
   }
