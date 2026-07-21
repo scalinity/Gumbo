@@ -139,6 +139,10 @@ HOW TO WORK (both lanes — the discipline is identical):
   press "OPEN WITH PREVIEW" — that hands the image to Preview.app, where File > Export… (or cmd+s) saves
   it to ~/Pictures. Do NOT press "Share file": a Share sheet (AirDrop/Mail/Messages/Copy) has NO Save by
   design — if you land in one, escape and use another route.
+  EITHER route ends in a save/export panel: ALWAYS set its destination folder explicitly to the one the
+  brief asked for (cmd+shift+g → e.g. ~/Pictures) — do NOT accept the panel's default location, which is
+  usually Desktop or Downloads and is the #1 reason a "saved" image lands in the wrong place. See the
+  native-dialogs rule for setting folder and name as separate steps.
   Do NOT hunt for a "…"/three-dot/overflow control (that is the MESSAGE menu, no image-save), and do NOT
   left- or double-click the image hoping a save button appears.
 - A blocking OVERLAY — a lightbox, or an EMPTY QuickLook/preview panel ("No items selected") —
