@@ -26,7 +26,14 @@ export class Hub {
       verifyClient: ({ origin }: { origin?: string }) =>
         origin === undefined || config.allowedOrigins.includes(origin),
     });
+    // A connection emits 'error' on ECONNRESET/EPIPE and on a failed send; Node throws if
+    // 'error' has no listener, and the daemon has no uncaughtException net — so one stray
+    // socket reset (a dashboard tab crash, a broadcast mid-close) would crash the WHOLE
+    // daemon (voice, tasks, scheduler). Same guard the egress proxy already carries. Cleanup
+    // rides the paired 'close' event, which still fires after 'error'.
+    wss.on('error', () => {});
     wss.on('connection', (socket) => {
+      socket.on('error', () => {});
       socket.on('message', (data, isBinary) => {
         if (isBinary) {
           const role = this.clients.get(socket);
@@ -88,7 +95,9 @@ export class Hub {
   sendBinary(frame: Uint8Array, to: ClientRole) {
     for (const [socket, role] of this.clients) {
       if (role !== to) continue;
-      if (socket.readyState === WebSocket.OPEN) socket.send(frame, { binary: true });
+      // Callback swallows a write error (e.g. a socket that closed between the readyState
+      // check and the send) so it doesn't surface as a connection 'error' event.
+      if (socket.readyState === WebSocket.OPEN) socket.send(frame, { binary: true }, () => {});
     }
   }
 
@@ -96,7 +105,7 @@ export class Hub {
     const data = JSON.stringify(msg);
     for (const [socket, role] of this.clients) {
       if (to !== 'all' && role !== to) continue;
-      if (socket.readyState === WebSocket.OPEN) socket.send(data);
+      if (socket.readyState === WebSocket.OPEN) socket.send(data, () => {});
     }
   }
 }
