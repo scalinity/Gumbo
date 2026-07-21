@@ -2453,3 +2453,59 @@ each verified live; one real OS finding worth recording.
   resolve through `NSApp.mainMenu`, which an LSUIElement app never gets for free — installed a
   minimal invisible main menu holding just Quit. (Corollary for later: ⌘C/⌘V in the webview
   composer likely need an Edit menu the same way.)
+
+## M9–M17 convergence fold — third audit pass + the user's cloud decision → SPEC amendments (2026-07-21)
+
+A third audit of the M9–M17 arc (a capability audit, a critique of it, and a resolution) converged
+and was folded into SPEC. Method as before: amend phases in place to the converged state cleanly;
+reasoning + provenance recorded here, not in SPEC.
+
+- **The load-bearing catch — the cloud model is itself a disclosure sink.** The Realtime orchestrator
+  receives every tool result it reasons about, so connector content, injected memory, local-model
+  summaries, and M17 extracted text reach OpenAI by construction; a source check *after* the tool
+  call is too late. This was missed by the earlier passes (they trusted SPEC's "five egress sinks"
+  framing) and re-derived by auditing the sink *categories*, not just their contents. Folded into
+  Rule 4 (model ingress is a sink) and Rule 2 (disclosure, not HTTP method, is the irreversible
+  axis).
+- **the user's decision (2026-07-21): cloud processing ACCEPTED**, under a one-time per-connector/
+  data-class standing grant, designed for **least disclosure** (OpenAI's own data-minimization
+  guidance made structural). This collapses the hard branch: the local-private ORCHESTRATION lane is
+  NOT built — it would be a second brain (local ASR + intent + reasoning + TTS), which §2 locks
+  against and M15 forbids itself from being; and with cloud accepted it has no requirement to serve.
+  M11 rewritten around the least-disclosure invariant (scope-at-source → project → progressive
+  disclosure → daemon caps → local bulk-reduction → content-light audit); M15 reclassified from an
+  offline/private tier to a **disclosure REDUCER** (its concrete first job = the M11 digest), which
+  is the role that survives every objection under branch A.
+- **Injection-defense: refined, not deferred wholesale.** The critique's "don't wait for a live
+  miss" was accepted; the resolution sharpened the trigger to *demonstrated effectiveness against an
+  offline corpus before shipping* (not "ship because injection is real" — which would have kept an
+  in-band, model-mediated quarantine transform on injection grounds, contradicting the out-of-band
+  thesis). Three mechanisms split: (a) tainted shell → a NARROWER backstop (taint is a fact feeding
+  `decide()`, biting only on an *unclassified* effect; provably read-only/recoverable run even when
+  tainted), not a separate "confirm every command" gate; (b) quarantine summarization → evaluate
+  vs the corpus predeployment, never loosens a gate; (c) list-wise claim check → reclassified as
+  research ACCURACY (deterministic "were these source IDs actually fetched" + a narrow semantic check
+  for source-dependent reports), not injection defense, and never blocks a basic finished announce.
+- **Other converged corrections:** compensation *cost* not category (free/reliable/immediate →
+  announce); effect class per-ACTION not per-tool (`browser_act`); M9 always-in-context memory
+  restricted to benign persona (sensitive retrieved on demand, so it doesn't pre-taint every task);
+  the duplicate boolean `tainted` flag dropped (source-set supplies it); verbatim-URL provenance done
+  STRUCTURALLY (did a tool observe the link?) not by byte-scanning task history; M12 explicit-arm-only
+  (no generic "interesting-signal" watcher, no default X/news fan-out); M14 renamed off "universal
+  undo," APFS demoted to a spike (touched-file backups + git temp refs ship first), generic browser
+  submit records `unknown` + stops; M16 one-app-first + feasibility-gate + defer the inbound suite;
+  M17 soft duration cap, drop capture hashes, remove PTT-time scene inference.
+- **M13 demoted from a sequential milestone to cross-cutting learning/regression discipline**, its
+  deliverables relocated with explicit owners (lessons + procedure promotion → M8; graduation → M10/
+  M14; routing regression → tool-registry tests; injection corpus → M10/M14 gate tests; claim/source
+  verification → the research-task contract). "Dissolve" meant delete the phase, keep every
+  deliverable — a standalone "self-improvement" phase implied a user feature that isn't there.
+- **Arc reframed** off "SOTA-completeness / both reports converged" as a build criterion → a
+  personal-capability roadmap sequenced by vertical daily value (minimal M9 → first M11 connector →
+  its one explicit M12 watch → M14 receipts/undo for the first mutating channel; provenance + effects
+  added at each real sink/effect, not as broad read-only platform blocks). Research explains
+  mechanisms; the the user-moment test sets scope.
+- **The meta-lesson recorded:** three expert passes optimized the DESIGN of the local-private branch
+  before anyone verified the NEED for it — the same failure the SOTA-completeness critique named, one
+  level up. Asking the user the one collapsing question ("do you require never-cloud, or accept an
+  ask-once policy?") was worth more than a fourth design round, and it retired an entire branch.

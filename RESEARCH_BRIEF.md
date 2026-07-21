@@ -14,7 +14,9 @@ covered ground so it spends effort on the frontier. Milestone source of truth: S
 the "Deferred / out of scope" and IMPLEMENTATION_NOTES §"M9–M13 gap analysis" + §"M9–M17
 external-research fold" anti-recommendations.
 
-**Last synced:** 2026-07-21 (against SPEC.md through M17). Since the 07-19 version: computer-use v2
+**Last synced:** 2026-07-21 (against SPEC.md through M17; convergence fold applied — model ingress is
+a disclosure sink, cloud accepted + least-disclosure connectors, M13 demoted to cross-cutting
+discipline, M15 = disclosure reducer not offline lane). Since the 07-19 version: computer-use v2
 (M7: browser lane on a persistent automation profile, vision lane, cooperative handoff, voice
 steering) moved Planned → BUILT; the first external run of this brief (Claude Research + ChatGPT)
 was folded into SPEC, adding to PLANNED: M14 transactional effects + universal undo (effect
@@ -142,6 +144,13 @@ DELIBERATELY REJECTED (each was evaluated and declined — do NOT propose these)
   principal that doesn't exist here (a fleet, a team, an untrusted insider); the capability ships
   without them. (The calibrator and the curation logic are deferred-until-felt, not permanently
   rejected — built only on a demonstrated need, per SPEC M13/M9; the rest stay rejected.)
+- A local-private ORCHESTRATION lane that bypasses the cloud voice model (local ASR + intent +
+  reasoning + TTS). It is a second brain — SPEC §2 locks the Realtime model as sole orchestrator —
+  and the user has ACCEPTED cloud processing of connector/personal data under a one-time, per-data-class
+  standing grant designed for least disclosure (scoped projections, not bulk). The local model's role
+  is a disclosure REDUCER (shrink payloads before the cloud sees them), never an offline private
+  orchestrator. The cloud orchestrator is itself a disclosure sink; minimization at the boundary, not
+  an on-device voice agent, is the design.
 
 ═══════════════════════════════════════════════════════════════════════
 HARD CONSTRAINTS (a recommendation that violates these is out of scope — say so)

@@ -629,7 +629,7 @@ self-organization (archiving / reorganizing its home).
 
 ---
 
-## M9–M17 — SOTA completeness arc (specced 2026-07-19; extended 2026-07-20)
+## M9–M17 — Personal-capability roadmap (specced 2026-07-19; extended 2026-07-20; converged 2026-07-21)
 
 M1–M8 built a voice agent that *acts* — on the web, the Mac, and code — under strong containment.
 Two parallel Fable research passes (one on frontier techniques/papers, one on the OSS/product
@@ -656,13 +656,36 @@ from `RESEARCH_BRIEF.md`) were folded in. Where they converged with M9–M13, th
 amended in place; four genuinely new directions became M14–M17. Both reports flagged that several
 of their strongest sources (PM-Bench, AgentAbstain, ACRFence, MemGate, transaction-closure) are
 2026 preprints — directional signals, not settled findings; the SPEC treats them accordingly.
-M14 is the keystone of the extension (its effect journal underlies M12's outcome closure and
-M13's replay fixtures) and lands per channel from M10 onward; M15–M17 are independent and
-opportunistic.
+M14 is the keystone of the extension (its effect journal underlies M12's outcome closure and the
+regression/replay fixtures now relocated out of M13) and lands per channel from M10 onward; M15–M17
+are independent and opportunistic.
 
 **Same-day review pass (2026-07-20):** the user asked which additions were limitations in disguise;
 four real costs surfaced, and rather than recording mitigations the arc was REDESIGNED under five
 cross-cutting rules (next section). Where any phase's text conflicts with a rule, **the rule wins.**
+
+**Convergence fold (2026-07-21):** a third pass — a capability audit, a critique of it, and a
+resolution — converged, and its conclusions are folded into the phases below. Four bind the whole
+arc:
+- **Scope is set by the user-moments and daily value, not by research convergence.** Research
+  explains mechanisms; it does not create milestones. "Both reports agreed" is not a build reason —
+  the the user-moment test is.
+- **The cloud model is itself a disclosure sink.** The Realtime orchestrator receives every tool
+  result it reasons about, so connector content, injected memory, local-model summaries, and M17's
+  extracted text reach the cloud by construction — a source check *after* the tool call is too
+  late. the user's decision (2026-07-21): **cloud processing is accepted** under a one-time
+  per-connector/data-class standing policy, designed for **least disclosure** — the daemon returns
+  the smallest projection sufficient for the turn (M11). This retires the local-private-orchestrator
+  branch (it would be a second brain, which M15 forbids and §2 locks against); M15's local tier
+  becomes an exposure *reducer*, not an offline lane.
+- **Sequenced by vertical daily value, not by platform layer.** Minimal M9 memory → the first M11
+  connector the user wants most → its one explicit M12 watch → M14 receipts/undo for the first
+  mutating channel — with M10 provenance and M14 effects added at each *real* sink/effect as it
+  arrives, never as a broad phase that blocks capability behind read-only plumbing.
+- **M13 is not a sequential milestone.** Its deliverables are cross-cutting learning/regression
+  discipline, relocated to the phases that own them (see M13).
+
+These win over any conflicting phase text, exactly as the five rules do.
 
 ### Cross-cutting architecture: the friction economy (2026-07-20)
 
@@ -684,16 +707,22 @@ pure over enumerable facts, the interaction matrix is a table-driven `node --tes
 fact combinations asserting one-decision/no-double-prompt — so gate collisions become test failures
 instead of live-demo surprises.
 
-**Rule 2 — Friction follows irrecoverability; egress is irreversible.** Prompts are priced by the
-cost of being wrong — never by novelty, category, or provenance alone. Reversible + receipted →
-`announce`: act, say what happened in one sentence, keep "undo that" armed — even when tainted,
-even on day one. `confirm` is reserved for compensatable/irreversible effects. Information leaving
-the machine (send, POST, form submit, a URL constructed from task-read content — not one found
-verbatim on a page, see M10) is irreversible BY INFORMATION regardless of local state — the M7
-literal-URL rule generalized — which is what keeps
-injection blast radius on the auto/announce tiers bounded to recoverable local state. Track
-record only ever LOOSENS: cold start equals the status quo's gates; nothing ever earns a new
-prompt for being new.
+**Rule 2 — Friction follows irrecoverability; disclosure is the irreversible axis.** Prompts are
+priced by the cost of being wrong — never by novelty, category, HTTP method, or provenance alone.
+Reversible → `announce`: act, say what happened in one sentence, keep "undo that" armed — even when
+tainted, even on day one. A compensatable effect is priced by its COMPENSATION cost, not its
+category: a free, reliable, immediate compensation (removing a private calendar event with no
+invitees) `announce`s and stays undoable; `confirm` is reserved for compensation that is costly,
+uncertain, time-limited, or itself discloses. The irreversible axis is **new disclosure** — private
+or task-derived information reaching a recipient or service not already entailed by the user's request
+or a standing rule. That boundary is the transport-independent one: a read-only search API over POST
+discloses nothing new, while a GET URL constructed from task-read content (not one found verbatim on
+a page, see M10) leaks. New disclosure is irreversible by information regardless of local state —
+the M7 literal-URL rule generalized — which keeps injection blast radius on the auto/announce tiers
+bounded to recoverable local state. The cloud orchestrator is itself a disclosure sink (fold note
+above, M11): the least-disclosure projection is how a connector read stays inside the user's standing
+cloud-processing grant. Track record only ever LOOSENS: cold start equals the status quo's gates;
+nothing ever earns a new prompt for being new.
 
 **Rule 3 — Effects attach to channels, not tools.** Five action channels carry defaults, so every
 tool inherits preview/receipt/undo/verify from its channel for free: filesystem (APFS snapshot +
@@ -709,14 +738,18 @@ one-liner before; announce-class speaks the receipt after. A new tool costs what
 
 **Rule 4 — Provenance is a task source-set, checked at sinks.** No per-value labels plumbed through
 model context. Each task keeps a monotone source-set of origins ingested (user | web:host |
-screen:app | file:path | memory:sensitivity-class); the ~five egress sinks check it at the
-boundary, plus a containment check that secret-class material read this task is not inside an
-outbound payload. Tainted egress defaults to an INFORMED CONFIRM ("this draft contains text from
-nytimes.com — send?"), not a deny. Precedence: hard limits (secrets never egress unconfirmed;
-no payment authority; TCC untouched) > defaults > the user's standing rules adjust everything
-between — they pre-approve his own recurring flows (trusted recipients, known patterns),
-which is where the read-web→send tax goes to die. Source-sets reset per task; creep is
-structurally impossible.
+screen:app | file:path | memory:sensitivity-class); the egress sinks check it at the boundary, plus
+a containment check that secret-class material read this task is not inside an outbound payload. The
+sinks are the outbound-action ones (send / POST / form-submit / a constructed URL) AND **the cloud
+orchestrator itself** — returning a tool result to the Realtime model is a disclosure, so a
+connector read is governed by the user's standing cloud-processing grant and is minimized to the
+least-disclosure projection (M11), never shipped whole. Tainted egress defaults to an INFORMED
+CONFIRM ("this draft contains text from nytimes.com — send?"), not a deny. Precedence: hard limits
+(secrets never egress unconfirmed; no payment authority; TCC untouched) sit above everything, and a
+standing rule may LOOSEN a default but never cross a hard limit or unlock what the shell can't do;
+between the hard limits and the defaults, the user's standing rules pre-approve his own recurring
+flows (trusted recipients, known patterns), which is where the read-web→send tax goes to die.
+Source-sets reset per task; creep is structurally impossible.
 
 **Rule 5 — No silent negatives.** Any cheap filter (local-model triage, channel-indexed intention
 triggers) degrades to "caught by the next sweep," never to nothing: a local "uninteresting" still
@@ -747,21 +780,29 @@ and a memory table but never *learns the user*: preferences stated by voice evap
 are stored but never distilled, and the event log is replayed for session continuity yet never
 mined. This is the phase that makes "personal" true — and it introduces no new infrastructure.
 
-- **Core-memory blocks (self-editing, always in context).** 3–5 pinned rows in the memory table — a
-  user profile, durable preferences, active projects/people — that the orchestrator edits with a new
-  daemon-side `remember`/`update_memory` realtime tool and that are injected into the realtime session
-  instructions at connect (the session-rebuild-from-event-log path is exactly where they belong).
-  MemGPT/Letta's self-editing memory ([arxiv 2310.08560](https://arxiv.org/abs/2310.08560)) minus the
-  server and paging. The blocks are small and human-readable — the user inspects and corrects them in
-  the dashboard.
+- **Core-memory blocks (self-editing) — but only the benign block is always in context.** A tiny
+  always-present block holds low-sensitivity persona/preferences (how the user likes answers, aisle
+  seats) and is injected into the realtime session instructions at connect. Sensitive classes —
+  active people, projects, addresses — are **retrieved on demand** when a turn is actually about
+  them, NOT pre-injected: because the cloud orchestrator is a disclosure sink (Rule 4), injecting
+  people/projects into every session would make every task disclose personal memory and recreate the
+  source-creep M10 exists to prevent. The orchestrator edits blocks with a daemon-side
+  `remember`/`update_memory` realtime tool; retrieval of sensitive memory rides `search_memory`
+  (below). MemGPT/Letta's self-editing memory ([arxiv 2310.08560](https://arxiv.org/abs/2310.08560))
+  minus the server and paging. Blocks are small and human-readable — the user inspects and corrects
+  them in the dashboard.
 - **Sleep-time reflection as a scheduler consumer (`kind: 'reflection'`).** The generic scheduler
-  `kind` seam ships its designed third consumer (reminder → routine → reflection): a nightly job feeds
+  `kind` seam ships its designed third consumer (reminder → routine → reflection): a job that feeds
   the day's event log + finished-task reports through the existing background sub-agent runner (cheap
-  model) and emits (a) consolidated memory rows, (b) core-block updates, (c) a one-paragraph episodic
-  day summary. **Consolidate, never blind-append** — mem0's extract→update/merge/supersede
-  ([arxiv 2504.19413](https://arxiv.org/abs/2504.19413); sleep-time compute
-  [2504.13171](https://arxiv.org/abs/2504.13171)). Reflection runs while Gumbo is idle, so interactive
-  turns start pre-digested.
+  model) and emits (a) consolidated memory rows, (b) proposed core-block updates, (c) a
+  one-paragraph episodic day summary. Three bounds keep it minimal (2026-07-21): it runs **only when
+  there are meaningful candidates** to consolidate, not unconditionally every night; every change
+  lands as a **visible, undoable delta** (never an automatic silent core-block rewrite); and it
+  **never silently establishes a sensitive belief** — a new high-impact/sensitive claim is proposed
+  for confirmation, not asserted. **Consolidate, never blind-append** — mem0's
+  extract→update/merge/supersede ([arxiv 2504.19413](https://arxiv.org/abs/2504.19413); sleep-time
+  compute [2504.13171](https://arxiv.org/abs/2504.13171)). Reflection runs while Gumbo is idle, so
+  interactive turns start pre-digested.
 - **Hybrid semantic recall.** FTS5 keyword recall fails on paraphrase ("that pergola thing" vs a
   stored "patio cover"). Two steps: (1) a `search_memory` realtime tool over the existing FTS5 — zero
   new infra, immediate voice-reachable recall; (2) sqlite-vec alongside FTS5 (node:sqlite loads
@@ -822,18 +863,21 @@ monitors, information-flow labels) held under defense-aware attack while in-band
 >90% ([arxiv 2606.26479](https://arxiv.org/abs/2606.26479)). Gumbo's gates are already that family;
 they're just missing provenance.
 
-- **Taint as a task-level bit, not an interpreter.** Every tool result already flows through the
-  daemon — stamp each with a source class (`user | web | screen | file`) in the event log. The first
-  `web`/`screen` ingestion flips the task's `tainted` flag. Biba-style integrity labeling grafted onto
-  existing gates — days, not weeks — not a CaMeL-style plan interpreter.
+- **Taint as the task source-set, not a separate flag or an interpreter.** Every tool result already
+  flows through the daemon — stamp each with a source class (`user | web:host | screen:app |
+  file:path`) into the task's source-set (Rule 4). "Tainted" is the *derived fact* that the
+  source-set holds an untrusted origin — there is NO separate boolean `tainted` field to keep in sync
+  (the source-set already supplies it; a second representation would only drift). Biba-style
+  integrity labeling grafted onto existing gates — days, not weeks — not a CaMeL-style plan
+  interpreter.
 - **Upgrade path: two AXES, carried by the task, checked at the sinks (amended 2026-07-20;
   redesigned same day under Rule 4).** Both external reports landed on FIDES-style label lattices
   ([arxiv 2505.23643](https://arxiv.org/abs/2505.23643)) — the right *idea* (confidentiality and
   integrity are different questions) in the wrong *shape* for n-of-1: per-value labels plumbed
   through model context are multi-principal machinery, and join-toward-restrictive converges on
   everything-untrusted within a week (the read-web→send tax). Gumbo instead keeps Rule 4's task
-  source-set — integrity axis = which untrusted origins this task read (the taint bit above,
-  pluralized to `web:host / screen:app / file:path`); confidentiality axis = which sensitivity
+  source-set — integrity axis = the untrusted-origin entries of the source-set above
+  (`web:host / screen:app / file:path`); confidentiality axis = which sensitivity
   classes it touched (from M9's columns) — and enforces at the ~five egress sinks: tainted egress →
   informed confirm with the source banner; secret-class containment in an outbound payload → the
   immutable line; personal-sensitivity content in a web-search query → sink policy, same pattern.
@@ -864,26 +908,40 @@ they're just missing provenance.
   compiled-predicate dump, no conflict matrix — one card, not a review board), but never lean
   enough to drop the replay. AgentSpec's LLM-generated rules hit high precision but ~71% recall,
   which is exactly why drafts never self-activate. Versioned, diffed, receipted.
-- **A stricter lane for tainted tasks in `gateScript` / the policy table.** Once tainted: network
-  sends and `do shell script` route to the informed confirm regardless of the allowlist (Rule 4's
-  default — escalation, not denial). URL navigation splits by SHAPE (following a link found on a
-  page is the whole job of web research, so link-following is never blanket-blocked): a URL that
-  appears **verbatim** in fetched content rides the
-  normal gates; a **model-constructed** URL embedding content the task read is denied outright —
-  that is the exfil shape (data smuggled through query params/subdomains, the M7 residual's
-  principled fix), and a confirm there would be theater since the user can't meaningfully inspect an
-  encoded blob. Two invariants make "verbatim" load-bearing rather than a loophole: the match is a
-  byte-exact full-URL substring test against the WHOLE task source-set (no canonicalization, no
-  per-page scoping — a fuzzy or single-page match would let an attacker page satisfy it for a
-  smuggled URL and reopen exactly this hole), and a verbatim link still gets its destination
-  effect-classed before navigation — a literal link to a state-changing or capability endpoint (a
-  one-click reset in an email, an unsubscribe-all) takes the informed confirm even though it
-  crosses no exfil boundary. The notch confirm renders a "this task has read untrusted web/screen
+- **Tainted tasks: taint is a FACT feeding `decide()`, not a separate gate (Rule 1).** A network
+  send from a tainted task is a disclosure → informed confirm (Rule 4). But taint does NOT own an
+  independent "confirm every command" gate: a `do shell script` action is priced by its effect, with
+  taint breaking the tie only on the unknown case —
+  - provably read-only → `auto`;
+  - provably recoverable + receipted → `announce`, even when tainted (undo is the net);
+  - irreversible or disclosing → normal `confirm` / `deny`;
+  - **unclassified effect from a task that read untrusted sources → `confirm`.**
+
+  That preserves the backstop exactly where it earns its keep — an effect the classifier couldn't
+  read, shaped by content that may be hostile — without making "this task once read a webpage" a
+  reason to confirm a harmless `ls`. Under Rule 2 an unclassified command has not yet earned the
+  label "reversible," so this is not an exception to the friction economy.
+- **URL navigation splits by PROVENANCE, structurally — not by scanning raw history.** A URL the
+  tools observed as a link reference on a fetched page rides the normal gates (following links is the
+  whole job of web research); a URL the *model constructed* that embeds content the task read is
+  denied outright — the exfil shape (data smuggled through query params/subdomains, the M7 residual's
+  fix; a confirm there is theater since the user can't inspect an encoded blob). Decide by the
+  STRUCTURAL fact the browser/script tools already hold — did this URL come from an observed link, or
+  was it built in-model? — NOT by byte-scanning the whole source-set for a substring, which is more
+  expensive and misfires on coincidental matches. A structurally-provenanced link still gets its
+  destination effect-classed before navigation — a literal link to a state-changing or capability
+  endpoint (a one-click reset in an email, an unsubscribe-all) takes the informed confirm even though
+  it crosses no exfil boundary. The notch confirm renders a "this task has read untrusted web/screen
   content" banner so the user's approval is *informed*, not blind.
-- **Context minimization for the worst edge (optional).** Scrape/OCR results destined for a
-  computer-use task pass through a quarantined summarize-to-facts call first (one of the six documented
-  injection-defense patterns, [arxiv 2506.08837](https://arxiv.org/abs/2506.08837)) — the model acts on
-  extracted facts, never the raw attacker-controlled bytes.
+- **Context minimization for the worst edge — evaluated, never assumed.** A quarantined
+  summarize-to-facts pass over scrape/OCR bytes destined for an action-capable task (one of the six
+  documented injection-defense patterns, [arxiv 2506.08837](https://arxiv.org/abs/2506.08837)) is
+  defense-in-depth, NOT a boundary — it is itself an in-band, model-mediated transform that can omit
+  a needed fact, preserve a disguised instruction, or be attacked, so the deterministic sink/effect
+  gates stay the real protection. Ship it only if it earns its place against the offline injection
+  corpus (the M13-relocated gate tests): measure BOTH attack reduction and legitimate-task
+  degradation before enabling, enable narrowly for raw untrusted content entering an action context,
+  and NEVER let passing the transform loosen a deterministic gate.
 
 **Demo:** a research task that scraped an attacker-controlled page then tries to `open location` a URL
 containing text it read → blocked with a spoken "that task read web content and is trying to open a URL
@@ -908,6 +966,30 @@ agent actually gets, and Gumbo can answer none today. The access recipes are ful
 shell-owns-TCC architecture is already the correct shape (independently validated by iMCP, which uses
 the exact GUI-owns-grants + bridge split).
 
+- **Least disclosure is the architecture, not a footnote.** The cloud orchestrator is a disclosure
+  sink (Rule 4): every connector result it reasons about reaches OpenAI. the user's standing decision
+  (2026-07-21) is **cloud processing accepted** under a one-time per-connector/data-class grant — so
+  the job is to send the SMALLEST projection sufficient for the turn, enforced by the daemon, not by
+  trusting the model to be frugal. The connector layer is a minimizing projection over a local store,
+  not a pipe:
+  - **Scope at the source** — filters push down to `chat.db` SQL / the Gmail query (`from:`,
+    `is:unread`, `after:`, `maxResults`); never fetch-all-then-filter, so the daemon holds less too.
+  - **Project, don't dump** — the default return is a header projection (`{from, subject, date,
+    snippet≤K, id}` for mail; `{sender, ts, snippet≤K}` for messages), never full bodies; drop fields
+    the turn doesn't need.
+  - **Progressive disclosure** — a full body is a second, explicit step via one shared `open_item(ref)`
+    tool, only when the request needs the whole content ("read me the email").
+  - **Daemon-enforced caps** — max records, max snippet chars, and an **unscoped query is an error**
+    (a lookup with no sender/thread/query/date-window is rejected, never a full scan). The tool
+    physically cannot return the inbox.
+  - **Local reduction for bulk** — a digest request ("summarize this morning's mail") is reduced
+    ON-DEVICE by the M15 worker before the digest crosses to the cloud; if the local model is
+    unavailable it degrades LOUDLY to capped snippets, never silently (Rule 5).
+  - **Content-light audit + provenance** — each fetch logs metadata only (query shape, count, fields
+    — never bodies) and stamps the task source-set with the sensitivity class for Rule 4.
+
+  The setup card states once, per class, what "processed by OpenAI" means, so the standing grant is
+  informed. This is the OpenAI-recommended data-minimization posture made structural.
 - **Mail = Gmail via MCP (the user uses Gmail, not Apple Mail).** The `mail_lookup` connector is a Gmail
   MCP server (e.g. the Google Workspace MCP), OAuth with **read-only Gmail scopes**, the token stored
   in the daemon's secret store like every other provider key. **New seam:** this is the first MCP the
@@ -918,19 +1000,24 @@ the exact GUI-owns-grants + bridge split).
   OAuth/API, mail needs **no Full Disk Access** — the FDA trade-off below shrinks to Messages only.
   Sends stay behind the notch gate (read-only scopes make a send impossible without a scope escalation
   the user explicitly approves). *Open build-time question:* if the user is Google-ecosystem for calendar
-  too, `calendar_lookup` can ride the same Google MCP/OAuth instead of EventKit — decide at build.
+  too, `calendar_lookup` can ride the same Google MCP/OAuth instead of EventKit — pick ONE based on
+  the user's actual calendar, never build both Google and EventKit speculatively.
 - **The other connectors stay native, via the shell's TCC + node:sqlite.** Extend the M6 MacBridge with
   read actions: EventKit calendar read + Contacts-framework search (shell-side — it already owns
   Automation TCC); daemon-side read-only node:sqlite over Messages' `chat.db` (the documented recipe —
   JXA message reading is broken/too-slow on recent macOS, so a direct SQLite read is the field
   standard). Native tools keep the keys/TCC posture; only mail deliberately goes MCP because Gmail is
   not a local store.
-- **Four realtime tools, read-only auto-allow.** `mail_lookup` (Gmail), `calendar_lookup`,
-  `messages_lookup`, `contacts_lookup` — query live, persist nothing new, auto-run (reads are
-  reversible). **Every send stays behind the existing notch gates** (the M6 mail-send gate already
-  exists; Gmail send, if ever added, is a gated write on an explicitly broadened scope). A
-  contacts-enrichment cache resolves numbers/emails to names so "who texted me" reads like a person
-  would say it.
+- **Scoped lookup tools + one shared `open_item`, and ONE connector at a time.** Each connector
+  exposes a scoped-projection lookup (query live, persist nothing new, auto-run — reads are
+  reversible); `open_item(ref)` fetches one full body on demand across connectors, so the registry
+  doesn't grow a headers-tool + bodies-tool per connector (the sole-orchestrator standing risk).
+  **Contacts is primarily an internal resolver** ("Mara" → handle, handle → name for display), used
+  by the other lookups and for enrichment — a direct contacts tool is grow-on-need, built only when
+  unresolved identifiers materially hurt answers. And the milestone is NOT "four connectors": ship
+  the ONE the user wants most, prove its daily use, then add the next. **Every send stays behind the
+  existing notch gates** (the M6 mail-send gate; a Gmail send, if ever added, is a gated write on an
+  explicitly broadened scope).
 - **The TCC + privacy trade-off, surfaced to the user up front.** With mail on Gmail/OAuth, the only
   connector needing **Full Disk Access** is Messages (`chat.db`) — still a powerful grant and the
   biggest local-privacy step in Gumbo's arc, but now scoped to one connector, and Gmail adds an OAuth
@@ -944,7 +1031,9 @@ the exact GUI-owns-grants + bridge split).
 
 **Demo:** "what did Mara text me yesterday, did my landlord email about the lease, and am I free for
 lunch Thursday?" — answered from Messages (native) + Gmail (MCP) + Calendar in one turn, names
-resolved, nothing sent, nothing stored.
+resolved, nothing sent, nothing stored — and only the scoped projections (Mara's snippets, the
+landlord match's header, Thursday's free/busy), not the message DB or the inbox, cross to the cloud
+under the user's standing grant.
 
 **Considered and rejected:** a multi-channel chat gateway / device-node pairing / skills marketplace
 (OpenClaw's growth surface) — every channel is an outward auth+exfil surface and multi-device pairing
@@ -961,13 +1050,19 @@ proactive consumers plus the etiquette that keeps them from being an annoyance. 
 (watchers read the connectors), reads best after M9 (the brief is personalized) and M10
 (watcher-ingested content is tainted).
 
-- **Morning brief (`kind: 'brief'`).** One scheduled task fans out to sub-agents (calendar + mail via
-  M11, overnight X/news via the existing Grok/Exa tools), synthesizes, and delivers as a notch card +
-  an optional spoken summary at the *first PTT of the day* — never an unprompted cold monologue.
-- **Watchers with two-tier triage (`kind: 'watch'`).** Aitne's cost-and-attention-protecting pattern:
-  cheap polling of connectors/search into a sqlite `observations` table *without spawning sessions*; a
-  scheduled cheap-model triage pass; escalation to a real sub-agent + a notch notification *only* on
-  genuine signal. Quiet hours and a per-day cost cap are first-class.
+- **Morning brief (`kind: 'brief'`), opt-in and the user-configured.** One scheduled task fans out over
+  the sources THE USER chose — his calendar + mail via M11, and only the feeds he named. NO default
+  X/news fan-out: a broad web sweep he didn't ask for pulls untrusted content into the brief and
+  serves no named moment. Synthesizes, delivers as a notch card + an optional spoken summary at the
+  *first PTT of the day* — never an unprompted cold monologue.
+- **Watches are EXPLICIT, not a generic monitor (`kind: 'watch'`).** A watch starts only from an
+  intention the user armed ("tell me if the landlord replies"); Gumbo does NOT run a generic
+  "interesting signal" monitor that continuously decides what matters — that standing decider is the
+  drift the whole arc rejects. The two-tier machinery (cheap poll into a sqlite `observations` table
+  *without spawning sessions* → cheap-model triage → escalate to a sub-agent + notch *only* on genuine
+  signal) is the SHAPE a costly watch takes, built when an actual watch is expensive enough to need
+  it — not the default wrapper around every armed cue. Quiet hours and a per-day cost cap are
+  first-class.
 - **Interruption etiquette (deterministic, shell-side).** The "small always-on trigger" of the
   proactivity literature (PRISM's asymmetric speak-or-stay-silent cost,
   [arxiv 2602.01532](https://arxiv.org/abs/2602.01532)) reduced to zero-cost signals macOS already
@@ -979,13 +1074,16 @@ proactive consumers plus the etiquette that keeps them from being an annoyance. 
   *actions*, so the design is a compact ledger, not a heartbeat agent).** Watchers answer "surface
   an interesting signal"; the ledger answers the harder question: *what intention is outstanding,
   what state makes it due, which version is authoritative, and what observation shows it finished.*
-  A small sqlite table (normalized intent, trigger kind ∈ time | event | state | dependency |
-  absence, due window, completion predicate, current version, outcome ref) with a daemon-owned
-  state machine of FOUR states — PROPOSED → ARMED → TRIGGERED → CLOSED, with `closed_reason` ∈
-  satisfied | superseded | cancelled | expired | blocked (the closed reasons are queries on one
-  column, not extra states — one person's promises don't need workflow-engine breadth). The model
-  may *propose* an intention from the user's words; the daemon owns
-  every transition, and updates supersede rather than silently edit. Triggers are indexed to the
+  A small sqlite table (normalized intent, trigger kind — start with `time | event | absence`, defer
+  generic `state`/`dependency` predicates until a real one is needed — due window, completion
+  predicate, current version, outcome ref) with a daemon-owned state machine of FOUR states —
+  PROPOSED → ARMED → TRIGGERED → CLOSED, with `closed_reason` ∈ satisfied | superseded | cancelled |
+  expired | blocked (the closed reasons are queries on one column, not extra states — one person's
+  promises don't need workflow-engine breadth). **Intentions are armed EXPLICITLY** — on a "watch /
+  remind / tell me if" request — never inferred as durable commitments from casual language, which
+  would manufacture false promises. The model may *propose* an intention from those explicit words;
+  the daemon owns every transition, and updates supersede rather than silently edit. Versioned
+  proposals and generalized completion predicates are grow-on-need, not v1. Triggers are indexed to the
   smallest relevant event channel (an M11 connector delta, a task finishing, a deadline
   approaching) — checked when that channel changes, never continuously polled. **Task done ≠
   outcome closed:** a submitted form without its confirmation mail, a sent invite never accepted, a
@@ -1008,63 +1106,53 @@ suggestions — the research pattern needs exactly the continuous capture PTT wa
 **PTT is Gumbo's consent boundary, not a limitation to engineer away.** (Wake word stays deferred as a
 hands-free *input* convenience — a separate decision from proactivity.)
 
-### M13 — Self-improvement & evaluation (specced 2026-07-19)
+### M13 — Learning & regression discipline (cross-cutting; NOT a sequential milestone)
 
-The capstone: Gumbo's traces are write-only today — nothing distills a successful run into reusable
-procedure, nothing learns from a failure, and there's no regression check on the *behavioral* layer.
-This closes the loop, deliberately reusing M9's nightly reflection job as the single curator (one
-mechanism, not a parallel learning system).
+Gumbo's traces are write-only today — nothing distills a successful run into reusable procedure,
+nothing learns from a failure, and there's no regression check on the *behavioral* layer. Those are
+real gaps, but they are engineering DISCIPLINE, not a product phase: a standalone "self-improvement"
+milestone implies a coherent user feature that isn't there, and calling a test suite "the agent
+improving itself" is a fiction. So M13 is dissolved as a sequential milestone; its deliverables are
+relocated to the phases that own them, each with an explicit home — nothing is discarded:
 
-- **Reflexion-lite (learn from failure).** On a task failure/abort, one extra background call writes a
-  three-line "symptom / cause / try-instead" lesson to the memory table, keyed by task kind + target
-  app/site (Reflexion, [arxiv 2303.11366](https://arxiv.org/abs/2303.11366)). The next similar task
-  retrieves and prepends it — one API call per failure, one FTS query per spawn.
-- **Procedure promotion feeding M8.** The nightly reflection job is the curator that promotes
-  *successful* multi-step runs into M8 procedures and *failed* ones into lessons. **Delta updates
-  only** — procedures are small structured entries amended incrementally, never wholesale rewritten
-  (ACE's context-collapse mode, [arxiv 2510.04618](https://arxiv.org/abs/2510.04618)). This makes M8's
-  procedure memory a living skill library (Voyager, [arxiv 2305.16291](https://arxiv.org/abs/2305.16291))
-  rather than a static macro store.
-- **A behavioral regression harness.** ~20 recorded `utterance → expected-tool-call` pairs harvested
-  from the event log, replayed by `node --test` against the realtime tool registry — so "remind me
-  Tuesday" still routes to the scheduler after an orchestrator-instruction tweak. The unit suite covers
-  code; this covers *routing*, the design's weakest link.
-- **Pre-announce claim check.** A cheap list-wise self-check on research reports before they're
-  announced — each claim must have a fetched source behind it (list-wise verification,
-  [arxiv 2506.12928](https://arxiv.org/abs/2506.12928)) — so a finished-task announce doesn't
-  confidently read out an unsupported claim.
-- **Calibrated autonomy: act → inspect → ask → abstain, decided out of band (amended 2026-07-20 —
-  both external reports converged, and the findings are blunt: RiskEval
-  ([arxiv 2601.07767](https://arxiv.org/abs/2601.07767)) shows models "almost never abstain" even
-  when abstention is mathematically optimal, and AgentAbstain's best paired act/abstain accuracy was
-  ~59%, including *post-hoc* abstention after the irreversible act. The model's self-reported
-  confidence is not a boundary — which corroborates Gumbo's whole gating philosophy).** Redesigned
-  under Rule 2 so the cold start cannot nag: **track record GRADUATES autonomy; it never adds
-  asks.** Day one equals today's gates exactly — reversible acts `announce` (undo is the safety
-  net, not a question), compensatable/irreversible keep their existing confirms. Two behaviors
-  ship with the phase, both deterministic, no statistics: (a) a *compensatable* act with no track
-  record → inspect state first, and only ask if inspection leaves it unresolved; (b) graduation is
-  **manual-first** — the user says "stop asking about this" (or Gumbo notices the same class
-  approved repeatedly and offers), Gumbo drafts the standing rule, and it activates through the
-  M10 activation card, so autonomy expands as the user-approved, versioned, revocable rules, never
-  silently. The statistical calibrator (conservative Beta-binomial per action family, hierarchical
-  fallback exact tool+subtype → tool+effect class → effect class → safe prior, lower confidence
-  bound, never trained or explored on irreversible outcomes) is **deferred-until-felt
-  (the the user-moment test):** at one person's action rate, "40 of 40 verified" takes
-  months to accumulate per class, and the manual path reaches the identical end-state — a
-  the user-approved graduation rule — with zero statistical machinery. Build it only if hand-drafted
-  graduations demonstrably lag the audit trail. No verification path → abstain or demand an
-  explicit mandate (unchanged). Spoken/shown as the actual history, not theater: "37 of 40
-  similar calendar inserts verified, but this one has an external invitee I haven't handled —
-  showing the preview," never a fake "92% confident."
-- **Offline injection-regression suite (2026-07-20; replaces any continuous red-team ambition).**
-  A periodic `node --test` sweep of the gates against a recorded injection corpus (the M6/M7 bypass
-  variants are already pinned; grow the corpus from the wild), riding the same harness as the
-  routing-regression pairs — an offline check, not a standing service.
+- **Failure lessons → M8 procedure memory.** On a VERIFIED correction or a REPEATED failure (not
+  every abort — most aborts are noise), write a three-line "symptom / cause / try-instead" lesson
+  keyed by task kind + target app/site (Reflexion, [arxiv 2303.11366](https://arxiv.org/abs/2303.11366));
+  the next similar task retrieves it. No background model call after *every* failure — only on the
+  signal.
+- **Procedure promotion → M8.** A run becomes a procedure when the user TEACHES it, asks to SAVE it, or
+  Gumbo sees repeated VERIFIED success and offers — never automatic promotion from arbitrary
+  successful runs, which accumulates one-off paths and stale workarounds. Delta updates only, never
+  wholesale rewrites (ACE's context-collapse, [arxiv 2510.04618](https://arxiv.org/abs/2510.04618));
+  this keeps M8's procedure memory a living skill library
+  (Voyager, [arxiv 2305.16291](https://arxiv.org/abs/2305.16291)).
+- **Routing regression → realtime tool-registry tests.** A SMALL hand-curated set of
+  `utterance → expected-tool-call` pairs, replayed by `node --test` against the registry, so "remind
+  me Tuesday" still routes to the scheduler after an instruction tweak. Hand-curated, never
+  auto-harvested — don't scrape a magic number of private event-log examples.
+- **Injection corpus → M10/M14 gate tests.** The recorded M6/M7 bypass variants ride the gate tests
+  as a periodic offline sweep (grow from the wild) — an offline check beside the gates it protects,
+  never a continuous red-team service. This is also where the M10 quarantine pass earns (or fails to
+  earn) its keep before shipping.
+- **Claim/source verification → the research-task contract.** NOT a separate list-wise model pass
+  before *every* announce — that adds latency and false assurance, and a second model pass doesn't
+  guarantee truth. Instead: every research claim references fetched source IDs; the daemon
+  DETERMINISTICALLY verifies those IDs were actually fetched (a free lookup against the existing
+  audit log); a model-based semantic support check runs ONLY for source-dependent research reports;
+  unsupported claims are removed or clearly qualified. A basic "your task finished" announce is never
+  blocked on it.
+- **Autonomy graduation → M10 standing rules + M14 `decide()`.** The model's self-reported confidence
+  is not a boundary (RiskEval [arxiv 2601.07767](https://arxiv.org/abs/2601.07767): models "almost
+  never abstain" even when optimal), so graduation is the user-approved, never self-asserted: "stop
+  asking about this" (or Gumbo offering after repeated verified approvals) drafts a standing rule that
+  activates through the M10 card, fed by M14's effect facts. Day one equals today's gates exactly;
+  the deterministic inspect-first-on-unresolved-compensatable behavior ships with M14. The statistical
+  calibrator stays **deferred-until-felt** — at one user's action volume it is unlikely to beat the
+  direct manual path; build it only if hand-drafted graduations demonstrably lag the audit trail.
 
-**Demo:** a computer-use task that failed on an AX-hostile pane last week silently succeeds this week
-because the retrieved lesson routed it straight to the vision lane; a routing-regression run catches
-that an instruction edit broke "set a timer."
+**Demo:** a computer-use task that failed on an AX-hostile pane last week succeeds this week because
+the retrieved M8 lesson routed it straight to the vision lane; a routing-regression run in the
+tool-registry tests catches that an instruction edit broke "set a timer."
 
 **Considered and rejected:** trajectory→skill distillation into fine-tuning, LLM-judge eval panels,
 reference-free trajectory scoring at scale (HAL/TRACE/AdaRubric) — real techniques, but eval
@@ -1072,29 +1160,36 @@ reference-free trajectory scoring at scale (HAL/TRACE/AdaRubric) — real techni
 the right weight. Debate/verifier panels — fixed-budget multi-agent synergy collapses via correlated
 errors and measures *less* aligned than single agents
 ([arxiv 2601.17311](https://arxiv.org/abs/2601.17311)), the wrong direction for a machine-controlling
-agent.
+agent. A standalone self-improvement milestone — the deliverables are cross-cutting; a phase for them
+is bookkeeping that implies a feature that isn't there.
 
-### M14 — Transactional effects & universal undo (specced 2026-07-20)
+### M14 — Transactional effects, receipts & honest undo (specced 2026-07-20)
 
 The keystone of the external-research fold — both reports' #1 picks compose into it (ChatGPT: a
-transactional autonomy substrate; Claude: APFS-snapshot universal undo). Gumbo's gates answer *may
-this run*; nothing answers *what will change, what actually changed, did the external commitment
-land, how is it reversed, and what recovery is safe after a crash or timeout*. The frontier
+transactional autonomy substrate; Claude: APFS-snapshot restore). "Honest undo," not "universal
+undo": the phase itself admits some actions are irreversible, and the name shouldn't overpromise
+what a send or a submit can't take back. Gumbo's gates answer *may this run*; nothing answers *what
+will change, what actually changed, did the external commitment land, how is it reversed, and what
+recovery is safe after a crash or timeout*. The frontier
 converged on exactly this gap (SagaLLM's compensating-transaction adaptation; Microsoft's
 compensation guidance: application-specific, resumable, idempotent, with marked points of no
 return; ACRFence's finding that replaying a checkpoint across an external action executes it
 TWICE). **This layer arrives per channel, never as an up-front substrate** (platform-first
-sequencing is a fleet habit, not a personal-agent need): the cheap universal pieces (APFS
-snapshots, receipts, single-use permits — days, not weeks) land early and serve every channel;
+sequencing is a fleet habit, not a personal-agent need): the cheap universal pieces (touched-file
+backups, receipts, single-use permits — days, not weeks) land early and serve every channel;
 full journaling arrives with the first write channel that actually has lost-response ambiguity
-(the first connector write). A later autonomy increase needs the *relevant channel's* effect
-story, not the whole layer.
+(the first connector write); the APFS-snapshot upgrade is a spike gated on proving it live. A
+later autonomy increase needs the *relevant channel's* effect story, not the whole layer.
 
-- **Effect classes on every mutating tool.** `read | reversible | compensatable | irreversible`,
-  declared per tool (browser submit: irreversible; file move: reversible; calendar insert:
-  compensatable) — with Rule 2's rider that *information egress is irreversible* regardless of local
-  state. The class feeds decide(), M13's graduation, and the preview wording — one taxonomy, three
-  consumers.
+- **Effect classes emitted PER ACTION, not statically per tool.** `read | reversible | compensatable
+  | irreversible`, decided for the specific operation — `browser_act` is read-only, reversible, or
+  irreversible depending on the call (a scroll vs. a field edit vs. a submit), so a static per-tool
+  label is wrong; the class comes from the action's facts (`browserActDecision`, `gateScript` class).
+  A *compensatable* effect is further priced by its COMPENSATION cost, not its category (Rule 2):
+  free/reliable/immediate compensation `announce`s; costly/uncertain/time-limited/disclosing
+  `confirm`s. The class feeds `decide()`, the M13-relocated graduation, and the preview wording — one
+  taxonomy, three consumers — with Rule 2's rider that *new disclosure is irreversible* regardless of
+  local state.
 - **Channel defaults, not per-tool adapters (Rule 3 — the de-generalization that keeps this
   buildable by one person).** Effect behavior attaches to the five action channels, so every tool
   inherits preview/receipt/undo/verify from its channel for free: filesystem = snapshot +
@@ -1108,8 +1203,11 @@ story, not the whole layer.
   args + arg hash + precondition capture + idempotency key) → COMMITTING → COMMITTED → VERIFIED,
   with an explicit **COMMIT_UNKNOWN** for lost responses. The iron rule: a COMMIT_UNKNOWN step is
   *reconciled* — reuse the provider idempotency key where one exists, else inspect external state,
-  else stop for the user — **never blindly retried** (that is how agents double-send). Local
-  synchronous channels (file moves, AX acts, in-page clicks) journal as audit + snapshot/diff
+  else stop for the user — **never blindly retried** (that is how agents double-send). A generic
+  browser SUBMIT usually has no idempotency key and no reliable reconcile path, so on lost-response
+  ambiguity it records `unknown` and STOPS for the user — never a promise of generalized crash recovery
+  it can't keep. Local synchronous channels (file moves, AX acts, in-page clicks) journal as audit
+  + snapshot/diff
   refs — their outcomes are observable, and COMMIT_UNKNOWN is a network concept. Crash recovery
   resumes from the journal and never re-executes a committed external action; replay-for-debugging
   consumes recorded outputs only and categorically blocks live shell actions. The journal needs no
@@ -1125,22 +1223,26 @@ story, not the whole layer.
   element path + before/after snapshot hashes). Undo is tiered and never overpromises: exact
   inverse (move the file back) → compensation (cancel the reservation) → corrective follow-up
   (send the correction) → irreversible: preserve the record and name the next safe human action.
-  Compensation executes from receipts in dependency order — never from a freshly generated plan.
+  Compensation always executes from receipts, never from a freshly generated plan; v1 is "undo the
+  last effect / the last task" — dependency-ordered compensation across a multi-effect routine is
+  deferred until a real routine needs it.
   And previews are SENTENCES, not modals (Rule 3): confirm-class speaks its one-liner before the
   act; announce-class acts and speaks the receipt after, "undo that" armed — zero added beats on
   the reversible majority of a voice-first agent's day.
-- **APFS local snapshots as the filesystem checkpoint (Claude report's top pick — macOS gives this
-  nearly free).** Before any task the gate classes risky, the shell runs `tmutil localsnapshot`
-  (~0.01 s, copy-on-write, no Time Machine destination needed) and the snapshot id lands in the
-  journal as a checkpoint event. "Undo my last task" mounts the snapshot read-only
-  (`mount_apfs -o nobrowse,ro -s …`) and selectively restores the files the audit trail says the
-  task touched. **Honest scope:** live full-volume rollback is entitlement-gated
-  (`com.apple.private.apfs.revert-to-snapshot` — backup apps only), snapshots share the volume and
-  macOS may prune them — this is short-horizon restore-what-was-touched, not rewind-the-Mac, and
-  the SPEC says so out loud.
-- **"Why did you do that?" from structured provenance.** Originating request → standing rule →
-  source refs → plan step → exact args → gate result → receipt → verification, rendered from the
-  journal — never from hidden reasoning text.
+- **Filesystem checkpoint: touched-file backups + git temp refs ship FIRST; APFS snapshots are a
+  SPIKE.** The direct, proven checkpoint for "undo my last task" is copying the files the audit trail
+  says a task will touch (plus a git temp ref for a coding task's dirty state) before it runs — no
+  entitlements, no pruning risk, works today. APFS local snapshots (`tmutil localsnapshot`, ~0.01 s
+  CoW; restore by mounting `mount_apfs -o nobrowse,ro -s …` read-only and copying back the touched
+  files) are the appealing upgrade Claude's report flagged — but selective mount/restore and macOS's
+  snapshot pruning must be PROVEN on this machine before they're relied on, so they're an experimental
+  spike, not assumed cheap. **Honest scope either way:** live full-volume rollback is entitlement-gated
+  (`com.apple.private.apfs.revert-to-snapshot` — backup apps only); this is short-horizon
+  restore-what-was-touched, never rewind-the-Mac.
+- **"Why did you do that?" from the journal, not a provenance graph.** A short linear trace —
+  originating request → applicable standing rule → task source-set → exact effect → gate result →
+  receipt — rendered from the journal, never from hidden reasoning text and never a standing
+  provenance graph.
 - **Fault-injection as the test discipline.** A local command that kills the daemon (or drops the
   shell) after each state transition; recovery must come up clean from the journal every time.
   Chaos testing without CI, telemetry, or a VM fleet.
@@ -1159,53 +1261,59 @@ reality above); tamper-evident/hash-chained journaling (tamper-evidence defends 
 untrusted writer, and the daemon is this journal's only writer — a plain journal recovers crashes
 just as well).
 
-### M15 — Local-model tier & inference fabric (specced 2026-07-20)
+### M15 — Local worker tier (cost, latency & disclosure reduction) (specced 2026-07-20)
 
-Both reports converged: Gumbo pins one cloud model per lane and has no local tier, no
-privacy/effect-aware routing, no degradation story, and no cache discipline. Apple's Foundation
-Models framework (on-device ~3B, free, offline, guided generation to typed Swift structs; WWDC26
-adds image input and a larger sparse on-device model — vendor claims, verify at GA) plus MLX for
-heavier local models make the missing tier real
-([developer.apple.com/documentation/FoundationModels](https://developer.apple.com/documentation/FoundationModels);
-vllm-mlx [arxiv 2601.19139](https://arxiv.org/abs/2601.19139)). The realtime voice model stays sole
-orchestrator — this is a *worker* lane under the tool boundary, never a second brain.
+Gumbo pins one cloud model per lane and has no local tier. Apple's Foundation Models framework
+(on-device ~3B, free, guided generation to typed Swift structs; WWDC26 adds image input and a larger
+sparse model — vendor claims, verify at GA) plus MLX for heavier local models make a local WORKER
+real ([developer.apple.com/documentation/FoundationModels](https://developer.apple.com/documentation/FoundationModels);
+vllm-mlx [arxiv 2601.19139](https://arxiv.org/abs/2601.19139)). **What it is and isn't (2026-07-21):**
+the Realtime voice model stays SOLE orchestrator (§2, §10) — the local model is a worker under the
+tool boundary, never a second brain. And under the user's cloud-accepted decision it is NOT a privacy
+boundary: a local worker's *output still returns to the cloud orchestrator*, so it cannot keep
+content off OpenAI. Its real jobs are **cost, latency, and DISCLOSURE REDUCTION** — shrinking a
+payload on-device before it crosses to the cloud (M11's least-disclosure digest) and running cheap
+device-scale jobs. No "inference fabric," no generic router.
 
-- **Two-stage routing, eligibility before economics.** Stage 1 is deterministic and non-negotiable:
-  privacy class (M10 labels), effect class (M14), modality, context size, availability —
-  `local_only + secret` NEVER silently falls back to cloud; tool-commitment decisions are never
-  delegated to a cheap model; irreversible-effect planning always gets the strongest approved
-  model. Stage 2 picks among *eligible* models on quality/cost/latency — a static table first; at
-  most a tiny bandit later (MixLLM-style), learning only from deterministic validation outcomes,
-  no exploration on irreversible work, substitutions visible in the receipt.
-- **The shell exposes on-device inference as a tool.** FoundationModels via Swift (guided
-  generation = typed structs over the existing WS). Early jobs, all device-scale by Apple's own
-  framing (summarization/extraction/classification — not world knowledge): watcher-triage cheap
-  stage (M12), memory sensitivity tagging + PII redaction (M9), semantic trigger verification
-  (M12), injection pre-scan of untrusted text as advisory defense-in-depth (never the boundary —
-  M10's rule), the M9 privacy-fork embedding alternative, short voice summaries. Local jobs are
-  chosen to be *verifiable or non-final*, and a local decision is never silently final (Rule 5): a
-  local "uninteresting" still lands in observations for the brief's bulk skim, failed schema
-  validation falls back to cloud (unless `local_only` — then `BLOCKED_BY_MODEL`, said aloud), so
-  the small model's variance costs latency, never loss.
-- **Prompt-cache economics as a stated discipline.** Stable prefix (system + tool schemas + policy)
-  first, volatile observation last, cache breakpoints after the stable block, never a
-  timestamp/task-id early; the act→observe computer-use loop keeps its prefix pinned across steps.
-  Log cache-read tokens into the existing audit JSONL to verify the hit rate — an optimization with
-  a measurement, not a vibe.
-- **Graceful degradation, named states.** Cloud down + local up: private read-only assistance and
-  deterministic local actions continue. Cloud down + task needs frontier reasoning:
-  `BLOCKED_BY_MODEL`, said out loud — never a silent downgrade. Rate limit: pause at a durable
-  (M14) boundary, don't restart. Local model unavailable: local-only content does not go up.
+- **One local worker, one proven job at a time — no router fabric.** The shell exposes on-device
+  inference as a tool (FoundationModels via Swift, guided generation = typed structs over the WS).
+  Eligibility is deterministic and simple: a job is local-eligible if it is device-scale
+  (summarization/extraction/classification, Apple's own framing — not world knowledge) AND non-final
+  (verifiable, or it falls back). **No stage-two learned/bandit router** — a static choice suffices
+  at one user's volume — and **no effect-based "strongest model" routing**: deterministic gates own
+  safety, not model tier; the gate decides *may this run* independent of which model drafted it. The
+  concrete FIRST job is M11's digest reducer (shrink a bulk connector read before the cloud sees it);
+  further jobs (watcher-triage cheap stage M12, semantic trigger verification M12, memory sensitivity
+  tagging / PII redaction M9, the M9 privacy-fork embedding alternative, short summaries) are added
+  only when a specific consumer needs one — never a battery built up front.
+- **A local result is never silently final (Rule 5).** A local "uninteresting" still lands in
+  observations for the brief's bulk skim; failed schema validation falls back to the cloud (accepted);
+  the small model's variance costs latency, never loss. An advisory injection pre-scan of untrusted
+  text may layer on top but is NEVER the boundary (M10's rule).
+- **Honest degradation, named states.** The voice loop IS the cloud orchestrator, so cloud-down means
+  the conversational agent is down — inherent to the design, stated plainly, not papered over with a
+  fake offline mode. What survives cloud-down is only deterministic local action already in flight,
+  resumed from a durable M14 boundary. Local worker unavailable → its job falls back to the cloud
+  (accepted) or, if a consumer marked it must-stay-local, `BLOCKED_BY_MODEL`, said aloud. Rate limit →
+  pause at a durable boundary, don't restart.
 
-**Demo:** Wi-Fi off — "what did I note about the pergola?" answers from local recall + on-device
-summarization; a watcher triages overnight signals on-device for free; the audit shows the
-computer-use loop hitting the prompt cache on every step.
+**Prompt-cache discipline (independent of the local tier — ongoing optimization, not an M15 gate).**
+Stable prefix (system + tool schemas + policy) first, volatile observation last, cache breakpoints
+after the stable block, never a timestamp/task-id early; the act→observe loop keeps its prefix pinned
+across steps. Log cache-read tokens into the audit JSONL to verify the hit rate. This is a cloud-side
+optimization that doesn't depend on local models — fold it in whenever, not gated on M15.
 
-**Considered and rejected:** continuous per-user fine-tuning / Apple adapter training (Apple warns
-adapters must be retrained per base-model update; structured memory + routing + policy get the
-personalization at none of the maintenance risk); token-level speculative decoding (a self-hosted
-serving optimization — not actionable over hosted APIs); a learned router as the *first* stage
-(eligibility is deterministic, forever).
+**Demo:** "summarize this morning's mail" — the daemon fetches the scoped set, the on-device worker
+reduces it to a three-line digest, and only the digest crosses to the cloud (the audit shows the
+reduction); separately, the prompt cache shows hits on every computer-use step.
+
+**Considered and rejected:** continuous per-user fine-tuning / Apple adapter training (retrained per
+base-model update; structured memory + routing + policy get the personalization at none of the
+maintenance risk); token-level speculative decoding (a self-hosted serving optimization — not
+actionable over hosted APIs); a learned router (eligibility is deterministic, forever); a
+local-private ORCHESTRATION lane that bypasses Realtime (it would be a second brain — §2 locks
+sole-orchestrator — and the user accepted cloud processing, so the lane has no requirement to serve);
+"inference fabric" as a platform (one worker for one job, grown on need).
 
 ### M16 — First-party semantic actions: App Intents + curated Shortcuts (specced 2026-07-20)
 
@@ -1217,17 +1325,24 @@ choke point). macOS 26 puts Shortcuts on Spotlight and gives personal automation
 Intents/App Schemas keep growing
 ([developer.apple.com/documentation/appintents](https://developer.apple.com/documentation/appintents)).
 
-- **Outbound: intents and Shortcuts as adapters.** The shell (it owns Automation TCC) enumerates
-  installed App Shortcuts/intents and exposes them as discoverable actions. User-curated Shortcuts
-  are version-pinned adapters: import the input schema, hash the definition, the user assigns an
-  effect class (M14) and approves the scope; the run records shortcut version + params in the
-  receipt. **User-created ≠ trusted:** a Shortcut's output and side effects still pass the gates.
-  Prefer an intent over AX when one exists for the target action.
-- **Inbound, OS-local only: Gumbo's own App Intents.** A tiny fixed set — ask Gumbo, start PTT,
-  show/pause/cancel task, *approve the exact pending preview by hash*, undo last reversible effect,
-  open a receipt, run an approved routine — surfaced through Spotlight/Shortcuts/widgets. These are
-  system-brokered local surfaces, not a network listener; "approve whatever is pending" stays
-  structurally impossible (M14 permits). Remote approvals remain out of scope.
+- **Outbound: intents and Shortcuts as adapters — ONE at a time, behind one lane.** Start with a
+  SINGLE user-selected app intent or Shortcut the user actually uses, not an enumeration of every
+  installed action. **Feasibility gate:** confirm on THIS macOS version that arbitrary third-party
+  App Intents can actually be discovered and invoked before treating that as a phase assumption
+  (Shortcuts are the reliable bridge; raw intent discovery may not be). The realtime registry does
+  NOT grow a tool per installed action — a small approved-action manifest sits behind ONE adapter
+  tool. the user doesn't do policy-taxonomy busywork: an opaque mutating Shortcut is bound to its
+  identity + input schema with a conservative default class, its definition hashed, and re-confirmed
+  only when that definition materially changes; read-only actions carry no approval ceremony.
+  **User-created ≠ trusted:** a Shortcut's output and side effects still pass the gates. Prefer an
+  intent over AX when one exists for the target action.
+- **Inbound, OS-local only — deferred until a use is named.** Gumbo's own App Intents (approve the
+  exact pending preview by hash, undo last reversible effect, run an approved routine) are OS-local
+  surfaces, not a network listener, and "approve whatever is pending" stays structurally impossible
+  (M14 permits). But most of the tempting set — "ask Gumbo," "start PTT," "show tasks" — merely
+  duplicates the notch and hotkey, so the inbound Spotlight/widget suite is DEFERRED until the user
+  names a surface he actually wants (undo/cancel may eventually earn one). Remote approvals remain
+  out of scope.
 - **Boundaries.** Shortcuts never become a second scheduler, memory store, or orchestrator; Apple's
   "Use Model" action is not allowed to grow into one either. Gumbo owns routines, timing, policy,
   receipts.
@@ -1251,19 +1366,27 @@ SoundAnalysis classifies 300+ sounds on-device;
 [developer.apple.com/videos/play/wwdc2021/10036](https://developer.apple.com/videos/play/wwdc2021/10036/)).
 
 - **Two tools, bounded by construction.** `look_now(question, capture_mode)`: one still frame from
-  a Mac or Continuity camera. `listen_now(question, max_seconds)`: a ≤10 s clip or a live
-  SoundAnalysis pass that never retains the waveform. The shell owns the TCC prompts and shows a
-  visible capture indicator both times.
+  a Mac or Continuity camera. `listen_now(question, max_seconds)`: a short clip (default ~10 s,
+  extendable when an intermittent sound needs it — a default, not a hard cap) or a live SoundAnalysis
+  pass that never retains the waveform. The shell owns the TCC prompts and shows a visible capture
+  indicator both times.
 - **Local-first processing ladder.** Deterministic Vision OCR / barcode / document-rectangle /
   SoundAnalysis first; local VLM (FastVLM / mlx-vlm, or the M15 on-device model's image input) only
   when semantic interpretation is needed; cloud vision only behind an explicit, per-task release
-  (M10's explicit-release event). Returns a *typed observation* — source crop, capture hash,
-  uncertainty flags — and deletes raw media unless the user says keep.
-- **Uses and refusals.** Read a serial number, summarize a whiteboard, compare a paper form to its
-  PDF, identify a cable/port, extract package tracking, classify a beep (timer vs doorbell vs
-  alarm — *identify*, never auto-dismiss). Refuse: identity recognition, medical judgment, covert
-  or continuous capture. A momentary audio-scene check at PTT time may inform M12's etiquette
-  (mic already open under the consent boundary); it never runs otherwise.
+  (M10's explicit-release event). Returns a *typed observation* — source crop + uncertainty flags —
+  and deletes raw media unless the user says keep. (A capture hash is grow-on-need — added only if a
+  real dedup or recovery use appears, not by default.)
+- **Uses, and the honest cloud caveat.** Read a serial number, summarize a whiteboard, compare a
+  paper form to its PDF, identify a cable/port, extract package tracking, classify a beep (timer vs
+  doorbell vs alarm — *identify*, never auto-dismiss). v1 is scoped to these listed tasks; a
+  consequential physical claim shows its source crop or asks the user to verify. No generalized
+  identity/medical refusal taxonomy is built — covert or continuous capture is refused by
+  construction (every capture has a visible indicator and an attached question), and the narrow
+  cases are declined as they arise. **Honest caveat:** local extraction keeps the raw media
+  on-device, but the extracted TEXT still flows back through Realtime to answer — "raw paper never
+  uploaded" is not "its contents stayed local"; that disclosure rides the user's standing cloud grant
+  (Rule 4). There is no PTT-time background audio-scene inference — it would break the
+  capture-has-a-question boundary and serves no named moment.
 
 **Demo:** "what's this beeping?" → one bounded listen → "sounds like your washer's end-of-cycle
 chime, not the smoke alarm"; "file this receipt" → one still → typed fields extracted on-device,
