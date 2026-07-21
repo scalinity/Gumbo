@@ -368,11 +368,15 @@ final class AXExecutor {
         return err == .success ? nil : "AXValue set error \(err.rawValue)"
     }
 
-    /// Focus, then real key events — Electron/web fields ignore AXValue writes but fire
-    /// their JS listeners on synthetic key events.
+    /// Focus, then paste — Electron/web fields ignore AXValue writes AND routinely drop
+    /// per-character synthetic key events posted to the app process (they land in the
+    /// renderer subprocess, not the main one). A clipboard paste goes through the app's
+    /// normal Edit▸Paste path to the focused field, and avoids spraying stray keys into the
+    /// shortcut layer when focus hasn't settled. Empty text is a no-op.
     private func performType(_ element: AXUIElement, text: String, pid: pid_t) -> String? {
         _ = performFocus(element)
-        SyntheticInput.type(text, pid: pid)
+        guard !text.isEmpty else { return nil }
+        SyntheticInput.paste(text, pid: pid)
         return nil
     }
 

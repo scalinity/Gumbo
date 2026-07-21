@@ -70,6 +70,28 @@ enum SyntheticInput {
         }
     }
 
+    /// Enter text by writing it to the pasteboard and posting ⌘V, then restoring the prior
+    /// clipboard. Far more reliable than per-character key events for web/Electron fields:
+    /// their renderer subprocess routinely drops synthetic unicode key events posted to the
+    /// app process, but a normal paste goes through the app's Edit▸Paste path to the focused
+    /// field — and one ⌘V can't spray ~50 stray keys into the app's shortcut layer when the
+    /// field isn't ready to receive them (the cause of the vanishing-window artifact).
+    static func paste(_ text: String, pid: pid_t?) {
+        let pb = NSPasteboard.general
+        let prior = pb.string(forType: .string)
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        _ = pressKey("cmd+v", pid: pid)
+        // Restore the user's clipboard after the paste has had time to land (best-effort;
+        // only the string flavor is preserved — enough for a personal tool).
+        if let prior {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                pb.clearContents()
+                pb.setString(prior, forType: .string)
+            }
+        }
+    }
+
     /// Post a keyboard shortcut like "cmd+n", "cmd+shift+t", "return", "escape". Unknown
     /// chords are a no-op (the caller surfaces it as a failed act via the empty diff).
     static func pressKey(_ chord: String, pid: pid_t?) -> Bool {
