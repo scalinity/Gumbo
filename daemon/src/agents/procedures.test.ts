@@ -133,3 +133,18 @@ test('procedureSummary reads as a spoken-ready digest', () => {
   assert.match(s, /"file expenses" v2 \(healed\) — 3 steps \(apps: Mail\)/);
   assert.match(s, /3\. \[key\] Send it ✓checkpoint/);
 });
+
+test('templateBrief guides HOW with the skeleton but hands WHAT to the adaptation', async () => {
+  const { templateBrief } = await import('./procedures.ts');
+  const p = validateProcedure(GOOD, 'file expenses');
+  assert.ok(p);
+  const brief = templateBrief(p, 'but as a reimbursement request instead', 'cc the finance team');
+  assert.match(brief, /based on the saved procedure "file expenses", ADAPTED/);
+  assert.match(brief, /reimbursement request instead/, 'the adaptation is present and framed as WHAT');
+  assert.match(brief, /cc the finance team/, 'extra notes fold in');
+  assert.match(brief, /1\. \[ax\] Open a new message/, 'the demonstrated skeleton guides HOW');
+  assert.match(brief, /adjust the contents and steps to fit the adaptation/, 'told to adapt, not reproduce');
+  assert.match(brief, /stop to\s*\n?\s*ask via the notch before anything that sends/, 'carries the standard safety rule');
+  // notes omitted → no "Extra run details" line.
+  assert.doesNotMatch(templateBrief(p, 'for a picnic', null), /Extra run details/);
+});

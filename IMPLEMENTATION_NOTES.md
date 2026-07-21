@@ -2572,3 +2572,25 @@ intelligent fallback loop (not a failure — that's what the loop is for, and se
 improved path). So a faithful replay never hard-fails on an unmet precondition: it either
 self-repairs deterministically or degrades to intelligence. Daemon-only; 429/1-skip (+2 tests:
 closed-app self-launch stays deterministic, unknown app never launched → drifts).
+
+### M8 procedure adaptation — run a learned procedure as a TEMPLATE for a variation (2026-07-21)
+
+the user's ask: "do the packing list, but for a picnic instead" should use the learned procedure as a
+guide and adapt it, not reproduce the original. The capability already existed (the drift-fallback
+runs the intelligent loop seeded with the procedure skeleton); what was missing was ROUTING — a
+faithful `run_procedure` runs the DETERMINISTIC replay first, and when the UI cooperates that
+succeeds and reproduces exactly what was taught, so a variation never reaches the template path.
+Fix is the minimal routing signal, no engine change: `run_procedure` gains an optional `adapt`
+string. When present, it skips deterministic replay and spawns a NORMAL intelligent mac task
+(no replay opt → no self-heal of the original) whose brief is `templateBrief(procedure, adapt,
+notes)` — the demonstrated steps guide HOW (apps, sequence, layout), the adaptation changes WHAT.
+When `adapt` is null/blank it's the faithful fast path exactly as before. `notes` keeps its old
+meaning (run-specific VALUES of the same task → parameter-fill); `adapt` is a CHANGE to the task —
+the tool description draws that line for the voice model (the router). Edges covered + tested:
+blank/whitespace adapt = faithful; adapt + notes both fold into the brief; the corrupt-body and
+not-found refusals run BEFORE the adapt branch so neither path ever reaches the engine raw; the
+adapted task is titled "<name> (adapted)" (distinct in the task list, and if the user later says
+"save that as a procedure" it's a normal computer task — not a procedure.replay — so save_last_run
+picks it up as its own new procedure, which is the right emergent behavior). `adapt` is
+required-nullable like `notes` (the proven M5 shape); one adapt=null added to two pre-existing tests.
+Daemon-only; 431/1-skip (+2 tests: adapt routing all-edges, templateBrief HOW-vs-WHAT).

@@ -472,15 +472,81 @@ test('M8: run_procedure is registered and routes matches/misses correctly', asyn
   const runProc = tools.find((t) => (t as { name: string }).name === 'run_procedure') as unknown as {
     invoke: (ctx: unknown, args: string) => Promise<string>;
   };
-  const hit = await runProc.invoke({}, JSON.stringify({ procedure: 'file expenses', notes: 'July' }));
+  const hit = await runProc.invoke({}, JSON.stringify({ procedure: 'file expenses', notes: 'July', adapt: null }));
   assert.match(hit, /Running the saved procedure "file expenses"/);
   assert.equal(spawned.length, 1);
   assert.equal((spawned[0].replay as { notes: string }).notes, 'July');
 
-  const miss = await runProc.invoke({}, JSON.stringify({ procedure: 'water the lawn', notes: null }));
+  const miss = await runProc.invoke({}, JSON.stringify({ procedure: 'water the lawn', notes: null, adapt: null }));
   assert.match(miss, /No saved procedure matches/);
   assert.match(miss, /"file expenses"/, 'the miss lists what IS saved');
   assert.equal(spawned.length, 1, 'a miss never spawns');
+});
+
+test('M8: run_procedure `adapt` routes a VARIATION to template-mode, keeps faithful runs deterministic (all edges)', async () => {
+  const spawned: Array<{ title: string; brief: string; type: string; replay: unknown }> = [];
+  const goodBody = JSON.stringify({
+    name: 'packing list', goal: 'draft a packing list in Notes', preconditions: ['Notes is open'], apps: ['Notes'],
+    steps: [{ lane: 'ax', desc: 'Click New Note' }, { lane: 'ax', desc: 'Type the items' }],
+  });
+  const manager = {
+    spawnSubagent: (title: string, brief: string, type: string, replay: unknown) => {
+      spawned.push({ title, brief, type, replay });
+      return { id: 'r9' };
+    },
+  };
+  const store = {
+    getProcedure: (name: string) => {
+      if (name === 'packing list') return { name: 'packing list', version: 1, title: 'packing list — draft', body: goodBody };
+      if (name === 'broken') return { name: 'broken', version: 1, title: 'broken', body: '{ not valid json' };
+      return undefined;
+    },
+    searchProcedures: () => [],
+    listProcedures: () => [{ name: 'packing list' }],
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+  });
+  const runProc = tools.find((t) => (t as { name: string }).name === 'run_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+
+  // (1) adapt present → TEMPLATE mode: NO replay opt, "(adapted)" title, brief carries the change + the demonstrated skeleton.
+  const adapted = await runProc.invoke({}, JSON.stringify({ procedure: 'packing list', notes: null, adapt: 'but for a picnic instead' }));
+  assert.match(adapted, /Adapting "packing list"/);
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].title, 'packing list (adapted)');
+  assert.equal(spawned[0].replay, undefined, 'a template run must NOT carry the deterministic-replay opt');
+  assert.match(spawned[0].brief, /for a picnic/, 'the adaptation drives WHAT');
+  assert.match(spawned[0].brief, /Click New Note/, 'the demonstrated skeleton guides HOW');
+
+  // (2) adapt whitespace-only → treated as a FAITHFUL run (deterministic replay opt present).
+  const faithful = await runProc.invoke({}, JSON.stringify({ procedure: 'packing list', notes: null, adapt: '   ' }));
+  assert.match(faithful, /Running the saved procedure "packing list"/);
+  assert.equal(spawned.length, 2);
+  assert.ok((spawned[1].replay as { procedure?: unknown })?.procedure, 'a faithful run carries the replay opt');
+
+  // (3) adapt + notes together → the template brief folds in both.
+  await runProc.invoke({}, JSON.stringify({ procedure: 'packing list', notes: 'label it Trip', adapt: 'for a picnic' }));
+  assert.match(spawned[2].brief, /for a picnic/);
+  assert.match(spawned[2].brief, /label it Trip/);
+
+  // (4) corrupt body + adapt → refusal, NO spawn (validation is before the adapt branch).
+  const corrupt = await runProc.invoke({}, JSON.stringify({ procedure: 'broken', notes: null, adapt: 'for a picnic' }));
+  assert.match(corrupt, /corrupt or from an incompatible version/);
+  assert.equal(spawned.length, 3, 'a corrupt procedure never spawns, adapted or not');
+
+  // (5) not found + adapt → refusal, NO spawn.
+  const miss = await runProc.invoke({}, JSON.stringify({ procedure: 'nope', notes: null, adapt: 'for a picnic' }));
+  assert.match(miss, /No saved procedure matches/);
+  assert.equal(spawned.length, 3);
 });
 
 test('M8: schedule_routine is registered; known procedures schedule, unknown ones refuse with the saved list', async () => {
@@ -553,7 +619,7 @@ test('M8 fix: run_procedure refuses a corrupt/schema-drifted body instead of fee
   const runProc = tools.find((t) => (t as { name: string }).name === 'run_procedure') as unknown as {
     invoke: (ctx: unknown, args: string) => Promise<string>;
   };
-  const out = await runProc.invoke({}, JSON.stringify({ procedure: 'broken', notes: null }));
+  const out = await runProc.invoke({}, JSON.stringify({ procedure: 'broken', notes: null, adapt: null }));
   assert.match(out, /corrupt or from an incompatible version/);
 });
 

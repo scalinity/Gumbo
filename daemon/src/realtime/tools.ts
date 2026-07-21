@@ -16,7 +16,7 @@ import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
 import { computeNextFire, describeRecurrence, parseRecurrence } from '../schedule/recurrence.ts';
-import { validateProcedure } from '../agents/procedures.ts';
+import { validateProcedure, templateBrief } from '../agents/procedures.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import { executeMacDo } from '../mac/run.ts';
 
@@ -649,16 +649,24 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       'from a successful run. Use when he asks for a task he taught or saved ("file this month\'s ' +
       'expense report", "do the invoices thing like I showed you"). Pass his words as `procedure` — ' +
       'exact name or a description both match. If nothing matches, tell him what IS saved and offer a ' +
-      'normal task (spawn_subagent) instead — never guess. Replay is fast and quiet, and still asks ' +
-      'via the notch before anything risky (approvals never carry over from the demonstration).',
+      'normal task (spawn_subagent) instead — never guess. A faithful run is fast and quiet, and still ' +
+      'asks via the notch before anything risky (approvals never carry over from the demonstration). ' +
+      'If the user asks for the task but CHANGED — "…but for a picnic", "…but make it formal", "…for the ' +
+      'whole team" — put the change in `adapt`: it runs the learned approach adapted to the new intent ' +
+      'instead of reproducing the original exactly. Leave `adapt` null for a faithful repeat. `notes` ' +
+      'is different: run-specific VALUES of the SAME task (a month, a filename), not a change to it.',
     parameters: z.object({
       procedure: z.string().describe("The procedure name or the user's description of it"),
       notes: z
         .string()
         .nullable()
-        .describe('Run-specific details from the user (a month, a filename, an account) — applied to parameterized steps; null if none'),
+        .describe('Run-specific VALUES for the same task (a month, a filename, an account) — applied to parameterized steps; null if none'),
+      adapt: z
+        .string()
+        .nullable()
+        .describe('A CHANGE that makes this a variation of the taught task ("for a picnic instead", "make it formal"); null for a faithful repeat. When set, runs the learned steps as a template, adapted — not an exact replay'),
     }),
-    execute: async ({ procedure: query, notes }) => {
+    execute: async ({ procedure: query, notes, adapt }) => {
       try {
         const row = store.getProcedure(query.trim()) ?? store.searchProcedures(query, 1)[0];
         if (!row) {
@@ -666,8 +674,9 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
           return `No saved procedure matches "${query}". ${saved ? `Saved procedures: ${saved}.` : 'Nothing has been saved yet.'} Offer to do it as a normal task instead (spawn_subagent) — don't guess.`;
         }
         // Validate on READ like the routine path does (review 🟡, corroborated): both
-        // entry points to the replay engine share one guard, and a schema-drifted or
-        // corrupted row gets a clean refusal instead of reaching the engine raw.
+        // entry points to the engine share one guard, and a schema-drifted or corrupted
+        // row gets a clean refusal instead of reaching the engine raw. Runs BEFORE the
+        // adapt branch so both faithful and adapted runs are guarded.
         let procedure = null;
         try {
           procedure = validateProcedure(JSON.parse(row.body), row.name);
@@ -675,10 +684,24 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         if (!procedure) {
           return `The saved procedure "${row.name}" is corrupt or from an incompatible version — teach it again or save it from a fresh run.`;
         }
+        // ADAPTED run: the user changed the task, so run the learned steps as a TEMPLATE
+        // through the full intelligent loop (no deterministic replay, no self-heal of the
+        // original) rather than reproducing it. A blank/whitespace adapt is a faithful run.
+        const adaptText = adapt?.trim();
+        if (adaptText) {
+          const task = manager.spawnSubagent(
+            `${row.name} (adapted)`,
+            templateBrief(procedure, adaptText.slice(0, 500), notes?.trim() || null),
+            'mac',
+          );
+          return `Adapting "${row.name}" to that (internal task_id ${task.id} — never say it aloud): running it the intelligent way, guided by how you did it before. You'll be told when it finishes.`;
+        }
+        // FAITHFUL run: fast deterministic replay + parameter-fill, drift → intelligent
+        // fallback, success-after-drift → self-heal.
         const brief =
           `Replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${procedure.goal}.` +
-          (notes ? ` Run-specific notes from the user: ${notes}` : '');
-        const task = manager.spawnSubagent(row.name, brief, 'mac', { procedure, notes: notes ?? null });
+          (notes?.trim() ? ` Run-specific notes from the user: ${notes.trim()}` : '');
+        const task = manager.spawnSubagent(row.name, brief, 'mac', { procedure, notes: notes?.trim() || null });
         return `Running the saved procedure "${row.name}" (internal task_id ${task.id} — never say it aloud). You will be told when it finishes.`;
       } catch (err) {
         return `Could not start that: ${err instanceof Error ? err.message : String(err)}`;

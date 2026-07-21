@@ -132,6 +132,29 @@ function redactProcedure(procedure: Procedure) {
   }
 }
 
+/** Brief for running a saved procedure as a TEMPLATE through the intelligent loop — a
+ *  VARIATION the user asked for ("do the packing list, but for a picnic") rather than a
+ *  faithful replay. The demonstrated steps guide HOW (which apps, the sequence, where
+ *  things live); the adaptation changes WHAT. Untrusted-nothing here: `adapt`/`notes` are
+ *  the user's own spoken words, exactly like any task brief. */
+export function templateBrief(procedure: Procedure, adapt: string, notes: string | null): string {
+  const skeleton = procedure.steps.map((s, i) => `${i + 1}. [${s.lane}] ${s.desc}`).join('\n');
+  return [
+    `Do a Mac task based on the saved procedure "${procedure.name}", ADAPTED to the user's request.`,
+    `The procedure's usual goal: ${procedure.goal}.`,
+    `the user's adaptation — this changes WHAT to do; honor it over the original specifics: ${adapt}`,
+    ...(notes ? [`Extra run details from the user: ${notes}`] : []),
+    ...(procedure.preconditions.length ? [`Preconditions: ${procedure.preconditions.join('; ')}`] : []),
+    'Follow the demonstrated approach below for HOW — the same apps, the same sequence, where',
+    'things are — but adjust the contents and steps to fit the adaptation (add, drop, or change',
+    'steps as the new intent requires; do not blindly reproduce the original).',
+    skeleton,
+    `Apps it normally touches: ${procedure.apps.join(', ') || '(infer from the steps)'}.`,
+    'Work like any computer task: see before acting, verify each step by the result, and stop to',
+    'ask via the notch before anything that sends, submits, deletes, or leaves the machine.',
+  ].join('\n');
+}
+
 /** Spoken/report summary of a saved procedure. */
 export function procedureSummary(procedure: Procedure, version: number, provider: string): string {
   const apps = procedure.apps.length ? ` (apps: ${procedure.apps.join(', ')})` : '';
