@@ -55,9 +55,10 @@ enum SyntheticInput {
 
     // MARK: keyboard
 
-    /// Type a string into the focused element via per-character Unicode key events —
-    /// the fallback for Electron/web fields, whose JS listeners ignore AXValue writes but
-    /// fire on real key events.
+    /// Type a string into the focused element via per-character Unicode key events — the path
+    /// for NATIVE fields (AXExecutor.performType), because real per-character keys are what fire
+    /// an app's interactive auto-formatting (a typed "- " → a Notes bullet list) that a bulk
+    /// paste bypasses. Web/Electron fields use paste instead (their renderer drops these keys).
     static func type(_ text: String, pid: pid_t?) {
         for scalar in text.unicodeScalars {
             let s = String(scalar)

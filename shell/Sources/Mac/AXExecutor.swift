@@ -368,16 +368,37 @@ final class AXExecutor {
         return err == .success ? nil : "AXValue set error \(err.rawValue)"
     }
 
-    /// Focus, then paste — Electron/web fields ignore AXValue writes AND routinely drop
-    /// per-character synthetic key events posted to the app process (they land in the
-    /// renderer subprocess, not the main one). A clipboard paste goes through the app's
-    /// normal Edit▸Paste path to the focused field, and avoids spraying stray keys into the
-    /// shortcut layer when focus hasn't settled. Empty text is a no-op.
+    /// Focus, then enter text — per character for a NATIVE field, by clipboard paste for a
+    /// web/Electron one. The split matters: a native app's interactive auto-formatting only
+    /// fires on real per-character keys (Notes turns a typed "- " into a bullet list and demotes
+    /// the title style on the next line), whereas a bulk paste bypasses all of it — leaving a
+    /// literal dash and the previous line's inherited style (the packing-list replay bug). But a
+    /// web/Electron field (inside an AXWebArea) drops pid-targeted per-character keys into its
+    /// renderer subprocess, so THOSE still need a paste through the app's Edit▸Paste path. Empty
+    /// text is a no-op.
     private func performType(_ element: AXUIElement, text: String, pid: pid_t) -> String? {
         _ = performFocus(element)
         guard !text.isEmpty else { return nil }
-        SyntheticInput.paste(text, pid: pid)
+        if isWebHosted(element) {
+            SyntheticInput.paste(text, pid: pid)
+        } else {
+            SyntheticInput.type(text, pid: pid)
+        }
         return nil
+    }
+
+    /// True when the element sits inside a web view — a Chromium/Electron/WebKit field whose
+    /// renderer subprocess drops pid-targeted synthetic keys (so it needs paste, not per-char).
+    /// Walks up to an AXWebArea ancestor; the hop cap guards a pathological/cyclic tree.
+    private func isWebHosted(_ element: AXUIElement) -> Bool {
+        var node: AXUIElement? = element
+        var hops = 0
+        while let n = node, hops < 60 {
+            if stringAttr(n, kAXRoleAttribute) == "AXWebArea" { return true }
+            node = parentOf(n)
+            hops += 1
+        }
+        return false
     }
 
     /// Right-click on Chromium is coerced to left, so use AXShowMenu where available;
