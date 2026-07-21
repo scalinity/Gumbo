@@ -2410,3 +2410,38 @@ The de-generalization table (what the internet shape assumes vs what Gumbo actua
 
 Committed as the same-day companion to the research fold; the fold's own entry above stands
 unchanged.
+
+## Dashboard polish session — first-open scroll, seamless titlebar, notch re-focus (2026-07-21)
+
+Small live session with the user on main (dev servers + freshly rebuilt shell). Three UI fixes,
+each verified live; one real OS finding worth recording.
+
+- **Feed now opens at the newest entry.** The sentinel ref-callback stick only engaged within
+  160 px of the bottom — but on first load the WS `bootstrap` backlog lands in ONE store update
+  while the feed sits at scrollTop 0, so the stick never armed and the dashboard opened at the
+  TOP of history. Fix: a `didFirstSnap` ref inside the same callback — unconditional
+  `scrollIntoView` on the first render with visible rows, then the near-bottom stick takes over
+  unchanged. Gate on `visible.length > 0`, not mount: at mount the store is still empty (backlog
+  arrives after WS connect), so a mount-time snap is a no-op. Verified via Playwright:
+  197-row load → scrollTop == maxScroll.
+- **Titlebar deleted visually, not structurally.** `titleVisibility = .hidden` +
+  `titlebarAppearsTransparent` + window background matched to the dashboard's `--bg` (#191411,
+  index.css — cross-file coupling worth knowing). Deliberately NOT `.fullSizeContentView`: the
+  GUMBO wordmark lives top-left exactly where the traffic lights sit, and full-bleed would also
+  scroll feed text visibly under the lights. `window.title` stays set for Mission Control/a11y;
+  the invisible strip still drags.
+- **macOS 26 REFUSES to raise an already-on-screen window of a background app** — the notch
+  click-catcher is a nonactivating panel (by design), so Gumbo is still inactive when
+  `dashboard.show()` runs; `makeKeyAndOrderFront` + `orderFrontRegardless` + `activate` are ALL
+  silently ignored for a visible-but-behind window. But a window freshly ADDED to the screen
+  list is still granted front placement — which is why the FIRST notch press always worked and
+  re-presses did nothing. Fix: `if window.isVisible && !NSApp.isActive { window.orderOut(nil) }`
+  before `makeKeyAndOrderFront` — re-show through the placement path the OS still honors. No
+  flicker (same window-server transaction), webview state intact. Guard kept narrow: when Gumbo
+  IS active, plain makeKey works and the trick must not fire. This is workaround #3 for the
+  macOS 26 activation regime (after the quick-text `.nonactivatingPanel` and the first-open
+  `orderFrontRegardless`) — assume `NSApp.activate(ignoringOtherApps:)` is decorative on this OS.
+- Composer placeholder → "Message Gumbo" (voice shipped; the old "voice arrives with the notch
+  app" copy was stale). Also pruned stale DerivedData: disposed m6/m7 worktree caches deleted
+  (~/Library DerivedData keys per absolute project path — worktree flows leak orphans), M8's
+  kept (worktree live), main's shell rebuilt in place since its product predated the M7 merge.

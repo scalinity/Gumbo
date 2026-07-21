@@ -420,6 +420,9 @@ function Feed() {
   const selectTask = useStore((s) => s.selectTask);
   const tasks = useStore((s) => s.tasks);
   const feedRef = useRef<HTMLDivElement>(null);
+  // First render with real rows (the WS bootstrap backlog): open at the newest entry.
+  // Without this the feed starts at scrollTop 0, so the near-bottom stick never engages.
+  const didFirstSnap = useRef(false);
 
   const visible = selected ? events.filter((e) => e.task_id === selected) : events;
   const selectedTask = tasks.find((t) => t.id === selected);
@@ -447,6 +450,12 @@ function Feed() {
         ref={(el) => {
           const feed = feedRef.current;
           if (!el || !feed) return;
+          if (!didFirstSnap.current) {
+            if (visible.length === 0) return;
+            didFirstSnap.current = true;
+            el.scrollIntoView();
+            return;
+          }
           const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 160;
           if (nearBottom) el.scrollIntoView();
         }}
@@ -470,7 +479,7 @@ function Composer() {
     <div className="composer">
       <input
         ref={inputRef}
-        placeholder="Type to Gumbo — voice arrives with the notch app"
+        placeholder="Message Gumbo"
         disabled={!connected}
         onKeyDown={(e) => {
           if (e.key === 'Enter') submit();

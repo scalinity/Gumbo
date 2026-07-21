@@ -15,6 +15,13 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
     func show(taskId: String? = nil) {
         if window == nil { build() }
         if loadFailed { reload() }
+        // Visible-but-behind: macOS 26 won't raise an on-screen window of a background
+        // app (the notch catcher is nonactivating, so Gumbo stays inactive when clicked),
+        // and orderFrontRegardless is silently ignored. A window freshly ADDED to the
+        // screen list IS still placed frontmost — so re-show it through that path.
+        if let window, window.isVisible, !NSApp.isActive {
+            window.orderOut(nil)
+        }
         window?.makeKeyAndOrderFront(nil)
         // An LSUIElement app asked to activate from a click in a NONACTIVATING panel can
         // be refused by macOS — the window then orders behind the frontmost app and looks
@@ -55,7 +62,12 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
             contentRect: NSRect(x: 0, y: 0, width: 1120, height: 740),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
-        window.title = "Gumbo — Activity"
+        window.title = "Gumbo — Activity" // still named in Mission Control / app switcher
+        // No gray titlebar strip — just traffic lights over the app. The window background
+        // mirrors the dashboard's --bg (#191411, index.css) so the bar blends seamlessly.
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.backgroundColor = NSColor(srgbRed: 0x19 / 255, green: 0x14 / 255, blue: 0x11 / 255, alpha: 1)
         window.contentView = webView
         window.center()
         window.isReleasedWhenClosed = false // hide on close; reopened from the notch / status item
