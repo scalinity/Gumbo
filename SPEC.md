@@ -845,7 +845,7 @@ they're just missing provenance.
   everything-untrusted within a week (the read-web→send tax). Gumbo instead keeps Rule 4's task
   source-set — integrity axis = the untrusted-origin entries of the source-set above
   (`web:host / screen:app / file:path`); confidentiality axis = which sensitivity
-  classes it touched (from M9's columns) — and enforces at the ~five egress sinks: tainted egress →
+  classes it touched (from M9's columns) — and enforces at the disclosure sinks (Rule 4): tainted egress →
   informed confirm with the source banner; secret-class containment in an outbound payload → the
   immutable line; personal-sensitivity content in a web-search query → sink policy, same pattern.
   Releasing tainted/secret content past a sink stays an explicit recorded event (FIDES' capacity
@@ -866,12 +866,15 @@ they're just missing provenance.
   confirm; a user rule may tighten freely but can never override a hard deny or unlock what the
   shell can't do. The voice model may DRAFT a rule; activation is a separate shell-owned confirm —
   the **activation card** — showing the rule's plain meaning, two or three deterministic example
-  outcomes (allow/block/confirm), and the exact scope the user is activating. No compiled-predicate
-  dump or conflict matrix. The rule is versioned, diffed, receipted, and undoable. AgentSpec's
-  LLM-generated rules hit high precision but ~71% recall, which is why drafts never self-activate.
-  Replay against recent real actions is grow-on-need: add it only after `decide()` already records
-  normalized historical facts cheaply or a drafted rule surprises the user; it does not block the
-  first "stop asking about this" flow.
+  outcomes (allow/block/confirm), the exact scope the user is activating, and a **lightweight replay**:
+  the compiled predicate run against recent audit lines, so the card shows what this rule WOULD have
+  done to the user's real past actions. That replay is the one part of the card a model-authored draft
+  can't fake (plain-meaning text and examples are model-authored, so a draft from a tainted session
+  could word them to look narrower than they are) — and it's cheap in v1: the predicate and the audit
+  log both already exist at activation time, so it needs no normalized-fact infrastructure. No
+  compiled-predicate dump or conflict matrix beyond that. The rule is versioned, diffed, receipted,
+  and undoable. AgentSpec's LLM-generated rules hit high precision but ~71% recall, which is why
+  drafts never self-activate.
 - **Tainted tasks: taint is a FACT feeding `decide()`, not a separate gate (Rule 1).** A network
   send from a tainted task is a disclosure → informed confirm (Rule 4). But taint does NOT own an
   independent "confirm every command" gate: a `do shell script` action is priced by its effect, with
@@ -1226,10 +1229,11 @@ privacy boundary or offline conversational lane.
   (verifiable, or it falls back). **No stage-two learned/bandit router** — a static choice suffices
   at one user's volume — and **no effect-based "strongest model" routing**: deterministic gates own
   safety, not model tier; the gate decides *may this run* independent of which model drafted it. The
-  concrete FIRST job is M11's digest reducer (shrink a bulk connector read before the cloud sees it);
-  further jobs (watcher-triage cheap stage M12, semantic trigger verification M12, memory sensitivity
-  tagging / PII redaction M9, the M9 privacy-fork embedding alternative, short summaries) are added
-  only when a specific consumer needs one — never a battery built up front.
+  first job, WHEN a measured need justifies building the worker at all, is M11's digest reducer
+  (shrink a bulk connector read before the cloud sees it — base M11 ships without it, on capped
+  snippets); further jobs (watcher-triage cheap stage M12, semantic trigger verification M12, memory
+  sensitivity tagging / PII redaction M9, the M9 privacy-fork embedding alternative, short summaries)
+  are added only when a specific consumer needs one — never a battery built up front.
 - **A local result is never silently final (Rule 5).** A local "uninteresting" still lands in
   observations for a supported-channel sweep; failed schema validation falls back to the cloud
   (accepted). A lossy digest accounts for every input item ID as included or omitted, returns total
