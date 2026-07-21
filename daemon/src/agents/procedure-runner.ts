@@ -347,13 +347,30 @@ async function resolveParams(
 
 /** The brief the fallback Agent loop runs with — goal + skeleton + verified progress. */
 export function fallbackBrief(originalBrief: string, procedure: Procedure, replay: { atStep: number; reason: string; progress: string }): string {
-  const skeleton = procedure.steps.map((s, i) => `${i + 1}. [${s.lane}] ${s.desc}`).join('\n');
+  // Include each step's LITERAL value — the exact text typed, the keys pressed — not just its
+  // description. Without it the fallback loop sees only generic descriptions ("type the second
+  // list item") plus an abstracted goal, so it re-derives content and format from scratch:
+  // inventing its own items and reaching for the app's native widgets (packing-list demo — it
+  // typed native CHECKBOXES + made-up items instead of the demonstrated "- Towels" dashes).
+  // Handoff steps carry no value (redacted); key steps carry a key name.
+  const skeleton = procedure.steps
+    .map((s, i) => {
+      const on = s.target?.name ? ` on "${s.target.name}"` : '';
+      let detail = '';
+      if (s.value !== undefined && s.value !== '') {
+        detail = s.lane === 'key'
+          ? ` — press ${s.value}`
+          : ` — type EXACTLY (verbatim, same characters and format): ${JSON.stringify(s.value)}`;
+      }
+      return `${i + 1}. [${s.lane}] ${s.desc}${on}${detail}`;
+    })
+    .join('\n');
   return [
     originalBrief,
     '',
     `NOTE: this task began as a deterministic replay of the saved procedure "${procedure.name}" and DRIFTED at step ${replay.atStep + 1} (${replay.reason}).`,
     replay.progress ? `Steps already completed and verified:\n${replay.progress}` : 'No steps had completed yet.',
-    `The saved skeleton (the demonstrated path — adapt where the UI has changed):\n${skeleton}`,
+    `The saved steps below ARE the demonstration — REPRODUCE THEM FAITHFULLY. Type the exact text shown, character for character, keeping its format (a leading "- " is a literal dash-space, NOT a cue to switch to the app's native checklist/checkbox); press the exact keys; do NOT invent, add, drop, reorder, or "improve" the content. Adapt ONLY the targeting when the UI genuinely moved — never the values.\n${skeleton}`,
     'Continue from the current state — do NOT redo the completed steps. Mention in your report that the procedure drifted so it can be updated.',
   ].join('\n');
 }

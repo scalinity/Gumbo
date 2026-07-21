@@ -309,3 +309,20 @@ test('app-launch resilience: an app NOT in the procedure is never launched — i
   assert.match((result as { reason: string }).reason, /not one of this procedure's apps/);
   assert.equal(launches.length, 0, 'never launch an app outside the procedure set');
 });
+
+test('fallbackBrief carries the LITERAL typed values + a verbatim-reproduction instruction (no improvising)', () => {
+  const proc: Procedure = {
+    name: 'packing list', goal: 'a checklist-style packing list', preconditions: [], apps: ['Notes'],
+    steps: [
+      { lane: 'ax', desc: 'Type the first item', target: { app: 'Notes', role: 'AXTextArea', name: 'Body' }, verb: 'type', value: '- Towels' },
+      { lane: 'key', desc: 'Next line', verb: 'key', value: 'return' },
+      { lane: 'handoff', desc: 'the user signs in' }, // no value — redacted; must not print "undefined"
+    ],
+  };
+  const brief = fallbackBrief('do the packing list', proc, { atStep: 0, reason: 'snapshot failed', progress: '' });
+  assert.match(brief, /"- Towels"/, 'the literal item + dash format reaches the fallback loop');
+  assert.match(brief, /press return/, 'a key step renders as its keypress');
+  assert.match(brief, /verbatim/i, 'instructed to reproduce verbatim');
+  assert.match(brief, /checklist|checkbox/i, 'warned off the app-native checklist widget');
+  assert.doesNotMatch(brief, /undefined/, 'a valueless (handoff) step never prints "undefined"');
+});
