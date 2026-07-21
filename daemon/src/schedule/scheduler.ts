@@ -51,17 +51,34 @@ export class Scheduler {
     this.timer = null;
   }
 
-  /** One poll: fire every due pending row. Public so tests drive it without timers. */
+  /** One poll: fire every due pending row. Public so tests drive it without timers. Never
+   *  throws: this runs on a setInterval tick with no uncaughtException net, so a sqlite
+   *  hiccup on the query or a mark-fired must degrade to "retry next poll," never crash the
+   *  daemon (voice, tasks, and every other scheduled row ride the same process). */
   sweepNow() {
-    for (const row of this.store.duePendingSchedules(Date.now())) {
+    let due: ScheduleRow[];
+    try {
+      due = this.store.duePendingSchedules(Date.now());
+    } catch (err) {
+      console.error('scheduler: due-query failed, retrying next poll:', err);
+      return;
+    }
+    for (const row of due) {
       // Mark fired BEFORE delivering (at-most-once): if delivery crashes, one spoken
       // reminder is lost — EventKit still notified at the OS level. Marking after would
       // re-fire a throwing row every poll, forever. Mark + event share a transaction so
-      // a crash between them can't consume a fire without its audit trace (review 🔵).
-      this.store.transaction(() => {
-        this.store.updateScheduleStatus(row.id, 'fired');
-        this.store.addEvent(null, 'reminder.fired', { id: row.id, kind: row.kind, text: row.text, fire_at: row.fire_at });
-      });
+      // a crash between them can't consume a fire without its audit trace (review 🔵). If
+      // the transaction itself throws, the row stays pending and retries next poll — so we
+      // skip delivery rather than announce a fire we didn't record.
+      try {
+        this.store.transaction(() => {
+          this.store.updateScheduleStatus(row.id, 'fired');
+          this.store.addEvent(null, 'reminder.fired', { id: row.id, kind: row.kind, text: row.text, fire_at: row.fire_at });
+        });
+      } catch (err) {
+        console.error(`scheduler: marking ${row.id} fired failed, retrying next poll:`, err);
+        continue;
+      }
       Promise.resolve()
         .then(() => this.onFire({ ...row, status: 'fired' }))
         .catch((err: unknown) => {
