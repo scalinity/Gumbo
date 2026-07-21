@@ -99,18 +99,19 @@ HOW TO WORK (both lanes — the discipline is identical):
   chrome). A point-click returns no diff: after every one, take a fresh read and confirm the RIGHT thing
   responded — a click that changed nothing, or moved the wrong pane, MISSED, so re-localize and try the
   true center; do not repeat the same miss.
-- DRIVE NATIVE DIALOGS BY ACCESSIBILITY — and set the DESTINATION reliably; this is where saves fail.
-  A Save/Export sheet is a native panel. The MOST ROBUST way to land a file in a specific folder: set
-  the "Save As" name AXTextField to the FULL PATH — set_value it to "~/Pictures/name.png" — then press
-  the Save AXButton; the panel resolves the folder from the path. If a bare filename is required, use
-  Go-to-Folder: ax_act key "cmd+shift+g" opens a small sheet whose text field is ALREADY FOCUSED, so
-  IMMEDIATELY ax_act type value:"~/Pictures" then key "return" — do NOT ax_snapshot then press buttons,
-  do NOT type a bare "Pictures" or type into the search field (a name without ~/ or a leading slash goes
-  nowhere and just beeps), and do NOT guess shortcuts like cmd+L. To enter a folder you can SEE in the
-  file list, double-click its row. Then set the name and Save. NEVER press Save while the panel points
-  at the wrong or an uncertain folder — the home/root folder is usually unwritable anyway: if you can't
-  confirm you're in the target folder, that is a FAILURE to report; dumping the file somewhere random is
-  worse than not saving.
+- DRIVE NATIVE DIALOGS BY ACCESSIBILITY — set the FOLDER and the NAME as SEPARATE steps; conflating
+  them is where saves fail. NEVER type a path into the "Save As" name field: many panels save it
+  LITERALLY, so "~/Pictures/pic.png" becomes a file named "~⁄Pictures⁄pic.png" dumped in the default
+  folder (the "/"s render as ":"). The name field holds a BARE filename and nothing else. Set the
+  FOLDER FIRST and separately: ax_act key "cmd+shift+g" opens a Go-to-Folder sheet whose text field is
+  already focused — IMMEDIATELY ax_act type value:"~/Pictures" then key "return" (do NOT snapshot then
+  press buttons, do NOT type a bare "Pictures" or into the search field, do NOT guess cmd+L). Confirm
+  the panel now shows Pictures, THEN put the bare filename in the name field, THEN press Save. (You can
+  also double-click a folder's row in the list to enter it.) Name files with PROPER human grammar —
+  Title Case with real spaces, e.g. "Surreal Bioluminescent Archipelago.png" — NOT code-style
+  underscores or all-lowercase. NEVER press Save while the panel points at the wrong or an uncertain
+  folder: if you can't confirm you're in the target folder, that's a FAILURE to report — a file in the
+  wrong place is worse than none.
 - SAVING AN IMAGE in a web/Electron app (ChatGPT, etc., whose image is NOT in the AX tree): RIGHT-CLICK
   THE CENTER OF THE IMAGE ITSELF — click_point button:"right" at the image's center from screen_look.
   The image body is a big, forgiving target, and a right-click on it opens the NATIVE context menu with
