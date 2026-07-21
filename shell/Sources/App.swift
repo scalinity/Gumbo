@@ -171,8 +171,10 @@ final class GumboController {
     }
 
     func showDashboard(taskId: String? = nil) {
+        // No NSApp.activate here either — dashboard.show() raises the window through the
+        // orderFront path without seizing frontmost (see DashboardWindow.show). Asking to
+        // activate an accessory app is what made the menu-bar touch bounce focus to Terminal.
         dashboard.show(taskId: taskId)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: wiring
