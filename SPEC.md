@@ -946,10 +946,22 @@ with the shell owning local grants and the daemon minimizing what crosses to the
   - **Daemon-enforced caps** — max records, max snippet chars, and an **unscoped query is an error**
     (a lookup with no sender/thread/query/date-window is rejected, never a full scan). The tool
     physically cannot return the inbox.
-  - **Bulk reduction is an optional M15 enhancement** — base M11 answers a digest request from a
-    source-scoped, record-capped set of snippets. If measured volume, latency, cost, or exposure makes
-    that insufficient, the M15 worker reduces the same capped set on-device before its digest crosses
-    to the cloud; if the worker is unavailable, M11 says so and uses the capped snippets.
+  - **Bulk asks cross only through the on-device reduce+redact pipeline (designed 2026-07-21).**
+    The daemon forks every lookup mechanically: a query that names one contact/thread/message and
+    resolves under a small config cap is FOCAL — its scoped projection crosses intact, because the
+    content *is* the answer and Realtime speaks audio, so a placeholder could never be re-hydrated
+    in speech. Anything wider is BULK and never crosses raw: (1) a deterministic redactor replaces
+    structured PII — phone numbers, email addresses, card/account digits, verification codes,
+    tracking numbers, street addresses — with stable per-task placeholders BEFORE any model sees
+    the text; (2) the M15 worker triages the capped, already-redacted set into a digest +
+    included/omitted manifest on-device; (3) a final deterministic sweep re-checks the digest, and
+    only that projection crosses. The alias map (placeholder → value) lives in daemon memory for
+    the task and re-hydrates only at local executors (a send draft, a dial/mac action), so the
+    cloud can compose with a value it never received. Worker unavailable or over budget → the bulk
+    ask degrades to capped, regex-redacted header snippets and says so (Rule 5) — never raw
+    bodies, never silence. Redaction never dead-ends a turn: any digest line promotes to focal via
+    `open_item`, and an unscoped query's error carries the narrowing hint, so the model recovers
+    in-band.
   - **Content-light audit + provenance** — each fetch logs metadata only (query shape, count, fields
     — never bodies) and stamps the task source-set with the sensitivity class for Rule 4.
 
@@ -1003,7 +1015,8 @@ lunch Thursday?" — answered from Messages (native) + Gmail (MCP) + Calendar in
 resolved, nothing sent, and no connector CONTENT persisted — the OAuth credential, metadata-only
 audit, and provenance facts remain. Only the scoped projections (Mara's snippets, the landlord
 match's header, Thursday's free/busy), not the message DB or inbox, cross to the cloud under the user's
-standing grant.
+standing grant. A bulk ask ("anything important this morning?") crosses only as the
+on-device-reduced, placeholder-redacted digest with its included/omitted manifest.
 
 **Considered and rejected:** a multi-channel chat gateway / device-node pairing / skills marketplace
 (OpenClaw's growth surface) — every channel is an outward auth+exfil surface and multi-device pairing
@@ -1214,26 +1227,29 @@ just as well).
 ### M15 — Local worker tier (cost, latency & disclosure reduction) (specced 2026-07-20)
 
 M15 adds one local worker when a measured job benefits from lower cost, latency, or cloud exposure.
-Apple's Foundation Models framework (on-device, guided generation to typed Swift structs; WWDC26
-image/larger-model claims require GA verification) is the first implementation candidate; MLX is
-only for a later job that Foundation Models cannot serve
-([developer.apple.com/documentation/FoundationModels](https://developer.apple.com/documentation/FoundationModels);
-vllm-mlx [arxiv 2601.19139](https://arxiv.org/abs/2601.19139)). Realtime remains the sole
+The worker is **Ornith-1.0-35B-MLX-oQ4** (an agentic fine-tune of Qwen3.6-35B-A3B, OptiQ 4-bit,
+already on disk under `~/Documents/LocalAI`), run through the LocalAI venv's `mlx_lm` with thinking
+disabled and greedy decoding — chosen by a task-shaped bake-off on this machine (measured
+2026-07-21): zero PII leaks and the most complete redaction map of four candidate quants, 852 tok/s
+prefill / 86 tok/s decode / 21.6 GB peak, a full 14-item inbox digest in 13 s cold (~9 s warm) and
+a thread redaction in 7 s — inside the voice budget. It runs subprocess-per-job (zero resident
+memory between jobs; the ~4 s load tax is already inside those numbers); a resident `mlx_lm.server`
+is a grow-on-need upgrade if job cadence ever makes the load tax felt. Realtime remains the sole
 orchestrator, so local output still returns to the cloud and M15 is a disclosure REDUCER, never a
 privacy boundary or offline conversational lane.
 
-- **One local worker, one proven job at a time — no router fabric.** The shell exposes on-device
-  inference as a tool (FoundationModels via Swift, guided generation = typed structs over the WS).
-  Eligibility is deterministic and simple: a job is local-eligible if it is device-scale
-  (summarization/extraction/classification, Apple's own framing — not world knowledge) AND non-final
-  (verifiable, or it falls back). **No stage-two learned/bandit router** — a static choice suffices
-  at one user's volume — and **no effect-based "strongest model" routing**: deterministic gates own
-  safety, not model tier; the gate decides *may this run* independent of which model drafted it. The
-  first job, WHEN a measured need justifies building the worker at all, is M11's digest reducer
-  (shrink a bulk connector read before the cloud sees it — base M11 ships without it, on capped
-  snippets); further jobs (watcher-triage cheap stage M12, semantic trigger verification M12, memory
-  sensitivity tagging / PII redaction M9, the M9 privacy-fork embedding alternative, short summaries)
-  are added only when a specific consumer needs one — never a battery built up front.
+- **One local worker, one proven job at a time — no router fabric.** The daemon owns the worker
+  (`daemon/src/local/`): it shells out to `mlx_lm` per job with a strict-JSON output contract,
+  validates on parse, and falls back on any miss. Eligibility is deterministic and simple: a job is
+  local-eligible if it is device-scale (summarization/extraction/classification/redaction — not
+  world knowledge) AND non-final (verifiable, or it falls back). **No stage-two learned/bandit
+  router** — a static choice suffices at one user's volume — and **no effect-based "strongest
+  model" routing**: deterministic gates own safety, not model tier; the gate decides *may this run*
+  independent of which model drafted it. The first job is M11's bulk reduce+redact stage (specced
+  there; the deterministic redactor beneath it runs even when the worker is down); further jobs
+  (watcher-triage cheap stage M12, semantic trigger verification M12, memory sensitivity tagging /
+  PII redaction M9, the M9 privacy-fork embedding alternative, short summaries) are added only when
+  a specific consumer needs one — never a battery built up front.
 - **A local result is never silently final (Rule 5).** A local "uninteresting" still lands in
   observations for a supported-channel sweep; failed schema validation falls back to the cloud
   (accepted). A lossy digest accounts for every input item ID as included or omitted, returns total
@@ -1248,14 +1264,16 @@ privacy boundary or offline conversational lane.
   (accepted) or, if a consumer marked it must-stay-local, `BLOCKED_BY_MODEL`, said aloud. Rate limit →
   pause at a durable boundary, don't restart.
 
-**Demo:** after measured mail volume justifies the worker, "summarize this morning's mail" fetches a
-scoped, capped set; the on-device worker marks five of 12 item IDs included and seven omitted, emits a
-three-line digest plus a content-light manifest, and only that projection crosses to the cloud.
+**Demo:** "summarize this morning's mail" fetches a scoped, capped set; the deterministic redactor
+placeholders its structured PII, the worker marks five of 12 item IDs included and seven omitted,
+and only the redacted three-line digest plus the content-light manifest crosses to the cloud — in
+roughly ten seconds on the measured budget.
 
 **Considered and rejected:** continuous per-user fine-tuning / Apple adapter training (retrained per
 base-model update; structured memory + routing + policy get the personalization at none of the
-maintenance risk); token-level speculative decoding (a self-hosted serving optimization — not
-actionable over hosted APIs); a learned router (eligibility is deterministic, forever); a
+maintenance risk); token-level speculative decoding (measured 2026-07-21: a trained DFlash draft
+lands 0.96× on the deploy quant — a loss — and only 1.09× on its own training target); a learned
+router (eligibility is deterministic, forever); a
 local-private ORCHESTRATION lane that bypasses Realtime (it would be a second brain — §2 locks
 sole-orchestrator — and the user accepted cloud processing, so the lane has no requirement to serve);
 "inference fabric" as a platform (one worker for one job, grown on need).

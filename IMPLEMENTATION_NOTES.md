@@ -2547,3 +2547,56 @@ design; this log keeps the audit provenance and reasons.
   uncertainty; audio retains the analyzed time span and confidence. Raw media stays local while
   extracted text may reach Realtime under the standing grant, and the beep demo explicitly refuses
   to rule out an alarm from a short clip.
+
+## M11/M15 local-reducer bake-off — Ornith oQ4 chosen on measured evidence (2026-07-21)
+
+the user accepted cloud processing but directed the M11 bulk path through local reduce+redact first
+(OpenAI's own data-minimization posture), and asked which of the on-disk 35B-A3B variants should be
+the worker. Ran a task-shaped bake-off instead of trusting the existing coding gauntlets — that
+choice was load-bearing: the June coding gauntlet ranked oQ8 first (10/10, ★4.8/5), but on the
+actual reducer job oQ8 is the *worst* deploy pick. Generic benchmarks inverted the ranking.
+
+- **Protocol:** 4 models × 2 tasks, greedy temp 0, thinking off, `mlx_lm` 0.31.3 from the LocalAI
+  venv, M5 Pro 48 GB. T1 = 14-email synthetic inbox → strict-JSON digest + included/omitted
+  manifest + placeholder redaction (12 planted PII values). T2 = 8-message thread → verbatim
+  redaction + alias map, scored by byte-exact round-trip re-hydration. All fixtures synthetic;
+  single greedy run per cell (small n, but the discriminating event aligned with the June
+  cross-analysis's "Ornith is the more precise agent").
+- **Result:** Ornith-1.0-35B-MLX-oQ4 won every axis that matters — ZERO leaks and the most complete
+  redaction map (9/9 planted values incl. tracking number and card digits), perfect 14/14 manifest
+  and triage, AND fastest (852 tok/s prefill / 86 tok/s decode) AND smallest (21.6 GB peak; 20 GB
+  on disk). Full digest 13 s cold / ~9 s warm; thread redaction 7 s — inside the 15 s voice budget
+  even cold. Base Qwen3.6-OptiQ-4bit leaked "card ending 7733" into a digest gist — the single
+  discriminating quality event, and exactly the failure class a privacy reducer exists to prevent.
+  Ornith 5-bit: clean but strictly dominated (slower, +4.5 GB, equal quality). oQ8: clean but
+  disqualified — prefill 68 tok/s (stock qmm kernel, ~12× slower than oQ4's; quant format decides
+  which kernels engage) makes a 1.3k-token prompt ~20 s before first token, and 38.2 GB peak leaves
+  no headroom on a 48 GB always-alive machine.
+- **T2 didn't discriminate — good news in itself:** all four scored 8/8 byte-exact round-trips with
+  zero leaks and full alias coverage. Verbatim redaction-with-alias-map is safely below the
+  capability floor of every candidate; model choice is decided by the digest job.
+- **oQ4's one blemish drove a design decision:** it wrote `[ADDR_1]` where it meant `[ADDR_2]` in
+  one gist (no leak; re-hydration would substitute the wrong address). Placeholder cross-referencing
+  is exactly what a model is bad at and regex is perfect at → the pipeline orders the DETERMINISTIC
+  redactor BEFORE the model (structured PII becomes placeholders before the model ever sees the
+  text; the model owns only triage + gisting; a final deterministic sweep runs after). The bake-off
+  made the model do both jobs; production splits the roles, so this slip class disappears.
+- **`--chat-template-config '{"enable_thinking": false}'` honored by all four** (zero think tokens)
+  — the no-reasoning production posture is real, not hoped-for. Without it, Qwen-family models
+  think by default (validated on a tiny model first: tens of seconds and thousands of tokens).
+- **Speculative decoding stays rejected, now with a measurement:** the user's own DFlash field test
+  has the AEON draft at 0.96× on Ornith oQ4 (a loss) and 1.09× only on its training target (base
+  Qwen). Same kernel, same policy — the variable is the fine-tune. Dead lever; recorded in M15's
+  rejected list.
+- **Serving = subprocess-per-job, not a resident server.** `mlx_lm.generate` per job means ZERO
+  resident memory between jobs on a machine the user actively uses; the ~4 s load tax is already
+  inside the measured 13 s cold budget. A resident `mlx_lm.server` (saves the load tax, pins
+  ~21 GB) is a grow-on-need upgrade if digest cadence (e.g. the M12 morning brief) makes the tax
+  felt.
+- **Apple Foundation Models dropped as the M15 candidate.** The rationale for it was "smallest
+  adequate on-device model, typed guided generation" — but a measured 35B-A3B agentic model already
+  on the user's disk beats a ~3B dense model on the same job with acceptable latency and zero resident
+  cost, and skipping the Swift-side runtime keeps the worker seam in the daemon where every other
+  provider client lives. SPEC M15 now states the oQ4 design directly.
+- Bake-off artifacts (fixtures, outputs, scorer) lived in the session scratchpad — ephemeral by
+  design; the protocol above is enough to re-run against a future candidate.
