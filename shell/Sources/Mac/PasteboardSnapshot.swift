@@ -7,6 +7,11 @@ import AppKit
 /// snapshot at a time (a single sub-agent save flow, n-of-1); a second snapshot overwrites
 /// the first. Called on the main thread from MacBridge's dispatch (like the other
 /// pasteboard work), so reads/writes never race the AppKit clipboard.
+///
+/// Fidelity: captures every concrete type→data flavor. Common cases (plain/rich text, image,
+/// public.file-url) round-trip byte-exactly. PROMISED/lazy flavors (file promises, some
+/// NSPasteboardItemDataProvider sources) return nil from `data(forType:)` and are NOT
+/// preserved — acceptable for the image-save flow this serves.
 enum PasteboardSnapshot {
     // Each item is type-raw-value → data. nil = nothing snapshotted (restore is a no-op);
     // [] = the clipboard was genuinely empty (restore clears it back to empty).
@@ -40,6 +45,4 @@ enum PasteboardSnapshot {
         }
         if !nsItems.isEmpty { pb.writeObjects(nsItems) }
     }
-
-    static var isPending: Bool { saved != nil }
 }

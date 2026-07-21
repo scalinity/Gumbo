@@ -46,6 +46,17 @@ test('the AX toolset exposes exactly the sub-agent primitives (M7 adds vision ru
   );
 });
 
+test('preserve_clipboard maps save→clipboard_snapshot and restore→clipboard_restore (the load-bearing branch)', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'ok' }));
+  const list = tools(bridge);
+  await byName(list, 'preserve_clipboard').invoke({}, JSON.stringify({ action: 'save' }));
+  await byName(list, 'preserve_clipboard').invoke({}, JSON.stringify({ action: 'restore' }));
+  assert.deepEqual(
+    bridge.calls.map((c) => c.kind),
+    ['clipboard_snapshot', 'clipboard_restore'],
+  );
+});
+
 test('a failing act surfaces the typed error_kind, with the stale_ref re-snapshot hint', async () => {
   const list = tools(fakeBridge(() => ({ ok: false, output: 'ref e3 gone', error_kind: 'stale_ref' })));
   const out = await byName(list, 'ax_act').invoke({}, JSON.stringify({ verb: 'press', ref: 'e3', value: null, role: null, name: null, timeout_ms: 5000 }));

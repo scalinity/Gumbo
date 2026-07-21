@@ -85,7 +85,9 @@ function vadHarness(over: { responding?: boolean; shellDraining?: boolean }) {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-vad-')), 'gumbo.db'));
   const sent: Array<{ type: string }> = [];
   const hub = { broadcast: (m: { type: string }) => sent.push(m), hasRole: () => true, sendBinary: () => {} };
-  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never, {} as never);
+  // manager stub carries hasActiveTasks — the idle-timer callback (resetIdleTimer) calls it, so a
+  // future fake-timer test would TypeError on a bare {} (DB1 review 🔵).
+  const orchestrator = new Orchestrator(store, hub as never, { hasActiveTasks: () => false } as never, {} as never, {} as never, {} as never);
   let interrupts = 0;
   Object.assign(orchestrator, {
     armed: true,
@@ -153,7 +155,9 @@ test('local VAD: speech while Gumbo is NOT talking sets the commit gate but neve
 function commitHarness(over: { hadSpeech?: boolean; localHadSpeech?: boolean; armedBytes?: number }) {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-commit-')), 'gumbo.db'));
   const hub = { broadcast: () => {}, hasRole: () => true, sendBinary: () => {} };
-  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never, {} as never);
+  // manager stub carries hasActiveTasks — the idle-timer callback (resetIdleTimer) calls it, so a
+  // future fake-timer test would TypeError on a bare {} (DB1 review 🔵).
+  const orchestrator = new Orchestrator(store, hub as never, { hasActiveTasks: () => false } as never, {} as never, {} as never, {} as never);
   const events: string[] = [];
   let responses = 0;
   const transport = {
@@ -209,7 +213,9 @@ test('finishTurn: a window with no speech at all clears and stays silent', () =>
 test('a release that beats the connect stashes the window bytes for the deferred commit', () => {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-commit-')), 'gumbo.db'));
   const hub = { broadcast: () => {}, hasRole: () => true, sendBinary: () => {} };
-  const orchestrator = new Orchestrator(store, hub as never, {} as never, {} as never, {} as never, {} as never);
+  // manager stub carries hasActiveTasks — the idle-timer callback (resetIdleTimer) calls it, so a
+  // future fake-timer test would TypeError on a bare {} (DB1 review 🔵).
+  const orchestrator = new Orchestrator(store, hub as never, { hasActiveTasks: () => false } as never, {} as never, {} as never, {} as never);
   // Mid-connect: no session yet, ensureSession's promise pending — the shape the
   // pendingRelease fork keys on. The commit decision itself runs after connect resolves
   // (needs a real RealtimeSession) and stays covered by the smokes.

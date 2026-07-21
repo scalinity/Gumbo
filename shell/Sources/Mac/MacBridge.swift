@@ -55,17 +55,11 @@ final class MacBridge {
             return true
         case "mac_task":
             let active = msg["active"] as? Bool ?? false
-            DispatchQueue.main.async {
-                if active {
-                    self.armSession()
-                } else {
-                    self.disarmSession()
-                    // Safety net (M8): if a save flow snapshotted the clipboard but the run
-                    // ended before it restored, put the user's clipboard back now. No-op if the
-                    // model already restored, or if nothing was snapshotted.
-                    PasteboardSnapshot.restore()
-                }
-            }
+            DispatchQueue.main.async { active ? self.armSession() : self.disarmSession() }
+            // NOTE: the clipboard safety-net restore is driven by the DAEMON on genuine task
+            // end (manager.finish → clipboard_restore), NOT here — an unattended park also
+            // sends mac_task active:false (refcount 1→0→1) and restoring here would evict a
+            // just-copied image mid-save.
             return true
         case "mac_handoff":
             // M7: the user is doing a step himself — stand the kill switch down and hide

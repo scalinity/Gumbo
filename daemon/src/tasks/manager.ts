@@ -556,6 +556,12 @@ export class TaskManager {
     this.store.addEvent(id, 'task.finished', { status, ...(payload as object) });
     const task = this.store.getTask(id);
     if (task) this.onFinished(task);
+    // M8: a computer task's image-save may have snapshotted the user's clipboard (preserve_clipboard
+    // 'save') before a Copy-Image and not yet restored it. Restore on GENUINE task end here — NOT on
+    // the shell's mac_task active:false, which an unattended park also fires (refcount 1→0→1) and
+    // would evict the just-copied image mid-save. Idempotent (no-op if already restored or nothing
+    // snapshotted); fire-and-forget so finish() stays synchronous for the kill-switch label race.
+    if (task?.kind === 'computer') this.macBridge?.request?.({ kind: 'clipboard_restore' }, { timeoutMs: 2000 })?.catch(() => {});
     // M8: a finished computer task may unblock a queued routine — try now, off this tick
     // (finish() must stay synchronous for the kill-switch label race).
     if (this.routineQueue.length > 0) setImmediate(() => this.drainRoutineQueue());
@@ -742,7 +748,11 @@ export class TaskManager {
 
   /** True while any spawned task or teaching session is still in flight. The realtime session
    *  stays alive across this so a completion announces through the live, OWNING path — not the
-   *  canned cold TTS, which can only read a fixed line and can't retry/fix a failure. */
+   *  canned cold TTS, which can only read a fixed line and can't retry/fix a failure.
+   *  Bounded, never a permanent leak: finish() always deletes the abort. Note the asymmetry — a
+   *  mac task parked at needs_input (a handoff, or an unattended routine's long park) KEEPS its
+   *  abort in the map, so it holds the session open; a parked Claude session drops its abort and
+   *  does not. Both intended: a mac task is one screen the voice should stay present for. */
   hasActiveTasks(): boolean {
     return this.aborts.size > 0;
   }

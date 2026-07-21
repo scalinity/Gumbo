@@ -381,6 +381,10 @@ export function createMacTools(
       'as he left it. It changes nothing on disk and needs no approval. Safety net: if you forget to ' +
       'restore, his clipboard is restored automatically when the task ends.',
     parameters: z.object({ action: z.enum(['save', 'restore']) }),
+    // No auditMacAction line and no deps.observe() — deliberately, like ax_query/ax_snapshot:
+    // this only round-trips the user's OWN clipboard (no external sink, no on-disk effect), and
+    // the tool never returns the contents to the model (the shell keeps the bytes), so there is
+    // nothing to gate, audit, or replay.
     async execute({ action }) {
       const result = await macBridge.request(
         { kind: action === 'save' ? 'clipboard_snapshot' : 'clipboard_restore' },

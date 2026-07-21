@@ -139,6 +139,21 @@ test('M6: only one computer-use task may drive the Mac at a time (demo fix)', as
   assert.ok(third.id);
 });
 
+test('M8 keepalive: hasActiveTasks flips true while a computer task runs, false once it finishes', async () => {
+  // Liveness signal behind the realtime-session keepalive (resetIdleTimer). Same throwing-stub
+  // trick as above: the abort is laid down synchronously at spawn; finish() clears it.
+  const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-mgr-db-')), 'gumbo.db'));
+  const macBridge = { taskStarted: () => { throw new Error('stub — no live run in tests'); }, taskFinished: () => {} };
+  const manager = new TaskManager(store, async () => false, async () => false, fakeFactory(async () => ({ parked: false, report: '' })) as never, macBridge as never);
+
+  assert.equal(manager.hasActiveTasks(), false);
+  const task = manager.spawnSubagent('Change wallpaper', 'do it', 'mac');
+  assert.equal(manager.hasActiveTasks(), true, 'abort registered synchronously at spawn');
+  await settle(); // the stubbed taskStarted rejection settles the task to failed → finish()
+  assert.equal(store.getTask(task.id)?.status, 'failed');
+  assert.equal(manager.hasActiveTasks(), false, 'finish() deleted the abort');
+});
+
 test('plan approval: approved plan proceeds, denied plan parks (plan-mode)', async () => {
   // Behavior simulates the runner: call onPlanReady; approved → complete, denied → park.
   const behavior = async (opts: RunnerOpts): Promise<RunResult> => {
@@ -325,7 +340,10 @@ test('M8 teaching: start arms the recorder, steps land, stop finishes with a rep
   const done = await manager.stopTeaching();
   assert.equal(done.stepCount, 2);
   assert.equal(done.name, 'file expenses');
-  assert.deepEqual(bridge.requests, ['record_start', 'record_stop']);
+  // finish() fires a defensive clipboard_restore on EVERY computer-task end (teaching rows are
+  // kind:'computer' too) — a no-op ping when nothing was snapshotted. The choke point is finish()
+  // so a kill-switch cancel mid-save still restores; the teaching no-op is the accepted cost.
+  assert.deepEqual(bridge.requests, ['record_start', 'record_stop', 'clipboard_restore']);
   assert.deepEqual(bridge.teachStates, [true, false]);
   assert.equal(store.getTask(task.id)?.status, 'done');
   assert.deepEqual(finished, ['done'], 'stop rides the announce path');
