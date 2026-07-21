@@ -33,6 +33,15 @@ struct AXNode {
         }
     }
 
+    /// Content images (a generated picture, a large thumbnail) are included in the snapshot so
+    /// the loop can LOCATE them: an image isn't pressable by ref, so its line renders a precise
+    /// center point (see `line()`) for a click_point/double-click. Small chrome icons (< 64pt on
+    /// either side — send-button glyphs, avatars) stay filtered so the snapshot doesn't bloat.
+    static func isContentImage(role: String, frame: CGRect?) -> Bool {
+        guard role == kAXImageRole, let f = frame else { return false }
+        return min(f.width, f.height) >= 64
+    }
+
     /// Secure fields never expose their value in a snapshot line — the executor also hard-
     /// refuses acting on them, but redact here so a password never even reaches the model.
     private var safeValue: String? {
@@ -46,6 +55,9 @@ struct AXNode {
         if !name.isEmpty { parts.append("\"\(clip(name))\"") }
         if let v = safeValue, !v.isEmpty { parts.append("value=\"\(clip(v))\"") }
         if let id = identifier, !id.isEmpty { parts.append("#\(id)") }
+        // Images can't be pressed by ref — render their center so the loop can double-click the
+        // exact point (precise AX geometry, not a vision guess).
+        if role == kAXImageRole, let f = frame { parts.append("@(\(Int(f.midX)),\(Int(f.midY)))") }
         if !enabled { parts.append("(disabled)") }
         return parts.joined(separator: " ")
     }

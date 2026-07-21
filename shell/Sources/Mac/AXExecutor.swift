@@ -200,7 +200,7 @@ final class AXExecutor {
         let frame = frameFrom(raw, posIndex: 6, sizeIndex: 7)
         let identifier = string(raw, 8)
 
-        if AXNode.isInteractive(role: role, subrole: subrole) {
+        if AXNode.isInteractive(role: role, subrole: subrole) || AXNode.isContentImage(role: role, frame: frame) {
             nodes.append(AXNode(
                 element: element, role: role, subrole: subrole,
                 name: title ?? desc ?? "", value: value, enabled: enabled,
