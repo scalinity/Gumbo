@@ -47,18 +47,42 @@ function parseTarget(target: string): { host: string; port: number } | null {
   return { host, port };
 }
 
+/** Fold the numeric IP encodings the OS resolver still accepts to a dotted quad, so the
+ *  loopback/private checks below can't be dodged by writing 127.0.0.1 as `2130706433`,
+ *  `0x7f000001`, or `::ffff:127.0.0.1`. Non-numeric hosts (real hostnames) pass through
+ *  unchanged. review 🔵. */
+function canonicalIpLiteral(host: string): string {
+  const mapped = /^::ffff:(.+)$/i.exec(host); // IPv4-mapped IPv6
+  if (mapped) {
+    const inner = mapped[1];
+    if (isIP(inner) === 4) return inner;
+    const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(inner); // ::ffff:7f00:0001
+    if (hex) {
+      const n = (parseInt(hex[1], 16) * 0x10000 + parseInt(hex[2], 16)) >>> 0;
+      return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+    }
+  }
+  // Dotless integer / hex forms getaddrinfo maps to IPv4 (127.0.0.1 == 2130706433 == 0x7f000001).
+  const asInt = /^\d+$/.test(host) ? Number(host) : /^0x[0-9a-f]+$/i.test(host) ? parseInt(host, 16) : NaN;
+  if (Number.isInteger(asInt) && asInt >= 0 && asInt <= 0xffffffff) {
+    return [(asInt >>> 24) & 255, (asInt >>> 16) & 255, (asInt >>> 8) & 255, asInt & 255].join('.');
+  }
+  return host;
+}
+
 /** Refuse loopback/private/link-local IP LITERALS outright (no confirm): they can only be the
  *  daemon's own control plane or a LAN pivot — never a legitimate external service (which is
  *  reached by hostname). Hostnames return false here and go through the allowlist/escalate path
  *  (the proxy resolves them upstream). review 🔵. */
 function isForbiddenLiteral(host: string): boolean {
-  const v = isIP(host);
+  const canon = canonicalIpLiteral(host);
+  const v = isIP(canon);
   if (v === 4) {
-    const [a, b] = host.split('.').map(Number);
+    const [a, b] = canon.split('.').map(Number);
     return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
   }
   if (v === 6) {
-    return host === '::1' || host === '::' || host.startsWith('fe80') || host.startsWith('fc') || host.startsWith('fd');
+    return canon === '::1' || canon === '::' || canon.startsWith('fe80') || canon.startsWith('fc') || canon.startsWith('fd');
   }
   return false; // not an IP literal → a hostname
 }
@@ -80,6 +104,13 @@ export async function startEgressProxy(
   // Only non-allowlisted hosts land here (allowlisted ones short-circuit). Stores the
   // in-flight promise so two concurrent connects can't spawn two notch confirms.
   const decided = new Map<string, Promise<boolean>>();
+  // Live client + upstream sockets, so close() can tear down in-flight tunnels deterministically
+  // at session end instead of relying on pipe end-propagation + the CLI subprocess dying.
+  const liveSockets = new Set<Socket>();
+  const track = (s: Socket) => {
+    liveSockets.add(s);
+    s.on('close', () => liveSockets.delete(s));
+  };
 
   const proxy: Server = createServer((_req, res) => {
     // Plain HTTP (non-CONNECT). Everything real is HTTPS/CONNECT; refuse plain HTTP with a
@@ -92,6 +123,7 @@ export async function startEgressProxy(
     // Attach the error handler FIRST — a client RST before we finish setup would otherwise
     // throw and crash the daemon (learned in the spike).
     clientSock.on('error', () => clientSock.destroy());
+    track(clientSock);
     const refuse = () => {
       clientSock.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       clientSock.end();
@@ -112,6 +144,7 @@ export async function startEgressProxy(
           up.pipe(clientSock);
           clientSock.pipe(up);
         });
+        track(up);
         up.on('error', () => {
           clientSock.destroy();
           up.destroy();
@@ -167,5 +200,12 @@ export async function startEgressProxy(
     proxy.close();
     throw new Error('egress proxy failed to bind a loopback port');
   }
-  return { port, close: () => proxy.close() };
+  return {
+    port,
+    close: () => {
+      for (const s of liveSockets) s.destroy();
+      liveSockets.clear();
+      proxy.close();
+    },
+  };
 }
