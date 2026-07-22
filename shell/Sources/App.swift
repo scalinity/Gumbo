@@ -14,6 +14,7 @@ struct GumboApp {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: GumboController?
     private var statusItem: NSStatusItem?
+    private let launcher = DaemonLauncher()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let controller = GumboController()
@@ -21,6 +22,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMainMenu()
         setupStatusItem()
         controller.start()
+        // Opening the .app brings up the whole stack: daemon (which starts the dashboard
+        // dev server) — and the dashboard window once it can actually load. A daemon
+        // already running (terminal dev mode) is detected and left alone.
+        launcher.ensureStack { [weak self] in self?.controller?.showDashboard() }
+    }
+
+    // ⌘Q / menu-bar Quit tears the app-owned stack down with it; a terminal-owned
+    // daemon survives (the launcher only stops what it started).
+    func applicationWillTerminate(_ notification: Notification) {
+        launcher.shutdownIfOwned()
     }
 
     // LSUIElement apps show no menu bar, but ⌘Q still resolves through mainMenu key
