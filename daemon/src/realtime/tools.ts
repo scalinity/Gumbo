@@ -76,8 +76,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       brief: z.string().describe('Detailed, self-contained instructions for the sub-agent'),
       task_type: z
         .enum(['research', 'mac'])
-        .default('research')
-        .describe('"mac" ONLY for clicking/typing/navigating INSIDE an app — never for merely opening an app or loading a URL (that is mac_do); "research" for everything web/writing'),
+        .describe('REQUIRED — choose explicitly, never omit: "mac" for anything that operates THIS Mac\'s apps or screen (clicking, typing, creating/editing content inside an app; a research-lane agent has NO hands and cannot touch apps — a Notes task routed "research" fails instantly); "research" for web research, analysis, and writing. Merely opening an app or URL is mac_do, not a task.'),
       depth: z
         .enum(['standard', 'deep'])
         .default('standard')
