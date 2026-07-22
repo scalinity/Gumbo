@@ -19,6 +19,22 @@ const MIME: Record<string, string> = {
 // them, so it can never be fetched even if a path guard were bypassed.
 const servedRoots = config.home.served.map((name) => resolve(config.agentHome, name));
 
+// DNS-rebinding guard (CWE-350): the daemon binds loopback, but a malicious page can serve
+// JS from attacker.com:<port>, rebind attacker.com → 127.0.0.1, and fetch the daemon
+// same-origin — the browser still sends `Host: attacker.com`, which CORS won't block. So
+// every request's Host hostname must be a loopback literal (the real dashboard/shell always
+// send 127.0.0.1 or localhost). The PORT is not pinned: tests and any future rebind bind a
+// different port, but the attacker's hostname can never be a loopback literal.
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1']);
+function hostAllowed(hostHeader: string | undefined): boolean {
+  if (!hostHeader) return false;
+  try {
+    return LOOPBACK_HOSTNAMES.has(new URL(`http://${hostHeader}`).hostname.replace(/^\[|\]$/g, ''));
+  } catch {
+    return false;
+  }
+}
+
 function resolveServedFile(rel: string): string | null {
   const candidate = resolve(join(config.agentHome, rel));
   const withinServed = servedRoots.some((root) => candidate === root || candidate.startsWith(root + sep));
@@ -36,6 +52,13 @@ export function createHttpServer(store: Store) {
     // daemon — Node does not wrap the request listener. The async callbacks below keep
     // their own guards; this covers the synchronous dispatch.
     try {
+    // Host allowlist first — before any route runs, so a rebinding page can't reach even
+    // a read endpoint. Loopback bind alone doesn't authenticate the Host header.
+    if (!hostAllowed(req.headers.host)) {
+      res.statusCode = 403;
+      res.end('forbidden host');
+      return;
+    }
     const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
 
     if (url.pathname === '/api/tasks') {
@@ -149,12 +172,16 @@ export function createHttpServer(store: Store) {
 
     if (url.pathname === '/api/events') {
       res.setHeader('Content-Type', 'application/json');
+      // Validate limit as a 1..1000 integer BEFORE it reaches SQLite: a negative value
+      // (e.g. ?limit=-1) is treated as an unbounded LIMIT and would dump the whole log.
+      const rawLimit = Number(url.searchParams.get('limit'));
+      const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 1000) : undefined;
       res.end(
         JSON.stringify(
           store.listEvents({
             taskId: url.searchParams.get('task_id') ?? undefined,
             beforeSeq: Number(url.searchParams.get('before_seq')) || undefined,
-            limit: Number(url.searchParams.get('limit')) || undefined,
+            limit,
           }),
         ),
       );

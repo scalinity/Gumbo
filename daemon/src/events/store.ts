@@ -463,7 +463,9 @@ export class Store {
   }
 
   listEvents(opts: { taskId?: string; beforeSeq?: number; limit?: number } = {}): EventRow[] {
-    const limit = Math.min(opts.limit ?? 200, 1000);
+    // Clamp to 1..1000: SQLite treats a NEGATIVE LIMIT as UNBOUNDED, so a caller-supplied
+    // -1 would dump the entire event log (defense in depth with the http.ts validation).
+    const limit = Math.max(1, Math.min(Math.floor(opts.limit ?? 200), 1000));
     const clauses: string[] = [];
     const params: (string | number)[] = [];
     if (opts.taskId) {

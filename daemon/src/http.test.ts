@@ -113,3 +113,34 @@ test('an oversized body is capped at 413', async () => {
   const { status } = await hostsReq('POST', { body: JSON.stringify({ host: 'x'.repeat(5000) }) });
   assert.equal(status, 413);
 });
+
+// Scan MEDIUM (2026-07-22): a DNS-rebinding page fetches the daemon with its own hostname
+// in the Host header — that must be refused even on read routes. undici (fetch) forbids
+// overriding Host, so drive a raw request that sets it explicitly.
+test('a non-loopback Host header is refused 403 (DNS-rebinding guard)', async () => {
+  const { request } = await import('node:http');
+  const port = (server.address() as AddressInfo).port;
+  const withHost = (host: string) =>
+    new Promise<number>((resolve, reject) => {
+      const r = request({ host: '127.0.0.1', port, path: '/api/tasks', method: 'GET', headers: { Host: host } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      r.on('error', reject);
+      r.end();
+    });
+  assert.equal(await withHost('attacker.example:8737'), 403, 'a rebinding hostname is refused');
+  assert.equal(await withHost('127.0.0.1:8737'), 200, 'a loopback Host (any port) is what the shell sends');
+  assert.equal(await withHost('localhost:1234'), 200, 'localhost is a loopback literal');
+});
+
+// Scan MEDIUM (2026-07-22): a negative limit reached SQLite LIMIT as unbounded.
+test('/api/events clamps limit to 1..1000 — a negative value does not dump the whole log', async () => {
+  for (let i = 0; i < 5; i += 1) store.addEvent(null, 'test.row', { i });
+  const res = await fetch(`${base}/api/events?limit=-1`);
+  assert.equal(res.status, 200);
+  const rows = (await res.json()) as unknown[];
+  assert.ok(rows.length <= 1000, 'a negative limit is clamped, never unbounded');
+  const capped = await fetch(`${base}/api/events?limit=999999`);
+  assert.ok(((await capped.json()) as unknown[]).length <= 1000, 'an oversized limit is capped at 1000');
+});
