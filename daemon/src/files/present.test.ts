@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
@@ -20,6 +20,21 @@ test('readForPresentation: relative path refused', () => {
 test('readForPresentation: a protected path that does not exist still refuses as protected (string check first)', () => {
   const r = readForPresentation(join(secretFilePaths[1], 'projects/does-not-exist.jsonl'));
   assert.ok('error' in r && /protected path/.test(r.error), 'must not fall into could-not-read');
+});
+
+test('readForPresentation: home credential stores and private Gumbo subtrees refuse (scan MEDIUM)', () => {
+  for (const p of [
+    join(homedir(), '.ssh/id_rsa'),
+    join(homedir(), '.netrc'),
+    join(homedir(), '.config/gh/hosts.yml'),
+    join(homedir(), '.aws/credentials'),
+    config.home.browser + '/Default/Cookies',
+    join(config.home.logs, 'search-audit.jsonl'),
+    join(config.home.db, 'gumbo.db'),
+  ]) {
+    const r = readForPresentation(p);
+    assert.ok('error' in r && /protected path/.test(r.error), `${p} must refuse as protected`);
+  }
 });
 
 test('readForPresentation: missing file → could-not-read', () => {

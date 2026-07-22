@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
-import { config, secretFilePaths } from '../config.ts';
+import { config, secretFilePaths, secretStoreNames } from '../config.ts';
 
 // Content rides the file_present WS message inline; agent-written docs are tens of KB, so
 // this is a runaway guard, not a working budget.
@@ -19,8 +19,19 @@ export interface PresentedFile {
   content: string;
 }
 
+// The full presentation denylist: the repo .env + ~/.claude (secretFilePaths), every home
+// credential store the other read gates guard (secretStoreNames), and the private Gumbo
+// subtrees — browser profile (live session cookies), logs (audit URLs), db (transcripts).
+const protectedPaths = [
+  ...secretFilePaths,
+  ...secretStoreNames.map((name) => join(homedir(), name)),
+  config.home.browser,
+  config.home.logs,
+  config.home.db,
+];
+
 function hitsSecret(p: string): boolean {
-  return secretFilePaths.some((s) => {
+  return protectedPaths.some((s) => {
     const sec = resolve(s);
     return p === sec || p.startsWith(sec + sep);
   });
