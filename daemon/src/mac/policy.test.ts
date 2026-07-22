@@ -146,6 +146,28 @@ test('patterns are scoped per command line — a $ on a later line does not tain
   assert.equal(macDoDecision('open -a Notes\necho "$HOME"').route, 'auto', 'benign multiline must not over-confirm');
 });
 
+test('filesystem writes OUTSIDE the safe roots confirm; writes inside + reads stay auto (scan HIGH)', () => {
+  const home = config.agentHome;
+  // Redirection, tee, mv/cp, chmod, ln, persistence outside safe roots → confirm.
+  assert.equal(macDoDecision('echo pwned > ~/Library/LaunchAgents/x.plist').route, 'confirm', 'redirect to LaunchAgents');
+  assert.equal(macDoDecision('echo x >> ~/.zshrc').route, 'confirm', 'append to a dotfile');
+  assert.equal(macDoDecision('cat data | tee /etc/hosts').route, 'confirm', 'tee to /etc');
+  assert.equal(macDoDecision('cp payload ~/Library/LaunchAgents/y.plist').route, 'confirm', 'cp destination outside safe roots');
+  assert.equal(macDoDecision('mv note ~/Documents/note.txt').route, 'confirm', 'mv destination outside safe roots');
+  assert.equal(macDoDecision('chmod +x ~/bin/evil').route, 'confirm', 'chmod outside safe roots');
+  assert.equal(macDoDecision('ln -s /etc/passwd ~/leak').route, 'confirm', 'ln link name outside safe roots');
+  assert.equal(macDoDecision('launchctl load ~/Library/LaunchAgents/x.plist').route, 'confirm', 'persistence');
+  assert.equal(macDoDecision('crontab mycron').route, 'confirm', 'cron persistence');
+  assert.equal(macDoDecision('echo x > "$DEST"/f').route, 'confirm', 'unresolvable redirect target');
+  // Writes INSIDE the safe roots (agent home / temp) stay auto — the sandbox home is fair game.
+  assert.equal(macDoDecision(`echo report > ${home}/tasks/out.md`).route, 'auto', 'write inside the agent home');
+  assert.equal(macDoDecision(`cp a.png ${home}/images/b.png`).route, 'auto', 'copy inside the agent home');
+  assert.equal(macDoDecision('echo scratch > /tmp/scratch.txt').route, 'auto', 'write to /tmp');
+  // fd redirects (2>&1, >&2) are NOT file writes.
+  assert.equal(macDoDecision('ls /Applications 2>&1 | head').route, 'auto', 'fd dup is not a file write');
+  assert.equal(macDoDecision('sysctl -a >&2').route, 'auto', 'stderr dup is not a file write');
+});
+
 test('a command WORD built by shell expansion is unresolvable → confirm (scan HIGH: rm$IFS-rf bypass)', () => {
   assert.equal(macDoDecision('rm$IFS-rf ~/Documents').route, 'confirm', 'expanded rm reassembles past the delete gate');
   assert.equal(macDoDecision('$(which rm) -rf /tmp/x').route, 'confirm', 'command substitution as the command word');

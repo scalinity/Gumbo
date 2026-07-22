@@ -187,6 +187,54 @@ function riskyDelete(command: string): string | null {
   return null;
 }
 
+// Commands whose WRITE targets must land inside a safe root or confirm. Split by where the
+// write target sits: dest = the LAST path operand (cp src dst, mv src dst, ln target link),
+// all = every path operand is written/modified (tee, chmod, chown, chflags).
+const WRITE_DEST_COMMANDS = new Set(['mv', 'cp', 'install', 'ditto', 'rsync', 'ln']);
+const WRITE_ALL_COMMANDS = new Set(['tee', 'chmod', 'chown', 'chflags']);
+// Persistence surfaces — an install of a background agent / cron job is consequential
+// regardless of path, so it always confirms.
+const PERSISTENCE = /\b(launchctl|crontab)\b/;
+// Redirection targets: `>`/`>>` NOT preceded by a digit or `&` (skips fd dups like 2>&1,
+// >&2). The target is a quoted string or a bare word (no `&` so `>&2` never captures).
+const REDIRECT = /(?<![0-9&])>>?\s*("([^"]*)"|'([^']*)'|([^\s|;&<>]+))/g;
+
+/** True when a write target isn't provably inside a safe root (or can't be resolved). */
+function writeTargetEscapes(rawTarget: string, roots: string[]): boolean {
+  const t = unquote(rawTarget);
+  return SHELL_EXPANSION.test(t) || t.startsWith('~') || !underAnyRoot(t, roots);
+}
+
+/** A filesystem WRITE whose target escapes the safe roots → confirm (scan HIGH). Covers
+ *  shell redirection, tee, mv/cp/install/rsync/ditto/ln, chmod/chown/chflags, and the
+ *  launchctl/crontab persistence surfaces. Conservative: an unresolvable target (expansion,
+ *  `~`) confirms, mirroring riskyDelete. Reads stay auto — only writes outside the sandbox
+ *  home + temp confirm. */
+function riskyWrite(command: string): string | null {
+  const roots = safeRoots();
+  for (const segment of command.split(/\|\||&&|[;|&\n]/)) {
+    if (PERSISTENCE.test(segment)) return 'installing a background agent / cron job';
+    // Redirection anywhere in the segment.
+    for (const m of segment.matchAll(REDIRECT)) {
+      const target = m[2] ?? m[3] ?? m[4];
+      if (target && writeTargetEscapes(target, roots)) return `redirect to ${target}`;
+    }
+    const tokens = segment.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    const head = commandName(tokens[0]);
+    const operands = tokens.slice(1).filter((t) => !t.startsWith('-'));
+    if (WRITE_DEST_COMMANDS.has(head) && operands.length > 0) {
+      const dest = operands[operands.length - 1];
+      if (writeTargetEscapes(dest, roots)) return `${head} → ${dest}`;
+    }
+    if (WRITE_ALL_COMMANDS.has(head)) {
+      const escaped = operands.find((o) => writeTargetEscapes(o, roots));
+      if (escaped) return `${head} ${escaped}`;
+    }
+  }
+  return null;
+}
+
 /** Pure policy table for a mac_do script — exported for offline unit tests. */
 export function macDoDecision(script: string): MacPolicyResult {
   // Test the confirm patterns against the raw script AND its de-obfuscated shadow, so a
@@ -220,6 +268,8 @@ export function macDoDecision(script: string): MacPolicyResult {
   if (expandedCmd) return { route: 'confirm', reason: `unresolvable command (shell expansion in "${expandedCmd}")` };
   const badDelete = riskyDelete(script);
   if (badDelete) return { route: 'confirm', reason: `delete outside safe dirs (${badDelete})` };
+  const badWrite = riskyWrite(script);
+  if (badWrite) return { route: 'confirm', reason: `write outside safe dirs (${badWrite})` };
   return { route: 'auto', reason: 'read-only / reversible command' };
 }
 
