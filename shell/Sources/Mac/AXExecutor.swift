@@ -494,38 +494,42 @@ final class AXExecutor {
         if match.location == NSNotFound { match = ns.range(of: text) } // occurrence drifted → first match
         if match.location == NSNotFound { return "select_text: \"\(truncate(text))\" not found in the field" }
 
-        // Build the selection with REAL key events where practical: an AXSelectedTextRange
-        // write lands in the text ENGINE (menu-bar actions apply to it) but fires no input
-        // events, so event-driven UI state (a format popover's tracking of "the user has a
-        // selection") never hears about it. Anchor the caret at the match start via AX,
-        // then extend with shift+right keystrokes — the selection both reads back correctly
-        // AND exists as a user-made one. Long ranges fall back to the pure AX write (the
-        // keystroke build is linear in length).
+        // Verification is by RANGE, not by AXSelectedText: the range read is
+        // focus-independent, while AXSelectedText reads EMPTY on an unfocused field even
+        // when the range took (a live replay failed exactly there — a popover held key
+        // focus and a correct selection "did not take"). Ladder:
+        //   1. focus + caret + real shift+right keystrokes (event-driven UI hears it)
+        //   2. pure AX range write (works without focus)
+        //   3. Escape to dismiss whatever transient UI is eating focus/keys, then 2 again
+        let want = NSRange(location: match.location, length: match.length)
+        let tookRange = { [weak self] in self?.selectedRange(element) == want }
+        let pid = pidOf(element)
         _ = performFocus(element)
         let charCount = ns.substring(with: match).count
-        var built = false
         if charCount <= 120 {
             var caret = CFRange(location: match.location, length: 0)
             if let axCaret = AXValueCreate(.cfRange, &caret),
                AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axCaret) == .success {
-                let pid = pidOf(element)
                 for _ in 0..<charCount {
                     guard SyntheticInput.pressKey("shift+right", pid: pid) else { break }
                     usleep(20_000)
                 }
                 usleep(150_000)
-                built = (stringAttr(element, kAXSelectedTextAttribute) ?? "") == text
+                if tookRange() { return nil }
             }
         }
-        if !built {
-            var range = CFRange(location: match.location, length: match.length)
-            guard let axRange = AXValueCreate(.cfRange, &range) else { return "select_text: could not build range" }
-            let err = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
-            if err != .success { return "select_text: AX rejected the selection (\(err.rawValue))" }
-        }
-        let got = stringAttr(element, kAXSelectedTextAttribute) ?? ""
-        if got != text { return "select_text: the selection did not take (this field may not support programmatic selection)" }
-        return nil
+        var range = CFRange(location: match.location, length: match.length)
+        guard let axRange = AXValueCreate(.cfRange, &range) else { return "select_text: could not build range" }
+        AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
+        if tookRange() { return nil }
+        // Rung 3: a popover/menu may be holding focus and swallowing the write — dismiss
+        // it and retry once. Escape is safe in a text field (dismisses transient UI only).
+        _ = SyntheticInput.pressKey("escape", pid: pid)
+        usleep(250_000)
+        _ = performFocus(element)
+        AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
+        if tookRange() { return nil }
+        return "select_text: the selection did not take (this field may not support programmatic selection)"
     }
 
     /// Focus, then enter text — per character for a NATIVE field, by clipboard paste for a

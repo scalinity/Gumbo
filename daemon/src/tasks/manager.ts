@@ -686,12 +686,20 @@ export class TaskManager {
     // keystroke stream can never reliably reconstruct. Best-effort: no readable document,
     // no section (the compiler falls back to the step stream alone).
     let outcome: string | null = null;
+    let outcomeNote = '';
     const lastTextApp = [...t.steps].reverse().find((s) => s.kind === 'type' || s.kind === 'select_text')?.app;
     if (lastTextApp && this.macBridge) {
       const doc = await this.macBridge.request({ kind: 'document_state', app: lastTextApp });
-      if (doc.ok) outcome = doc.output;
+      if (doc.ok) {
+        outcome = doc.output;
+        outcomeNote = `\n${doc.output}\n`;
+      } else {
+        // Law 5 — no silent negatives: a failed capture means the compiler falls back to
+        // keystroke archaeology, which is materially worse. Say so in the report.
+        outcomeNote = `\n(final-document capture FAILED: ${doc.output} — content compiled from the keystroke stream alone)\n`;
+      }
     }
-    const base = teachingReport(t.name, t.steps, note);
+    const base = teachingReport(t.name, t.steps, note) + outcomeNote;
     if (this.distillProcedure && t.steps.length > 0) {
       // The task stays 'running' for the few seconds of compile; ONE announce then
       // carries the step list AND the saved-procedure summary (or the loud not-saved
