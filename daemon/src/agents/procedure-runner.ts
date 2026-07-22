@@ -127,6 +127,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     focus: { verb: 'focus', carriesValue: false },
     type: { verb: 'type', carriesValue: true },
     set_value: { verb: 'set_value', carriesValue: true },
+    select_text: { verb: 'select_text', carriesValue: true }, // value = the text to highlight
   };
   const BROWSER_VERBS = new Set(['click', 'fill', 'type', 'press', 'select', 'hover', 'focus', 'scroll']);
 
@@ -149,6 +150,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
         verb: mapped.verb, ref: resolved.output,
         value: mapped.carriesValue ? step.value ?? '' : null,
         role: null, name: null, timeout_ms: 8000,
+        occurrence: step.verb === 'select_text' ? step.occurrence ?? 0 : null,
       });
       if (obs?.declined) return { kind: 'stopped', reason: 'the user declined the action' };
       if (!obs?.ok) {

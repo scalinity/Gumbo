@@ -9,7 +9,7 @@
 // sanitize re-applies the same rule here as the daemon-side belt.
 import { config } from '../config.ts';
 
-export type TeachStepKind = 'click' | 'type' | 'key' | 'secure_input' | 'scroll' | 'drag';
+export type TeachStepKind = 'click' | 'type' | 'key' | 'secure_input' | 'scroll' | 'drag' | 'select_text';
 
 export type TeachStep = {
   kind: TeachStepKind;
@@ -21,14 +21,17 @@ export type TeachStep = {
   identifier?: string;
   /** Element label (AXTitle/AXDescription). */
   name?: string;
-  /** click: verb (click|double_click|right_click); type: the typed text; key: the chord. */
+  /** click: verb (click|double_click|right_click); type: the typed text; key: the chord;
+   *  select_text: the highlighted text. */
   value?: string;
+  /** select_text: which occurrence of `value` was highlighted (0-based). */
+  occurrence?: number;
   /** Daemon clock at ingest — the shell's clock is untrusted and unneeded. */
   ts: number;
 };
 
 const STEP_KINDS: ReadonlySet<string> = new Set(
-  ['click', 'type', 'key', 'secure_input', 'scroll', 'drag'] satisfies TeachStepKind[],
+  ['click', 'type', 'key', 'secure_input', 'scroll', 'drag', 'select_text'] satisfies TeachStepKind[],
 );
 
 /** Field labels that mean "credential" even when the AX subrole isn't AXSecureTextField
@@ -62,13 +65,15 @@ export function sanitizeTeachStep(raw: unknown): TeachStep | null {
   if (identifier) step.identifier = identifier;
   if (name) step.name = name;
   if (value) step.value = value;
-  // Belt: typed content into anything credential-shaped becomes a semantic step with NO
-  // content (the subrole could have been lost in transit, or the label is a variant the
-  // shell's lexicon missed). secure_input is structurally content-free.
-  if (step.kind === 'type' && (subrole === 'AXSecureTextField' || SECRET_FIELD_RE.test(name ?? ''))) {
+  if (typeof r.occurrence === 'number' && Number.isInteger(r.occurrence) && r.occurrence >= 0) step.occurrence = r.occurrence;
+  // Belt: content into anything credential-shaped becomes a semantic step with NO content (the
+  // subrole could have been lost in transit, or the label is a variant the shell's lexicon
+  // missed). secure_input is structurally content-free. Selecting text in a secure field is the
+  // same disclosure risk, so it degrades too.
+  if ((step.kind === 'type' || step.kind === 'select_text') && (subrole === 'AXSecureTextField' || SECRET_FIELD_RE.test(name ?? ''))) {
     step.kind = 'secure_input';
   }
-  if (step.kind === 'secure_input') delete step.value;
+  if (step.kind === 'secure_input') { delete step.value; delete step.occurrence; }
   return step;
 }
 
@@ -84,6 +89,7 @@ export function describeTeachStep(step: TeachStep, index: number): string {
     case 'secure_input': return `${index}. the user entered a credential into ${where || 'a secure field'} in ${app} (content not recorded — replays as a handoff)`;
     case 'scroll': return `${index}. scrolled in ${app}`;
     case 'drag': return `${index}. dragged (low fidelity) in ${app}`;
+    case 'select_text': return `${index}. highlighted the text "${step.value ?? ''}"${step.occurrence ? ` (occurrence ${step.occurrence})` : ''} in ${where || 'the focused field'} in ${app}`;
   }
 }
 

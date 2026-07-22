@@ -66,6 +66,7 @@ final class Recorder {
     }
     private var burst: Burst?
     private var dragging = false
+    private var lastSelection: String? // dedup key (text#occurrence) — a click that didn't change the selection isn't re-emitted
     private var lastScrollAt: CFAbsoluteTime = 0
     private var lastScrollApp = ""
 
@@ -118,14 +119,16 @@ final class Recorder {
             flushBurst()
             dragging = false
             emitClick(executor.hitTest(at: raw.location), raw)
+            captureSelectionIfAny() // a double/triple-click that highlighted a word/line
         case .leftMouseDragged, .rightMouseDragged:
             dragging = true
         case .leftMouseUp, .rightMouseUp, .otherMouseUp:
             if dragging {
                 dragging = false
-                // Drags are recorded low-fidelity by design (v1): the fact survives, the
-                // geometry doesn't — replay treats them as a not-replayable marker.
-                emit(["kind": "drag", "app": frontAppName()])
+                // A drag that HIGHLIGHTED text is a semantic selection — capture the selected
+                // string (replay re-selects it by setting AXSelectedTextRange, no coordinates). A
+                // drag that selected nothing (scroll-drag, drag-drop) stays a low-fidelity marker.
+                if !captureSelectionIfAny() { emit(["kind": "drag", "app": frontAppName()]) }
             }
         case .scrollWheel:
             let app = frontAppName()
@@ -229,6 +232,22 @@ final class Recorder {
         step["value"] = raw.type == .rightMouseDown ? "right_click" : (raw.clickState >= 2 ? "double_click" : "click")
         fill(&step, from: hit)
         emit(step)
+    }
+
+    /// If a text selection is currently active (a drag/double-click just highlighted a word or
+    /// range), record it as a SEMANTIC select_text step — the selected string + which occurrence —
+    /// so replay re-selects it by setting AXSelectedTextRange, with no coordinates. Deduped so an
+    /// unchanged selection isn't re-emitted. Returns true when it emitted a step.
+    @discardableResult
+    private func captureSelectionIfAny() -> Bool {
+        guard let sel = executor.focusedSelection() else { lastSelection = nil; return false }
+        let key = "\(sel.text)#\(sel.occurrence)"
+        guard key != lastSelection else { return false }
+        lastSelection = key
+        var step: [String: Any] = ["kind": "select_text", "app": sel.field.appName, "value": sel.text, "occurrence": sel.occurrence]
+        fill(&step, from: sel.field)
+        emit(step)
+        return true
     }
 
     /// Common element descriptor fields. Structure only — labels and roles, never a

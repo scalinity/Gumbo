@@ -116,19 +116,21 @@ export function createMacTools(
       'Act on an element by ref (from the latest snapshot). Verbs: press (click/activate), focus, ' +
       'set_value (write a value directly), type (send keystrokes — use for web/Electron fields), ' +
       'key (a keyboard shortcut like "cmd+n" or "return" — value holds the chord, no ref needed), ' +
-      'show_menu (right-click/context menu), wait_for (block until an element with role+name appears; ' +
-      'use role+name instead of ref). Returns a before/after DIFF of what changed — read it to verify ' +
-      'the step worked; an empty diff means nothing changed, so DO NOT assume success. Secure ' +
-      '(password) fields are refused.',
+      'show_menu (right-click/context menu), select_text (highlight text in a field so a following ' +
+      'format action applies — value holds the exact text to select, no coordinates), wait_for (block ' +
+      'until an element with role+name appears; use role+name instead of ref). Returns a before/after ' +
+      'DIFF of what changed — read it to verify the step worked; an empty diff means nothing changed, ' +
+      'so DO NOT assume success. Secure (password) fields are refused.',
     parameters: z.object({
-      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for']),
+      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for', 'select_text']),
       ref: z.string().nullable().describe('Element ref from ax_snapshot; null for key/wait_for'),
-      value: z.string().nullable().describe('Text for type/set_value, or the chord for key'),
+      value: z.string().nullable().describe('Text for type/set_value/select_text, or the chord for key'),
       role: z.string().nullable().describe('wait_for: the role to wait for (e.g. "AXButton")'),
       name: z.string().nullable().describe('wait_for: substring of the label to wait for'),
       timeout_ms: z.number().int().min(100).max(30_000).default(5000),
+      occurrence: z.number().int().min(0).nullable().default(null).describe('select_text: which match of value to select when it appears more than once (0-based); null = first'),
     }),
-    async execute({ verb, ref, value, role, name, timeout_ms }) {
+    async execute({ verb, ref, value, role, name, timeout_ms, occurrence }) {
       // Repetition guard: same verb on same ref ×3 in a row → stop and warn.
       const key = `${verb}:${ref ?? role ?? ''}:${value ?? name ?? ''}`;
       repeatCount = key === lastActKey ? repeatCount + 1 : 0;
@@ -138,7 +140,7 @@ export function createMacTools(
         return `You have repeated "${verb}" on the same target 3 times with no progress. Stop and take a fresh ax_snapshot, then try a different approach (a different element, a keyboard shortcut, or check for a dialog blocking the way).`;
       }
       const result = await macBridge.request(
-        { kind: 'act', verb, ref, value, role, name, timeout_ms },
+        { kind: 'act', verb, ref, value, role, name, timeout_ms, ...(occurrence != null ? { occurrence } : {}) },
         { signal, timeoutMs: timeout_ms + 5000 },
       );
       const summary = `${verb} ${ref ?? role ?? ''}`.trim();

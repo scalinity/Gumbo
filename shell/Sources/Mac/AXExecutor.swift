@@ -273,6 +273,7 @@ final class AXExecutor {
         case "set_value": actErr = performSetValue(element, value: action["value"] as? String ?? "")
         case "type": actErr = performType(element, text: action["value"] as? String ?? "", pid: pid)
         case "show_menu": actErr = performShowMenu(element, pid: pid)
+        case "select_text": actErr = performSelectText(element, text: action["value"] as? String ?? "", occurrence: action["occurrence"] as? Int ?? 0)
         default: return AXResult.failure("out_of_scope", "Unknown verb \"\(verb)\".")
         }
         if let actErr {
@@ -366,6 +367,35 @@ final class AXExecutor {
         guard settable.boolValue else { return "AXValue is not settable — use the type verb instead" }
         let err = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFString)
         return err == .success ? nil : "AXValue set error \(err.rawValue)"
+    }
+
+    /// Select a text range SEMANTICALLY, no coordinates: find the `occurrence`-th match of `text`
+    /// in the element's value and set kAXSelectedTextRange to it — reproducing a drag/double-click
+    /// highlight so a following format action (color, bold) applies to it. AX offsets are UTF-16.
+    /// Verifies via AXSelectedText and returns an error (→ replay drifts, never colors the wrong
+    /// text) when the app ignores the write or the text isn't present.
+    private func performSelectText(_ element: AXUIElement, text: String, occurrence: Int) -> String? {
+        guard !text.isEmpty else { return "select_text: empty target" }
+        guard let full = stringAttr(element, kAXValueAttribute) else { return "select_text: the field exposes no text value" }
+        let ns = full as NSString
+        var from = 0, idx = 0
+        var match = NSRange(location: NSNotFound, length: 0)
+        while from <= ns.length {
+            let r = ns.range(of: text, options: [], range: NSRange(location: from, length: ns.length - from))
+            if r.location == NSNotFound { break }
+            if idx == occurrence { match = r; break }
+            idx += 1
+            from = r.location + max(1, r.length)
+        }
+        if match.location == NSNotFound { match = ns.range(of: text) } // occurrence drifted → first match
+        if match.location == NSNotFound { return "select_text: \"\(truncate(text))\" not found in the field" }
+        var range = CFRange(location: match.location, length: match.length)
+        guard let axRange = AXValueCreate(.cfRange, &range) else { return "select_text: could not build range" }
+        let err = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
+        if err != .success { return "select_text: AX rejected the selection (\(err.rawValue))" }
+        let got = stringAttr(element, kAXSelectedTextAttribute) ?? ""
+        if got != text { return "select_text: the selection did not take (this field may not support programmatic selection)" }
+        return nil
     }
 
     /// Focus, then enter text — per character for a NATIVE field, by clipboard paste for a
@@ -626,6 +656,47 @@ final class AXExecutor {
             guard err == .success, let hit = found else { return nil }
             return hitInfo(for: climbToInteractive(hit))
         }
+    }
+
+    /// The text a drag/double-click just highlighted in the focused element, WHICH occurrence of it
+    /// (so two identical strings disambiguate), and that field's semantic info — lets the recorder
+    /// store a spatial highlight as a SEMANTIC select_text step instead of a lost, un-replayable
+    /// drag. Nil when nothing is selected. AX offsets are UTF-16.
+    func focusedSelection() -> (text: String, occurrence: Int, field: AXHitInfo)? {
+        queue.sync { () -> (text: String, occurrence: Int, field: AXHitInfo)? in
+            AXUIElement.systemWide.setMessagingTimeout(messagingTimeout)
+            var ref: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(AXUIElement.systemWide, kAXFocusedUIElementAttribute as CFString, &ref) == .success,
+                  let f = ref, CFGetTypeID(f) == AXUIElementGetTypeID()
+            else { return nil }
+            let el = (f as! AXUIElement)
+            let sel = stringAttr(el, kAXSelectedTextAttribute) ?? ""
+            guard !sel.isEmpty else { return nil }
+            var occurrence = 0
+            if let range = selectedRange(el), let full = stringAttr(el, kAXValueAttribute) {
+                let ns = full as NSString
+                var from = 0, idx = 0
+                while from <= ns.length {
+                    let r = ns.range(of: sel, options: [], range: NSRange(location: from, length: ns.length - from))
+                    if r.location == NSNotFound { break }
+                    if r.location == range.location { occurrence = idx; break }
+                    idx += 1
+                    from = r.location + max(1, r.length)
+                }
+            }
+            guard let field = hitInfo(for: el) else { return nil }
+            return (sel, occurrence, field)
+        }
+    }
+
+    /// The focused element's current selection range (UTF-16), or nil.
+    private func selectedRange(_ element: AXUIElement) -> NSRange? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &ref) == .success,
+              let v = ref, CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue((v as! AXValue), .cfRange, &range) else { return nil }
+        return NSRange(location: range.location, length: range.length)
     }
 
     /// The focused UI element — what a typing burst lands in. Read at burst START so the

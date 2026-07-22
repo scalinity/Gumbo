@@ -21,6 +21,8 @@ export type ProcedureStep = {
   target?: { app?: string; role?: string; identifier?: string; name?: string };
   verb?: string;
   value?: string;
+  /** select_text: which occurrence of `value` to select when it appears more than once (0-based). */
+  occurrence?: number;
   /** True when value changes run to run (a date, a month, a search term). */
   param?: boolean;
   /** What should be observably true after this step. */
@@ -93,6 +95,7 @@ export function validateProcedure(raw: unknown, name: string): Procedure | null 
     if (verb) step.verb = verb;
     if (value) step.value = value;
     if (verify) step.verify = verify;
+    if (typeof s.occurrence === 'number' && Number.isInteger(s.occurrence) && s.occurrence >= 0) step.occurrence = s.occurrence;
     if (s.param === true) step.param = true;
     if (s.checkpoint === true) step.checkpoint = true;
     steps.push(step);
@@ -209,10 +212,11 @@ export const completeOnce: CompleteFn = async (instructions, input, signal) => {
 };
 
 const COMPILE_INSTRUCTIONS = `You distill a recorded Mac demonstration (or the action trace of a successful computer task) into a REPLAYABLE procedure. Output STRICT JSON only — no markdown fences, no prose — matching:
-{"goal": string, "preconditions": string[], "apps": string[], "steps": [{"lane": "ax"|"browser"|"script"|"key"|"handoff", "desc": string, "target"?: {"app"?, "role"?, "identifier"?, "name"?}, "verb"?: string, "value"?: string, "param"?: boolean, "verify"?: string, "checkpoint"?: boolean}]}
+{"goal": string, "preconditions": string[], "apps": string[], "steps": [{"lane": "ax"|"browser"|"script"|"key"|"handoff", "desc": string, "target"?: {"app"?, "role"?, "identifier"?, "name"?}, "verb"?: string, "value"?: string, "occurrence"?: number, "param"?: boolean, "verify"?: string, "checkpoint"?: boolean}]}
 Rules:
 - lane: "ax" for native-app UI steps; "browser" for steps on a web page inside a browser; "key" for a bare keyboard shortcut; "script" ONLY when a step clearly maps to one deterministic command; "handoff" for anything the user must do himself (logins, credentials, judgment calls).
-- Merge noise: a click that only focused a field before typing merges into the type step; scrolls that merely revealed content fold into the next step's desc; drags are not replayable — represent the intent or mark a handoff.
+- Merge noise: a click that only focused a field before typing merges into the type step; scrolls that merely revealed content fold into the next step's desc; a bare "drag" that highlighted nothing is not replayable — fold it away or mark a handoff.
+- SELECTING/HIGHLIGHTING TEXT: a recorded "select_text" step means a text range was highlighted (to color, bold, etc.). Compile it to lane "ax", verb "select_text", target = the text field it happened in, value = the EXACT highlighted string (verbatim), and copy its "occurrence" number through UNCHANGED (which instance of that string was selected — do not renumber or drop it). A click/double-click IMMEDIATELY BEFORE a select_text on the same field is just the gesture that made the selection — drop it, keep only the select_text. The next format step (Format menu → a color/Bold, etc.) then applies to that selection; keep them in order.
 - OPENING AN APP: if the demonstration opened or switched to an app via Spotlight (⌘Space), Launchpad, the Dock, or ⌘Tab, compile it to ONE step that opens THAT app — lane "ax", verb "activate", target.app = the app being opened (e.g. "Notes"), NOT the launcher (never "Spotlight"/"Siri"). Do NOT reproduce the raw ⌘Space / type-into-search / return keystrokes; they are brittle.
 - TYPING CONTENT: use verb "type" (real keystrokes, so the app's live formatting happens — a note's title, dash-bullets, autocomplete). NEVER use "set_value" for content a person typed: it bulk-writes the whole value at once and the formatting is lost (everything lands as one flat block). Keep line breaks as separate "key" steps with value "return" — do NOT merge a multi-line entry into one value; the returns are what create the title, the bullets, the paragraphs. Preserve VERBATIM every line that was typed and left in place, character for character — you are a RECORDER, not an editor. NEVER drop, shorten, summarize, spell-correct, or "clean up" a typed line because it looks like nonsense, gibberish, a placeholder, or a test string: that content is intentional and the whole point of a faithful replay. The ONE thing you may collapse is an in-place correction the person clearly made and undid (typed, then deleted with backspace, then retyped in the SAME field) — keep only the final surviving text. If text was typed and NOT deleted, it stays, exactly.
 - Every step: short imperative "desc" and a "verify" saying what is observably true afterwards.
