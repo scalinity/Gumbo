@@ -281,6 +281,11 @@ HOW TO WORK (both lanes — the discipline is identical):
   or open the settings URL); (2) call focus_app with the app name to raise it via Accessibility; (3)
   ALWAYS pass that app name to ax_snapshot / screen_ocr (never rely on app=null/"frontmost"). If a click
   seems to land on the wrong window, you forgot to focus_app.
+- A NOTE'S TITLE comes from TYPING its first line: Notes styles a typed first line as Title
+  automatically, but a PASTED first line stays plain Body (a pasted note landed all-body live —
+  no big bold title). For a fresh styled note: type the title, press return, then enter the rest.
+  If typing produced no change, the fix is to CLICK INTO the note body and TYPE AGAIN — falling
+  back to paste trades the title styling away for convenience; don't.
 - CHARACTER STYLING (bold/italic/underline/highlight) IN NOTES goes through the FORMAT POPOVER
   (the toolbar "Format" button → its checkboxes and the Highlight color menu), never the
   Format > Font menu bar and NEVER "Show Colors" (that opens a font-color panel — the wrong
