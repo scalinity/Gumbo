@@ -48,7 +48,7 @@ const CONFIRM_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   // Sending data off the machine (uploads/POSTs) — plain downloads stay auto (mirrors the
   // supervisor's network-send rule).
   {
-    pattern: /\b(curl|wget)\b[^|;&\n]*(\s-(d|F|T)\b|--data\b|--data-[a-z]+\b|--form\b|--upload-file\b|--post-[a-z]+\b|--body-[a-z]+\b|-X\s*(POST|PUT|PATCH|DELETE)\b)/i,
+    pattern: /\b(curl|wget)\b[^|;&\n]*(\s-(d|F|T|K)\b|--data\b|--data-[a-z]+\b|--form\b|--upload-file\b|--json\b|--post-[a-z]+\b|--body-[a-z]+\b|--config\b|--request\s+(POST|PUT|PATCH|DELETE)\b|-X\s*(POST|PUT|PATCH|DELETE)\b)/i,
     reason: 'network send',
   },
   // GET-style exfil: a curl/wget/open whose URL/args carry a shell expansion ($VAR, `cmd`,

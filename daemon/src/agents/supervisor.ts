@@ -106,9 +106,11 @@ const ESCALATE_BASH: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bgit\b[^|;&]*\bpush\b/, reason: 'git push' },
   { pattern: /\bsudo\b/, reason: 'sudo' },
   // Sending data off the machine (uploads, POSTs) — plain downloads stay auto-allowed.
-  // Covers curl (-d/-F/-T/--data*/--form/--upload-file/-X POST…) and wget (--post-*/--body-*).
+  // Covers curl (-d/-F/-T/--data*/--form/--upload-file/--json/--request or -X POST…/
+  // --config or -K indirection) and wget (--post-*/--body-*). A --config/-K file can carry
+  // any of the above out of sight, so it escalates on principle (unrecognized indirection).
   {
-    pattern: /\b(curl|wget)\b[^|;&]*(\s-(d|F|T)\b|--data\b|--data-[a-z]+\b|--form\b|--upload-file\b|--post-[a-z]+\b|--body-[a-z]+\b|-X\s*(POST|PUT|PATCH|DELETE)\b)/i,
+    pattern: /\b(curl|wget)\b[^|;&]*(\s-(d|F|T|K)\b|--data\b|--data-[a-z]+\b|--form\b|--upload-file\b|--json\b|--post-[a-z]+\b|--body-[a-z]+\b|--config\b|--request\s+(POST|PUT|PATCH|DELETE)\b|-X\s*(POST|PUT|PATCH|DELETE)\b)/i,
     reason: 'network send',
   },
   { pattern: /\bgh\b\s+(pr|issue|release|repo|gist)\s+(create|edit|merge|close|comment|delete)\b/, reason: 'GitHub write' },
