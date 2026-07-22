@@ -294,7 +294,7 @@ final class BubbleModel: ObservableObject {
 }
 
 struct BubbleEvent: Identifiable {
-    enum Kind { case call, result, message, prompt, lifecycle }
+    enum Kind { case call, result, message, prompt, thought, lifecycle }
 
     let seq: Int
     let kind: Kind
@@ -347,6 +347,9 @@ struct BubbleEvent: Identifiable {
             body = output.isEmpty ? "(no output)" : output // a blank row reads as a glitch
         case "subagent.message", "claude.message":
             kind = .message
+            body = payload["text"] as? String ?? ""
+        case "subagent.thought": // the model's reasoning summary — narration between tool calls
+            kind = .thought
             body = payload["text"] as? String ?? ""
         case "claude.prompt": // the instruction the session is responding to (incl. the opener)
             kind = .prompt
@@ -691,7 +694,8 @@ private struct BubbleEventRow: View {
                 .padding(.top, 1)
             Text(event.text)
                 .font(.system(size: 10.5))
-                .foregroundStyle(.white.opacity(event.kind == .message || event.kind == .prompt ? 0.82 : 0.6))
+                .italic(event.kind == .thought)
+                .foregroundStyle(.white.opacity(event.kind == .message || event.kind == .prompt ? 0.82 : event.kind == .thought ? 0.5 : 0.6))
                 .lineLimit(event.kind == .message || event.kind == .prompt ? 14 : 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(event.time)
@@ -707,6 +711,7 @@ private struct BubbleEventRow: View {
         case .result: return "◂"
         case .message: return "●"
         case .prompt: return "»" // the user's/Gumbo's instruction INTO the session
+        case .thought: return "…"
         case .lifecycle: return "◆"
         }
     }
@@ -717,6 +722,7 @@ private struct BubbleEventRow: View {
         case .result: return faint
         case .message: return bay
         case .prompt: return Tokens.gold
+        case .thought: return .white.opacity(0.35)
         case .lifecycle: return .white.opacity(0.5)
         }
     }

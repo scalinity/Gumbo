@@ -866,6 +866,9 @@ export async function runSubagent(opts: {
       name: `subagent-${taskId}`,
       instructions: isMac ? computerInstructions() : depth === 'deep' ? deepResearchInstructions() : instructions(),
       model: config.models.subagent,
+      // Reasoning summaries stream as run items → subagent.thought events, so the
+      // activity feed shows WHY alongside each tool call (the transcript ask).
+      modelSettings: { reasoning: { summary: 'auto' } },
       tools: steered ?? createSubagentTools(taskId, store, signal, depth),
     });
 
@@ -886,6 +889,13 @@ export async function runSubagent(opts: {
           store.addEvent(taskId, 'tool.result', { output: String((item as { output?: unknown }).output ?? '').slice(0, limit) });
         } else if (item.type === 'message_output_item') {
           store.addEvent(taskId, 'subagent.message', { text: itemText(item) });
+        } else if (item.type === 'reasoning_item') {
+          // The model's reasoning SUMMARY (requested via modelSettings reasoning.summary)
+          // — interleaved with tool calls it makes the activity feed an actual transcript:
+          // WHY it searched what it searched, not just the calls.
+          const raw = item.rawItem as { content?: Array<{ text?: string }> };
+          const thought = (raw.content ?? []).map((c) => c.text ?? '').join('\n').trim();
+          if (thought) store.addEvent(taskId, 'subagent.thought', { text: thought.slice(0, limit) });
         }
       }
       await s.completed;

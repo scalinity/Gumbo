@@ -210,6 +210,14 @@ const Row = memo(function Row({ event }: { event: EventRow }) {
           {time}
         </div>
       );
+    case 'subagent.thought':
+      return (
+        <div className="machine" data-kind="thought">
+          <span className="tag">thought</span>
+          <span className="body">{chip}{String(p.text ?? '').slice(0, 400)}</span>
+          {time}
+        </div>
+      );
     // M4: Claude Code session stream.
     case 'claude.message':
       return (
@@ -397,11 +405,11 @@ function ReportPanel({ taskId }: { taskId: string }) {
   );
 }
 
-// Subscribes to streamingText alone, so per-token updates re-render only this line —
+// Subscribes to the streamed chunks alone, so per-token updates re-render only this line —
 // not the whole historical feed.
 function StreamingLine() {
-  const streamingText = useStore((s) => s.streamingText);
-  if (!streamingText) return null;
+  const chunks = useStore((s) => s.streamingChunks);
+  if (chunks.length === 0) return null;
   return (
     <div
       className="say"
@@ -419,7 +427,11 @@ function StreamingLine() {
     >
       <span className="who">gumbo</span>
       <span className="text">
-        {streamingText}
+        {/* Position-keyed spans mount ONCE per chunk — the fade-in plays on arrival only,
+            never replaying across the already-visible text. */}
+        {chunks.map((c, i) => (
+          <span className="tok" key={i}>{c}</span>
+        ))}
         <span className="cursor" />
       </span>
       <span className="stamp" />
