@@ -201,7 +201,12 @@ final class Recorder {
                 emit(["kind": "key", "app": field.appName, "value": "delete"])
             }
         } else if !raw.chars.isEmpty {
-            b.text += raw.chars
+            // Belt for keys not in structuralKeys: control characters (0x00–0x1F) and the
+            // 0xF700 function-key private-use area are KEY PRESSES, never typed content.
+            b.text += raw.chars.filter { ch in
+                guard let scalar = ch.unicodeScalars.first else { return false }
+                return scalar.value >= 0x20 && !(0xF700...0xF8FF).contains(scalar.value)
+            }
         }
         burst = b
     }
@@ -306,7 +311,15 @@ final class Recorder {
         return parts.joined(separator: "+")
     }
 
-    private static let structuralKeys: [CGKeyCode: String] = [36: "return", 48: "tab", 53: "escape"]
+    // Arrows are structural too: keyboardGetUnicodeString renders them as ASCII control
+    // characters (0x1C–0x1F), which a typing burst would swallow as literal text — a
+    // recorded demo then compiled "type \u{1C}\u{1C}…" and the replay typed garbage into
+    // the note. As discrete key steps they replay through pressKey and the compiler can
+    // fold them as navigation.
+    private static let structuralKeys: [CGKeyCode: String] = [
+        36: "return", 48: "tab", 53: "escape",
+        123: "left", 124: "right", 125: "down", 126: "up",
+    ]
 
     /// Reverse of SyntheticInput.keyCodes (aliases collapse alphabetically — "enter"
     /// over "return" etc.; every alias replays identically through pressKey).

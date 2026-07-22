@@ -297,6 +297,10 @@ final class AXExecutor {
         }
         let pid = pidOf(element)
         let before = describe(element)
+        // Read BEFORE acting: a chosen menu item vanishes with its menu.
+        let inMenuName = (verb == "press" && insideOpenMenu(element))
+            ? (stringAttr(element, kAXTitleAttribute) ?? stringAttr(element, kAXDescriptionAttribute) ?? "the item")
+            : nil
 
         let selectFlowElement = lastSelectedElement
         lastSelectedElement = nil
@@ -324,6 +328,12 @@ final class AXExecutor {
         // diff never reads as "no observable change" and misleads the loop into re-selecting.
         if verb == "select_text" {
             return AXResult(ok: true, output: "Selected \"\(truncate(action["value"] as? String ?? ""))\".", errorKind: nil, health: nil, noChange: false)
+        }
+        // A chosen menu item's success signal is the MENU CLOSING — the pressed element is
+        // gone, so the element diff would read "(no observable change)" and the loop would
+        // retry into a vanished menu (the Orange-swatch drift). Report the choice directly.
+        if let inMenuName {
+            return AXResult(ok: true, output: "Chose \"\(truncate(inMenuName))\" — the menu closed. Verify the EFFECT on the content (fresh snapshot / selection style), not the menu.", errorKind: nil, health: nil, noChange: false)
         }
 
         settle(element: element, timeoutMs: timeoutMs)
