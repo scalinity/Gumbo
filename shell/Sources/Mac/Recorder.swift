@@ -191,8 +191,15 @@ final class Recorder {
         }
         burst?.lastAt = now
         guard var b = burst, !b.isSecure else { return } // secure: content is never accumulated
-        if raw.keyCode == 51 { // backspace edits the burst instead of recording a key
-            if !b.text.isEmpty { b.text.removeLast() }
+        if raw.keyCode == 51 { // backspace edits the burst instead of recording a key…
+            if !b.text.isEmpty {
+                b.text.removeLast()
+            } else {
+                // …but with nothing buffered it is deleting ALREADY-FLUSHED text — record it
+                // discretely so the compiler can see the correction (a swallowed backspace
+                // left a deleted "d" in a compiled procedure: the "dTEST" replay bug).
+                emit(["kind": "key", "app": field.appName, "value": "delete"])
+            }
         } else if !raw.chars.isEmpty {
             b.text += raw.chars
         }

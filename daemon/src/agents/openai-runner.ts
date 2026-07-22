@@ -1,4 +1,4 @@
-import { Agent, run, tool, codeInterpreterTool } from '@openai/agents';
+import { Agent, run, tool, codeInterpreterTool, MaxTurnsExceededError } from '@openai/agents';
 import { z } from 'zod';
 import { config, todayLabel } from '../config.ts';
 import type { Store } from '../events/store.ts';
@@ -719,8 +719,24 @@ export async function runSubagent(opts: {
       }
       await s.completed;
     };
+    // A run that exhausts its turn budget is a PARTIAL RESULT, not a crash: the work done
+    // so far is real (and visible on screen for a computer task) — surface it as an honest
+    // report instead of failing the whole task with a raw MaxTurnsExceededError.
+    const partialReport = () => {
+      store.addEvent(taskId, 'subagent.message', { text: '[budget] max turns reached — ending with a partial report' });
+      return (
+        'I ran out of my action budget (max turns) before finishing. Everything completed so far is done and ' +
+        'stands as-is; the REMAINING steps were NOT attempted. Report honestly: say which part is finished and ' +
+        'which part is not, and offer to continue in a fresh task.'
+      );
+    };
     const stream = await run(agent, brief, { stream: true, maxTurns: isMac ? config.mac.maxTurns : 25, signal });
-    await consume(stream);
+    try {
+      await consume(stream);
+    } catch (err) {
+      if (err instanceof MaxTurnsExceededError) return partialReport();
+      throw err;
+    }
     const final = String(stream.finalOutput ?? '');
     // Deterministic backstop (live demo 2026-07-20, THREE different path shapes to the same
     // dead end): the model keeps ENDING computer tasks with "the user needs to sign in"
@@ -743,7 +759,12 @@ export async function runSubagent(opts: {
         }]),
         { stream: true, maxTurns: config.mac.maxTurns, signal },
       );
-      await consume(retry);
+      try {
+        await consume(retry);
+      } catch (err) {
+        if (err instanceof MaxTurnsExceededError) return partialReport();
+        throw err;
+      }
       return String(retry.finalOutput ?? '');
     }
     return final;

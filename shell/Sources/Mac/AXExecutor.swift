@@ -160,6 +160,13 @@ final class AXExecutor {
         var nodes: [AXNode] = []
         var truncated = false
         walk(root, pid: target.pid, depth: 0, into: &nodes, cap: maxElements, truncated: &truncated)
+        // Open menus (a popover's color menu, a context menu) attach to the APP element,
+        // not the window — walk them too or their items can never be resolved/pressed.
+        if root !== appElement {
+            for child in axChildren(appElement) where stringAttr(child, kAXRoleAttribute) == "AXMenu" {
+                walk(child, pid: target.pid, depth: 0, into: &nodes, cap: maxElements, truncated: &truncated)
+            }
+        }
 
         // New generation: mint fresh refs, drop the old map (old refs now stale by design).
         // The generation is ENCODED in the ref ("g3e12"), so a ref from a prior snapshot can
@@ -257,6 +264,25 @@ final class AXExecutor {
             lastSelectedElement = nil // a real key interacts with the selection natively
             return performKey(action["value"] as? String ?? "", timeoutMs: timeoutMs)
         }
+        // menu_path drives the app's own menus by title — ref = an element (its CONTEXT menu,
+        // via AXShowMenu), ref null = the app's MENU BAR. Handled before the ref guard because
+        // the menu-bar form is targetless, and it returns directly because a formatting
+        // change (highlight, color, bold) does not alter the element's text value — the diff
+        // would misread success as "no observable change" (the select_text lesson).
+        if verb == "menu_path" {
+            lastSelectedElement = nil // the menu action consumes the selection context; a later type must not replace the leftover selection
+            var target: AXUIElement?
+            if let ref = action["ref"] as? String, !ref.isEmpty {
+                guard let el = refs[ref] else {
+                    return AXResult.failure("stale_ref", "Ref \(ref) is from a previous snapshot — re-snapshot and retry.")
+                }
+                if isSecureField(el) {
+                    return AXResult.failure("secure_field", "That is a secure (password) field — Gumbo will not act on it. Ask the user.")
+                }
+                target = el
+            }
+            return performMenuPath(target, path: action["value"] as? String ?? "")
+        }
 
         guard let ref = action["ref"] as? String else {
             return AXResult.failure("element_not_found", "\(verb) needs a ref.")
@@ -269,17 +295,6 @@ final class AXExecutor {
         if isSecureField(element) {
             return AXResult.failure("secure_field", "That is a secure (password) field — Gumbo will not read or type into it. Ask the user to enter it.")
         }
-        // A disabled control never receives its action, and AXPress false-passes on one —
-        // the diff would read "(no observable change)" and mislead the loop into blind
-        // retries (the pink-highlight replay bug). Say WHY it is inert, with the one
-        // recovery that fixes the common case: formatting popovers capture their enabled
-        // state when they OPEN, so select first, then reopen the popover.
-        if verb == "press" || verb == "show_menu", boolAttr(element, kAXEnabledAttribute) == false {
-            return AXResult.failure(
-                "element_disabled",
-                "That control is disabled right now. If it lives in a Format/Aa popover or menu, the controls captured their enabled state when it OPENED — make the text selection (select_text) first, then CLOSE and REOPEN the popover, then press it.")
-        }
-
         let pid = pidOf(element)
         let before = describe(element)
 
@@ -375,7 +390,24 @@ final class AXExecutor {
     /// Rung 1: AXPress (background-safe, works on occluded elements, never moves the
     /// pointer). Falls to rung 2 (pid-targeted synthetic click at the element's frame) when
     /// AXPress isn't supported/effective. The ghost cursor animates to the frame regardless.
+    ///
+    /// EXCEPTION — controls that only real input can operate (measured on Notes' Format
+    /// popover, 2026-07-21): SwiftUI popover controls permanently report AXEnabled=false
+    /// (a LIE — they track the live selection while claiming disabled) and AXPress on them
+    /// false-passes or errors; items inside an OPEN tracking menu (a popover's color menu,
+    /// a context menu) ignore AXPress/AXPick entirely. Both classes only respond to a
+    /// GLOBAL HID click at their live frame — the same event path as click_point, tagged
+    /// synthetic so the kill-switch ignores it, sanctioned during tasks by the same
+    /// bracket. The frame is read fresh from the AX tree at act time, never recorded.
     private func performPress(_ element: AXUIElement, pid: pid_t) -> String? {
+        let phantomDisabled = boolAttr(element, kAXEnabledAttribute) == false
+        if phantomDisabled || insideOpenMenu(element) {
+            guard let center = frameCenter(element) else {
+                return "the control needs a real click but exposes no frame"
+            }
+            SyntheticInput.click(at: center, pid: nil) // nil pid = global HID — the only path these controls hear
+            return nil
+        }
         let err = AXUIElementPerformAction(element, kAXPressAction as CFString)
         if err == .success { return nil }
         // Rung 2: pid-targeted synthetic click at the element center.
@@ -384,6 +416,22 @@ final class AXExecutor {
             return nil
         }
         return "AXPress error \(err.rawValue) and no frame to click"
+    }
+
+    /// True when the element sits inside an open AXMenu (tracking menus swallow AX
+    /// actions; only real clicks land). Menu-BAR items are excluded — their ancestor is
+    /// AXMenuBar and AXPress fires their action reliably.
+    private func insideOpenMenu(_ element: AXUIElement) -> Bool {
+        var node: AXUIElement? = parentOf(element)
+        var hops = 0
+        while let n = node, hops < 20 {
+            let role = stringAttr(n, kAXRoleAttribute)
+            if role == "AXMenu" { return true }
+            if role == "AXMenuBar" || role == "AXWindow" { return false }
+            node = parentOf(n)
+            hops += 1
+        }
+        return false
     }
 
     private func performFocus(_ element: AXUIElement) -> String? {
@@ -420,10 +468,36 @@ final class AXExecutor {
         }
         if match.location == NSNotFound { match = ns.range(of: text) } // occurrence drifted → first match
         if match.location == NSNotFound { return "select_text: \"\(truncate(text))\" not found in the field" }
-        var range = CFRange(location: match.location, length: match.length)
-        guard let axRange = AXValueCreate(.cfRange, &range) else { return "select_text: could not build range" }
-        let err = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
-        if err != .success { return "select_text: AX rejected the selection (\(err.rawValue))" }
+
+        // Build the selection with REAL key events where practical: an AXSelectedTextRange
+        // write lands in the text ENGINE (menu-bar actions apply to it) but fires no input
+        // events, so event-driven UI state (a format popover's tracking of "the user has a
+        // selection") never hears about it. Anchor the caret at the match start via AX,
+        // then extend with shift+right keystrokes — the selection both reads back correctly
+        // AND exists as a user-made one. Long ranges fall back to the pure AX write (the
+        // keystroke build is linear in length).
+        _ = performFocus(element)
+        let charCount = ns.substring(with: match).count
+        var built = false
+        if charCount <= 120 {
+            var caret = CFRange(location: match.location, length: 0)
+            if let axCaret = AXValueCreate(.cfRange, &caret),
+               AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axCaret) == .success {
+                let pid = pidOf(element)
+                for _ in 0..<charCount {
+                    guard SyntheticInput.pressKey("shift+right", pid: pid) else { break }
+                    usleep(20_000)
+                }
+                usleep(150_000)
+                built = (stringAttr(element, kAXSelectedTextAttribute) ?? "") == text
+            }
+        }
+        if !built {
+            var range = CFRange(location: match.location, length: match.length)
+            guard let axRange = AXValueCreate(.cfRange, &range) else { return "select_text: could not build range" }
+            let err = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
+            if err != .success { return "select_text: AX rejected the selection (\(err.rawValue))" }
+        }
         let got = stringAttr(element, kAXSelectedTextAttribute) ?? ""
         if got != text { return "select_text: the selection did not take (this field may not support programmatic selection)" }
         return nil
@@ -482,6 +556,136 @@ final class AXExecutor {
             return nil
         }
         return "AXShowMenu error \(err.rawValue) and no frame"
+    }
+
+    /// Drive a menu by TITLES — an element's CONTEXT menu (AXShowMenu first) or the app's
+    /// MENU BAR (element nil). Menus are the most AX-reliable surface on macOS: items are
+    /// plain NSMenu AXMenuItems whose enabled state validates LIVE against the responder
+    /// chain, unlike popover/toolbar controls, which capture theirs at open and go stale
+    /// under AX driving (Notes' Format popover: disabled with ANY ordering — the M8
+    /// highlight-color bug; its CONTEXT menu carries Font ▸ Highlight ▸ <color>, enabled).
+    /// Submenu contents are readable in the AX tree without visually opening them, and
+    /// pressing the LEAF is the whole gesture. `path` is " > "-separated, matched
+    /// case-insensitively (exact first, then containment; trailing "…" ignored).
+    private func performMenuPath(_ element: AXUIElement?, path: String) -> AXResult {
+        let parts = path.split(separator: ">").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !parts.isEmpty else {
+            return AXResult.failure("out_of_scope", "menu_path needs a \" > \"-separated path, e.g. \"Font > Highlight > Pink\".")
+        }
+        let pid = element.map { pidOf($0) } ?? (lastApp?.pid ?? resolveApp(nil)?.pid ?? 0)
+        guard pid != 0 else {
+            return AXResult.failure("element_not_found", "no app context for the menu bar — take ax_snapshot first.")
+        }
+        let appEl = AXUIElement.application(pid)
+        let isContext = element != nil
+        // For a failed CONTEXT walk, the popped-up menu must not be left dangling.
+        func bail(_ kind: String, _ message: String) -> AXResult {
+            if isContext { _ = SyntheticInput.pressKey("escape", pid: pid) }
+            return AXResult.failure(kind, message)
+        }
+
+        var current: AXUIElement
+        if let element {
+            let err = AXUIElementPerformAction(element, "AXShowMenu" as CFString)
+            guard err == .success else {
+                return AXResult.failure("ax_unavailable", "could not open the context menu (AXShowMenu error \(err.rawValue)).")
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+            guard let menu = findMenu(near: element, app: appEl) else {
+                return bail("element_not_found", "the context menu did not appear.")
+            }
+            current = menu
+        } else {
+            var barRef: AnyObject?
+            guard AXUIElementCopyAttributeValue(appEl, kAXMenuBarAttribute as CFString, &barRef) == .success,
+                  let barObj = barRef else {
+                return AXResult.failure("ax_unavailable", "the app exposes no menu bar.")
+            }
+            current = barObj as! AXUIElement
+        }
+
+        for (i, want) in parts.enumerated() {
+            guard let item = matchMenuItem(in: current, title: want) else {
+                let available = axChildren(current)
+                    .flatMap { stringAttr($0, kAXRoleAttribute) == "AXMenu" ? axChildren($0) : [$0] }
+                    .compactMap { stringAttr($0, kAXTitleAttribute) }.filter { !$0.isEmpty }
+                return bail("element_not_found", "no menu item matches \"\(want)\". This level has: \(available.prefix(30).joined(separator: ", ")).")
+            }
+            if boolAttr(item, kAXEnabledAttribute) == false {
+                return bail("element_disabled", "menu item \"\(want)\" is disabled — its action does not apply to the current selection/focus. Establish the selection (select_text) first, then retry.")
+            }
+            if i == parts.count - 1 {
+                let err = AXUIElementPerformAction(item, kAXPressAction as CFString)
+                guard err == .success else {
+                    return bail("ax_unavailable", "could not press menu item \"\(want)\" (error \(err.rawValue)).")
+                }
+                Thread.sleep(forTimeInterval: 0.4)
+                var out = "Chose \"\(parts.joined(separator: " > "))\" from the \(isContext ? "context menu" : "menu bar")."
+                if let el = element, let style = selectionStyle(el) {
+                    out += " Selection style now: \(style)."
+                }
+                return AXResult(ok: true, output: out, errorKind: nil, health: nil, noChange: false)
+            }
+            guard let submenu = axChildren(item).first(where: { stringAttr($0, kAXRoleAttribute) == "AXMenu" }) else {
+                return bail("element_not_found", "\"\(want)\" has no submenu to descend into.")
+            }
+            current = submenu
+        }
+        return bail("ax_unavailable", "unreachable")
+    }
+
+    /// Locate the popped-up context menu: direct AXMenu child of the app, else a shallow
+    /// search under the element itself (apps attach context menus in either place).
+    private func findMenu(near element: AXUIElement, app: AXUIElement) -> AXUIElement? {
+        if let m = axChildren(app).first(where: { stringAttr($0, kAXRoleAttribute) == "AXMenu" }) { return m }
+        var frontier = axChildren(element)
+        for _ in 0..<4 {
+            if let m = frontier.first(where: { stringAttr($0, kAXRoleAttribute) == "AXMenu" }) { return m }
+            frontier = frontier.flatMap { axChildren($0) }
+            if frontier.count > 400 { break }
+        }
+        return nil
+    }
+
+    /// Match one path segment among a container's items. Menu-bar items and menu items both
+    /// answer to AXTitle; a container that is a bar/menu holds items directly. Exact
+    /// (case-insensitive, "…"-stripped) wins; a UNIQUE containment match is accepted;
+    /// ambiguity is not-found (never guess between menu items).
+    private func matchMenuItem(in container: AXUIElement, title want: String) -> AXUIElement? {
+        let items = axChildren(container).flatMap { child -> [AXUIElement] in
+            let role = stringAttr(child, kAXRoleAttribute)
+            return (role == "AXMenu") ? axChildren(child) : [child]
+        }
+        func norm(_ s: String) -> String {
+            s.replacingOccurrences(of: "…", with: "").replacingOccurrences(of: "...", with: "")
+                .trimmingCharacters(in: .whitespaces).lowercased()
+        }
+        let wantN = norm(want)
+        let titled = items.compactMap { item -> (AXUIElement, String)? in
+            guard let t = stringAttr(item, kAXTitleAttribute), !t.isEmpty else { return nil }
+            return (item, norm(t))
+        }
+        if let exact = titled.first(where: { $0.1 == wantN }) { return exact.0 }
+        let contains = titled.filter { $0.1.contains(wantN) }
+        return contains.count == 1 ? contains[0].0 : nil
+    }
+
+    /// The formatting feedback channel: Notes (and AppKit text views generally) expose the
+    /// applied style of a range as a human-readable AXStyleName inside the attributed
+    /// string — e.g. "Heading, Pink highlight, Contains paragraphs". Text-value diffs are
+    /// blind to formatting; this read is how a highlight/color action becomes verifiable.
+    private func selectionStyle(_ element: AXUIElement) -> String? {
+        guard let sel = selectedRange(element), sel.length > 0 else { return nil }
+        var range = CFRange(location: sel.location, length: sel.length)
+        guard let axRange = AXValueCreate(.cfRange, &range) else { return nil }
+        var out: AnyObject?
+        guard AXUIElementCopyParameterizedAttributeValue(element, "AXAttributedStringForRange" as CFString, axRange, &out) == .success,
+              let astr = out as? NSAttributedString else { return nil }
+        var styles: Set<String> = []
+        astr.enumerateAttribute(NSAttributedString.Key("AXStyleName"), in: NSRange(location: 0, length: astr.length)) { value, _, _ in
+            if let s = value as? String { styles.insert(s) }
+        }
+        return styles.isEmpty ? nil : styles.sorted().joined(separator: " | ")
     }
 
     // MARK: settle — debounced AXObserver, wrapped by poll + timeout
@@ -829,6 +1033,12 @@ final class AXExecutor {
         var ref: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attr as CFString, &ref) == .success else { return nil }
         return ref as? Bool
+    }
+
+    private func axChildren(_ element: AXUIElement) -> [AXUIElement] {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &ref) == .success else { return [] }
+        return (ref as? [AXUIElement]) ?? []
     }
 
     private func string(_ raw: [CFTypeRef], _ index: Int) -> String? {

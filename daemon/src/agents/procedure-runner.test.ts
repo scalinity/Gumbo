@@ -170,6 +170,27 @@ test('an "activate" step is satisfied by ensureApp alone — app-only targets ne
   assert.equal(h.calls.filter((c) => c.kind === 'resolve').length, 2, 'only the two element steps resolve');
 });
 
+test('menu_path: an element-targeted step resolves then acts; a targetless step drives the menu bar without resolve', async () => {
+  const h = harness({
+    bridge: (a) => (a.kind === 'resolve' ? { ok: true, output: 'g1e9' } : { ok: true, output: 'Chose "Font > Highlight > Pink" from the context menu.' }),
+  });
+  const result = await h.run({
+    name: 'colorize', goal: 'highlight a word', preconditions: [], apps: ['Notes'],
+    steps: [
+      { lane: 'ax', desc: 'Select the word', target: { app: 'Notes', role: 'AXTextArea' }, verb: 'select_text', value: 'CODE', occurrence: 0 },
+      { lane: 'ax', desc: 'Apply pink highlight', target: { app: 'Notes', role: 'AXTextArea' }, verb: 'menu_path', value: 'Font > Highlight > Pink' },
+      { lane: 'ax', desc: 'Toggle highlight from the menu bar', target: { app: 'Notes' }, verb: 'menu_path', value: 'Format > Font > Highlight' },
+    ],
+  });
+  assert.equal(result.outcome, 'completed');
+  const acts = h.calls.filter((c) => c.kind === 'act' && c.verb === 'menu_path');
+  assert.equal(acts.length, 2);
+  assert.equal(acts[0].ref, 'g1e9', 'the element form acts by the RESOLVED ref');
+  assert.equal(acts[1].ref, null, 'the menu-bar form sends no ref');
+  assert.equal(acts[1].value, 'Format > Font > Highlight');
+  assert.equal(h.calls.filter((c) => c.kind === 'resolve').length, 2, 'the menu-bar form never resolves');
+});
+
 test('drift after the retry bails to fallback with step + reason + verified progress', async () => {
   const h = harness({
     bridge: (a) => (a.kind === 'resolve'

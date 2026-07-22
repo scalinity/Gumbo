@@ -14,7 +14,7 @@ export const AUDIO_TTS = 0x02;
 
 /** Verbs ax_act dispatches through the ladder (AXPress → CGEventPostToPid → global CGEvent).
  *  wait_for is a verb, not a tool — waits live in the executor, never as model-issued sleeps. */
-export type MacActVerb = 'press' | 'focus' | 'set_value' | 'type' | 'key' | 'show_menu' | 'wait_for' | 'select_text';
+export type MacActVerb = 'press' | 'focus' | 'set_value' | 'type' | 'key' | 'show_menu' | 'wait_for' | 'select_text' | 'menu_path';
 
 /** One shell-executed step. Nullable fields are per-verb: act needs ref (except wait_for,
  *  which matches on role+name); script carries its own hard timeout (Tahoe -1712 hangs).

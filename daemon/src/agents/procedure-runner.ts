@@ -142,6 +142,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     type: { verb: 'type', carriesValue: true },
     set_value: { verb: 'set_value', carriesValue: true },
     select_text: { verb: 'select_text', carriesValue: true }, // value = the text to highlight
+    menu_path: { verb: 'menu_path', carriesValue: true }, // value = "Font > Highlight > Pink"
   };
   const BROWSER_VERBS = new Set(['click', 'fill', 'type', 'press', 'select', 'hover', 'focus', 'scroll']);
 
@@ -151,7 +152,17 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     // "Open the app" IS the whole step: ensureApp above focused/launched it, and an
     // app-only target has nothing for resolve to match (compilers emit these as the
     // first step of app-based procedures — resolving one would drift every replay).
-    if (step.verb === 'activate' || (!step.target?.identifier && !step.target?.name && !step.target?.role)) return 'ok';
+    if (step.verb === 'activate') return 'ok';
+    const selectorless = !step.target?.identifier && !step.target?.name && !step.target?.role;
+    // menu_path with no element selector is the MENU-BAR form — targetless by design,
+    // no resolve; the executor walks the focused app's menu bar by titles.
+    if (step.verb === 'menu_path' && selectorless) {
+      const obs = await invoke('ax_act', { verb: 'menu_path', ref: null, value: step.value ?? '', role: null, name: null, timeout_ms: 8000 });
+      if (obs?.declined) return { kind: 'stopped', reason: 'the user declined the action' };
+      if (!obs?.ok) return { kind: 'drift', reason: `act failed (${obs?.errorKind ?? 'no result'})` };
+      return 'ok';
+    }
+    if (selectorless) return 'ok';
     const mapped = AX_VERBS[step.verb ?? 'click'] ?? AX_VERBS.click;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snap = await snapshotWithLaunchSlack(step.target?.app);
@@ -387,6 +398,8 @@ export function fallbackBrief(originalBrief: string, procedure: Procedure, repla
       if (s.value !== undefined && s.value !== '') {
         if (s.verb === 'select_text') {
           detail = ` — SELECT/highlight this exact text (do NOT type it): ${JSON.stringify(s.value)}${s.occurrence ? ` (the occurrence at index ${s.occurrence})` : ''}`;
+        } else if (s.verb === 'menu_path') {
+          detail = ` — use ax_act verb "menu_path" with value ${JSON.stringify(s.value)} (context menu of the field when a target is named, else the menu bar — do NOT hunt for popover/toolbar buttons)`;
         } else if (s.lane === 'key') {
           detail = ` — press ${s.value}`;
         } else {

@@ -117,14 +117,21 @@ export function createMacTools(
       'set_value (write a value directly), type (send keystrokes — use for web/Electron fields), ' +
       'key (a keyboard shortcut like "cmd+n" or "return" — value holds the chord, no ref needed), ' +
       'show_menu (right-click/context menu), select_text (highlight text in a field so a following ' +
-      'format action applies — value holds the exact text to select, no coordinates), wait_for (block ' +
+      'format action applies — value holds the exact text to select, no coordinates; the selection is ' +
+      'made with real keystrokes, so format controls treat it like a hand-made one), menu_path ' +
+      '(walk the app\'s MENU BAR by titles with null ref and press the final item — value = the ' +
+      '" > "-separated path, e.g. "Format > Font > Highlight". Reliable for any menu-bar command; ' +
+      'NEVER guess keyboard shortcuts — a wrong chord just beeps. With a ref it walks that ' +
+      'element\'s context menu instead, but some apps ignore programmatic picks there — prefer the ' +
+      'menu bar or the app\'s own on-screen controls. A format control that reads (disabled) in a ' +
+      'popover is usually operable anyway — press it; the executor clicks it for real), wait_for (block ' +
       'until an element with role+name appears; use role+name instead of ref). Returns a before/after ' +
       'DIFF of what changed — read it to verify the step worked; an empty diff means nothing changed, ' +
       'so DO NOT assume success. Secure (password) fields are refused.',
     parameters: z.object({
-      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for', 'select_text']),
+      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for', 'select_text', 'menu_path']),
       ref: z.string().nullable().describe('Element ref from ax_snapshot; null for key/wait_for'),
-      value: z.string().nullable().describe('Text for type/set_value/select_text, or the chord for key'),
+      value: z.string().nullable().describe('Text for type/set_value/select_text, the chord for key, or the " > " menu path for menu_path'),
       role: z.string().nullable().describe('wait_for: the role to wait for (e.g. "AXButton")'),
       name: z.string().nullable().describe('wait_for: substring of the label to wait for'),
       timeout_ms: z.number().int().min(100).max(30_000).default(5000),
