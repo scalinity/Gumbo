@@ -371,9 +371,10 @@ struct BubbleEvent: Identifiable {
             kind = .lifecycle
             let status = payload["status"] as? String ?? ""
             body = status == "needs_input" ? "Paused — needs the user" : "Running again"
-        case "task.created":
-            kind = .lifecycle
-            body = "Task started"
+        case "task.created": // the brief IS the kickoff instruction — render it, not a bare marker
+            let brief = payload["brief"] as? String ?? ""
+            kind = brief.isEmpty ? .lifecycle : .prompt
+            body = brief.isEmpty ? "Task started" : brief
         case "task.finished":
             kind = .lifecycle
             let status = payload["status"] as? String ?? "done"

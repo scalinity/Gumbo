@@ -270,7 +270,7 @@ const Row = memo(function Row({ event }: { event: EventRow }) {
       return (
         <div className="machine" data-kind="created">
           <span className="tag">task</span>
-          <span className="body">{chip}started — {String(p.title ?? '')}</span>
+          <span className="body">{chip}started — {String(p.title ?? '')}{p.brief ? `: ${String(p.brief)}` : ''}</span>
           {time}
         </div>
       );
