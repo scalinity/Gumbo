@@ -159,6 +159,46 @@ function redactProcedure(procedure: Procedure) {
   }
 }
 
+/** An app is "observed" if the source trace touched it — tolerant of the fuzzy-resolver
+ *  name variance (ChatGPT vs ChatGPT Classic) via containment either way, but strict enough
+ *  that a WHOLLY different app (Mail when the demo was Notes) never matches. */
+function appMatchesObserved(app: string, observed: Set<string>): boolean {
+  const a = app.trim().toLowerCase();
+  if (!a) return true; // a step with no app targets the frontmost — the app boundary is elsewhere
+  for (const o of observed) {
+    if (a === o || a.includes(o) || o.includes(a)) return true;
+  }
+  return false;
+}
+
+/** Deterministic provenance check (scan MEDIUM): the compiler sends recorded UI text /
+ *  document captures / task traces to the model, which could be prompt-injected by that
+ *  content into adding automation the source never contained. Ground the compiled procedure
+ *  against what was actually observed: every step's target app (and the declared apps list)
+ *  must match an observed app, and a script-lane step is allowed only if the source itself
+ *  ran scripts. Returns null when clean, or a human reason when the procedure must be
+ *  REJECTED (never silently stripped — a smuggled step means the whole compile is untrusted).*/
+export function groundProcedure(procedure: Procedure, observed: { apps: Set<string>; allowScript: boolean }): string | null {
+  // App grounding only applies when the source actually named apps (a teaching recording
+  // always does; a pure-browser task trace may not — its host boundary lives elsewhere).
+  const groundApps = observed.apps.size > 0;
+  if (groundApps) {
+    for (const app of procedure.apps) {
+      if (!appMatchesObserved(app, observed.apps)) return `declares app "${app}" that the recording never touched`;
+    }
+  }
+  for (const step of procedure.steps) {
+    if (step.lane === 'script' && !observed.allowScript) {
+      return `introduced a script step ("${step.desc}") — the source demonstration ran no scripts`;
+    }
+    const app = step.target?.app;
+    if (groundApps && app && !appMatchesObserved(app, observed.apps)) {
+      return `targets app "${app}" in step "${step.desc}" that the recording never touched`;
+    }
+  }
+  return null;
+}
+
 /** Brief for running a saved procedure as a TEMPLATE through the intelligent loop — a
  *  VARIATION the user asked for ("do the packing list, but for a picnic") rather than a
  *  faithful replay. The demonstrated steps guide HOW (which apps, the sequence, where
@@ -305,6 +345,16 @@ export function createProcedureService(store: Store, complete: CompleteFn = comp
         : '';
       const input = `Procedure name: ${name}\nSource: a demonstration the user performed themselves (semantic recording).\nRecorded steps:\n${lines.join('\n')}${fenced}`;
       const procedure = await compile(complete, input, name, signal);
+      // Provenance: the recording's content (page/document text) reached the compiler, so a
+      // prompt injection could have steered it into automation outside the demonstration.
+      // Ground against the apps the user actually touched; teaching records no scripts, so
+      // a compiled script step is always model-introduced → reject the whole compile loudly.
+      const observedApps = new Set(steps.map((s) => s.app.trim().toLowerCase()).filter(Boolean));
+      const ungrounded = groundProcedure(procedure, { apps: observedApps, allowScript: false });
+      if (ungrounded) {
+        store.addEvent(taskId, 'procedure.rejected', { name, reason: ungrounded });
+        throw new Error(`the compiled procedure ${ungrounded} — NOT saved (it must match what you demonstrated)`);
+      }
       // The captured outcome IS the replay's acceptance test — attach it deterministically
       // (never via the model, which could mangle it).
       if (outcome) procedure.expect = outcome.slice(0, 30_000);
@@ -341,6 +391,15 @@ export function createProcedureService(store: Store, complete: CompleteFn = comp
       if (!trace) throw new Error('that task left no action trace to distill');
       const input = `Procedure name: ${name}\nSource: the action trace of a computer task that completed successfully.\nGoal (the task's brief): ${brief}\n\nAction trace:\n${trace}`;
       const procedure = await compile(complete, input, name);
+      // Provenance grounding (scan MEDIUM): derive the apps the trace actually touched and
+      // whether it ran scripts, then reject a compile that smuggled in automation the run
+      // never performed (the trace's tool results carry untrusted page/screen text).
+      const observed = observedFromTrace(store, taskId);
+      const ungrounded = groundProcedure(procedure, observed);
+      if (ungrounded) {
+        store.addEvent(taskId, 'procedure.rejected', { name, reason: ungrounded });
+        throw new Error(`the compiled procedure ${ungrounded} — NOT saved (it must match what the task actually did)`);
+      }
       // A HEAL is a repair of the same demonstrated outcome — the action trace carries no
       // capture, so without this the first heal silently discards the acceptance test the
       // closed loop depends on. Carry the prior version's expect forward code-side.
@@ -358,6 +417,34 @@ export function createProcedureService(store: Store, complete: CompleteFn = comp
       return { name, version, stepCount: procedure.steps.length };
     },
   };
+}
+
+/** Derive the observed apps + script-allowance from a task's tool.call trace — the same
+ *  events renderTrace condenses, but read structurally for grounding. Apps come from the
+ *  `app` arg of focus_app / ax_snapshot / screen_ocr / screen_look / read_document and from
+ *  run_script's literal `tell application "…"` targets; allowScript is true iff the run
+ *  actually called run_script (so a compiled script step is grounded). */
+const TELL_APP = /tell\s+app(?:lication)?\s+"([^"]+)"/gi;
+function observedFromTrace(store: Store, taskId: string): { apps: Set<string>; allowScript: boolean } {
+  const apps = new Set<string>();
+  let allowScript = false;
+  for (const event of store.listEvents({ taskId, limit: 1000 })) {
+    if (event.type !== 'tool.call') continue;
+    const payload = event.payload as { name?: string; args?: string } | null;
+    if (!payload?.name) continue;
+    try {
+      const args = JSON.parse(payload.args ?? '{}') as { app?: unknown; script?: unknown };
+      if (typeof args.app === 'string' && args.app.trim()) apps.add(args.app.trim().toLowerCase());
+      if (payload.name === 'run_script') {
+        allowScript = true;
+        // Literal `tell application "…"` targets a script drives count as observed apps.
+        if (typeof args.script === 'string') {
+          for (const m of args.script.matchAll(TELL_APP)) apps.add(m[1].trim().toLowerCase());
+        }
+      }
+    } catch { /* unparseable args → nothing to add */ }
+  }
+  return { apps, allowScript };
 }
 
 /** Condense a task's tool.call/tool.result stream for the compiler — call args verbatim
