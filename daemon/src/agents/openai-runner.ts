@@ -14,7 +14,7 @@ import { wrapSteering } from './steering.ts';
 import { visionQuery } from './vision.ts';
 import { recordAgentsRunUsage } from '../usage/recorder.ts';
 import { fallbackBrief, replayProcedure, verifyAgainstExpect } from './procedure-runner.ts';
-import { wrapUnattendedApps } from './unattended.ts';
+import { createUnattendedWrapper } from './unattended.ts';
 import { completeOnce, type CompleteFn, type Procedure } from './procedures.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
@@ -868,7 +868,8 @@ export async function runSubagent(opts: {
     // the replay engine AND the fallback loop alike; out-of-set apps ride the parked
     // confirm, and an approval admits the app for the rest of the task.
     if (macToolset && opts.procedure?.unattended) {
-      macToolset = macToolset.map((t) => wrapUnattendedApps(t, opts.procedure!.procedure.apps, confirmScript!));
+      const wrapApp = createUnattendedWrapper(opts.procedure.procedure.apps, confirmScript!);
+      macToolset = macToolset.map(wrapApp);
     }
 
     // M8 deterministic replay: runs on the UNWRAPPED toolset (wrapSteering mutates

@@ -21,7 +21,7 @@ import { completeOnce, type CompleteFn, type Procedure, type ProcedureStep } fro
 
 /** The SDK tool surface the engine drives. CONTRACT (review 🔵): the ctx argument is
  *  passed as `{}` — Gumbo's mac/browser tools never read the SDK RunContext (the same
- *  assumption wrapSteering/wrapUnattendedApps make, pinned by the suite calling
+ *  assumption wrapSteering/createUnattendedWrapper make, pinned by the suite calling
  *  invoke({}, …) throughout). A future ctx-reading tool must not join the replay
  *  toolset without extending this seam. */
 type InvokableTool = { name: string; invoke: (ctx: unknown, args: string) => Promise<unknown> };
