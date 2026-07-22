@@ -119,6 +119,26 @@ test('reading a secret store confirms even though reads are otherwise auto (revi
   assert.equal(macDoDecision('cat /tmp/notes.txt').route, 'auto', 'ordinary reads stay auto');
 });
 
+test('the full secretStoreNames set is gated in ~, absolute, and bare-relative forms (scan HIGH)', () => {
+  assert.equal(macDoDecision('cat ~/.netrc').route, 'confirm');
+  assert.equal(macDoDecision('cat /Users/danny/.config/gh/hosts.yml').route, 'confirm', 'absolute homedir form of a tilde-listed store');
+  assert.equal(macDoDecision('cat ~/.docker/config.json').route, 'confirm');
+  assert.equal(macDoDecision('cat ~/.kube/config').route, 'confirm');
+  assert.equal(macDoDecision('ls ~/.gnupg').route, 'confirm');
+  assert.equal(macDoDecision('cat ~/.config/gcloud/credentials.db').route, 'confirm');
+  assert.equal(macDoDecision('cd ~ && cat .netrc').route, 'confirm', 'bare-relative after a cd');
+  assert.equal(macDoDecision('cat ~/Gumbo/logs/mac-audit.jsonl').route, 'confirm', 'private audit logs');
+  assert.equal(macDoDecision('sqlite3 ~/Gumbo/db/gumbo.db .dump').route, 'confirm', 'the event/transcript db');
+  assert.equal(macDoDecision('cat ~/.config/gtk-3.0/settings.ini').route, 'auto', 'a non-credential ~/.config read stays auto');
+});
+
+test('Keychain reads via the security CLI confirm; benign security subcommands stay auto', () => {
+  assert.equal(macDoDecision('security find-generic-password -s github -w').route, 'confirm');
+  assert.equal(macDoDecision('security find-internet-password -a me -w').route, 'confirm');
+  assert.equal(macDoDecision('security dump-keychain login.keychain').route, 'confirm');
+  assert.equal(macDoDecision('security list-keychains').route, 'auto', 'listing keychains reveals no secrets');
+});
+
 test('patterns are scoped per command line — a $ on a later line does not taint an earlier open (review 🔵)', () => {
   assert.equal(macDoDecision('open -a Notes\necho "$HOME"').route, 'auto', 'benign multiline must not over-confirm');
 });

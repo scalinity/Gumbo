@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
-import { config, secretEnvKeys, secretFilePaths } from '../config.ts';
+import { config, secretEnvKeys, secretFilePaths, secretStoreNames } from '../config.ts';
 import { startEgressProxy, type EgressProxy } from './egress-proxy.ts';
 import type { Store } from '../events/store.ts';
 import type { Supervisor, GateResult } from './supervisor.ts';
@@ -221,15 +221,9 @@ export function buildSandboxProfile(cwd: string, taskId: string, proxyPort: numb
     realOrLiteral(secretFilePaths[0]), // repo .env (provider keys)
     realOrLiteral(config.home.browser), // M7 persistent automation profile = live session cookies on disk
     realOrLiteral(config.home.logs), // M7: audit trails carry full page URLs (possible query-string tokens)
-    realOrLiteral(join(home, '.ssh')),
-    realOrLiteral(join(home, '.aws')),
-    realOrLiteral(join(home, '.config', 'gh')), // GitHub OAuth token (hosts.yml)
-    realOrLiteral(join(home, '.config', 'gcloud')),
-    realOrLiteral(join(home, '.npmrc')), // npm auth token
-    realOrLiteral(join(home, '.netrc')),
-    realOrLiteral(join(home, '.docker', 'config.json')),
-    realOrLiteral(join(home, '.kube')),
-    realOrLiteral(join(home, '.gnupg')),
+    // The home credential stores — one shared list (config.secretStoreNames) also drives
+    // the mac_do/run_script confirm gate and file presentation, so the sets can't drift.
+    ...secretStoreNames.map((name) => realOrLiteral(join(home, name))),
   ];
   return [
     '(version 1)',

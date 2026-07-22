@@ -70,6 +70,15 @@ export const secretEnvKeys = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY',
 // residual. Keep this list and `readDenied` in sync — both derive `.env` from here.
 export const secretFilePaths = [join(repoRoot, '.env'), join(homedir(), '.claude')] as const;
 
+// Home-relative credential stores every read-gate shares: the Seatbelt read-deny
+// (claude-runner), the mac_do/run_script confirm gate (mac/policy), and file presentation
+// (files/present) all derive from THIS list, so a store added here is covered everywhere
+// at once. Paths are relative to the user's home.
+export const secretStoreNames = [
+  '.ssh', '.aws', '.npmrc', '.netrc', '.gnupg', '.kube',
+  '.docker/config.json', '.config/gh', '.config/gcloud',
+] as const;
+
 export const config = {
   port,
   host: '127.0.0.1', // loopback only — do not bind all interfaces

@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { resolve, sep } from 'node:path';
-import { config } from '../config.ts';
+import { config, secretStoreNames } from '../config.ts';
 import { hostAllowed, hostOf } from './hosts.ts';
 
 /** Where a mac_do decision lands. 'auto' runs unreviewed; 'confirm' routes to the notch. */
@@ -38,9 +38,13 @@ const CONFIRM_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   // Reading a secret store: the env strip keeps keys out of the child process, but a
   // read-only `cat .env` would return them into the voice model's context anyway (the
   // daemon and its bash children run UNSANDBOXED — no Seatbelt backstop on this lane).
-  // Same protected set the M4 supervisor guards for Claude sessions. Gumbo/browser holds
-  // the automation profile's storage state — live session cookies (M7).
-  { pattern: /\.env\b|\/\.(ssh|aws|npmrc)\b|~\/\.(ssh|aws|npmrc|config\/gh)\b|Gumbo\/browser\b/i, reason: 'reading a secret store' },
+  // The store list is config.secretStoreNames — the SAME set the Seatbelt read-deny uses —
+  // matched in ~, absolute (/Users/…/.netrc), or bare-relative position (a false positive
+  // just confirms). Gumbo/browser holds the automation profile's storage state — live
+  // session cookies (M7); Gumbo/logs + gumbo.db carry audit URLs and transcripts.
+  { pattern: secretStorePattern(), reason: 'reading a secret store' },
+  // Keychain reads via the security CLI return live passwords/tokens in cleartext.
+  { pattern: /\bsecurity\b[^|;&\n]*\b(find-generic-password|find-internet-password|dump-keychain|export)\b/i, reason: 'reading the Keychain' },
   // Sending data off the machine (uploads/POSTs) — plain downloads stay auto (mirrors the
   // supervisor's network-send rule).
   {
@@ -74,6 +78,15 @@ const CONFIRM_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   // Disk / filesystem mutation utilities.
   { pattern: /\b(diskutil|dd|mkfs|fdisk)\b/, reason: 'disk operation' },
 ];
+
+/** One regex over config.secretStoreNames (+ the non-home stores this gate also guards):
+ *  each name matches with any path prefix — `~/.netrc`, `/Users/danny/.netrc`, or bare
+ *  `.netrc` after a `cd ~` — because requiring a `~`/absolute prefix is exactly the bypass
+ *  the tilde-only ~/.config/gh entry had. Over-matching confirms, the safe direction. */
+function secretStorePattern(): RegExp {
+  const escaped = secretStoreNames.map((n) => n.replace(/[.\\/]/g, (ch) => '\\' + ch));
+  return new RegExp(['\\.env\\b', 'Gumbo\\/(browser|logs)\\b', 'gumbo\\.db\\b', ...escaped.map((e) => e + '\\b')].join('|'), 'i');
+}
 
 /** A de-obfuscated SHADOW of a script, for the pattern gate ONLY. bash removes empty quote
  *  pairs, quotes, and backslash-escapes WITHIN a token before executing, so `cu''rl`, `.e""nv`,
