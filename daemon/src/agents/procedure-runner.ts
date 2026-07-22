@@ -268,6 +268,18 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
       if (!obs?.ok) return { kind: 'drift', reason: `navigation failed (${obs?.errorKind ?? 'no result'})` };
       return 'ok';
     }
+    // wait_for BLOCKS on an element appearing — it takes role+name, not a ref, and must
+    // NEVER resolve+click a target (omitting it from BROWSER_VERBS made it fall through to
+    // 'click', which then clicked the thing it was only meant to wait for). Snapshot first
+    // so findRef-based steps after it see fresh refs, but drive wait_for by role/name.
+    if (verb === 'wait_for') {
+      const obs = await invoke('browser_act', {
+        verb: 'wait_for', ref: null, value: null,
+        role: step.target?.role ?? null, name: step.target?.name ?? null, timeout_ms: 8000,
+      });
+      if (!obs?.ok) return { kind: 'drift', reason: `wait_for never matched (${obs?.errorKind ?? 'no result'})` };
+      return 'ok';
+    }
     const mapped = BROWSER_VERBS.has(verb) ? verb : 'click';
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snap = await invoke('browser_snapshot', {});

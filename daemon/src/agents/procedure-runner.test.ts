@@ -528,6 +528,28 @@ test('an ordinary replayed press (non-consequential label) does not confirm', as
   assert.equal(asked.length, 0, 'a benign label replays friction-free');
 });
 
+// Scan BUG (2026-07-22): a saved browser wait_for step used to fall through to a click.
+test('a browser wait_for step waits — it never resolves+clicks the target', async () => {
+  const browserActs: Array<Record<string, unknown>> = [];
+  const h = harness({
+    surface: {
+      act: async (input: Record<string, unknown>) => { browserActs.push(input); return { ok: true, output: '+ appeared' }; },
+      // A findRef that would resolve g1e1 — if wait_for wrongly resolved, this ref would be clicked.
+      findRef: () => 'g1e1',
+    },
+  });
+  const proc: Procedure = {
+    name: 'wait then act', goal: 'wait for the button', preconditions: [], apps: [],
+    steps: [{ lane: 'browser', desc: 'Wait for Continue', target: { role: 'button', name: 'Continue' }, verb: 'wait_for' }],
+  };
+  const result = await h.run(proc);
+  assert.equal(result.outcome, 'completed');
+  assert.equal(browserActs.length, 1);
+  assert.equal(browserActs[0].verb, 'wait_for', 'the act ran as wait_for, not click');
+  assert.equal(browserActs[0].ref, null, 'no ref was resolved');
+  assert.equal(browserActs[0].name, 'Continue', 'it waits by role+name');
+});
+
 test('fallbackBrief carries the LITERAL typed values + a verbatim-reproduction instruction (no improvising)', () => {
   const proc: Procedure = {
     name: 'packing list', goal: 'a checklist-style packing list', preconditions: [], apps: ['Notes'],
