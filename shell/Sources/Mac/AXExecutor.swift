@@ -283,6 +283,9 @@ final class AXExecutor {
     /// = replace). Anything else typing over a leftover selection would silently destroy it
     /// (the deleted-entry replay bug) — performType collapses the selection first instead.
     private var lastSelectedElement: AXUIElement?
+    /// The text performSelectText ACTUALLY selected — differs from the requested value when
+    /// the case-insensitive fallback matched (auto-capitalized documents); act() reports it.
+    private var selectedActualText: String?
 
     private func act(_ action: [String: Any]) -> AXResult {
         let verb = action["verb"] as? String ?? ""
@@ -382,9 +385,17 @@ final class AXExecutor {
             // Every rung names itself — a trace where "Selected" can mean three different
             // mechanisms cannot be debugged (a live ghost-selection hunt died on exactly
             // that ambiguity). "real click" is the only rung the app cannot disagree with.
+            // The ACTUAL selected text is reported when its casing differs from the request
+            // (auto-capitalized documents match case-insensitively — never silently).
+            let requested = action["value"] as? String ?? ""
+            let actual = selectedActualText ?? requested
+            selectedActualText = nil
+            let shown = actual == requested
+                ? "Selected \"\(truncate(requested))\""
+                : "Selected \"\(truncate(actual))\" (the document's casing differs from \"\(truncate(requested))\")"
             let body = selectHow == "ax-write"
-                ? "Selected \"\(truncate(action["value"] as? String ?? ""))\" via AX write only — the app may not track this selection for formatting; verify the next action's effect on the content."
-                : "Selected \"\(truncate(action["value"] as? String ?? ""))\" (\(selectHow))."
+                ? "\(shown) via AX write only — the app may not track this selection for formatting; verify the next action's effect on the content."
+                : "\(shown) (\(selectHow))."
             return AXResult(ok: true, output: body, errorKind: nil, health: nil, noChange: false, selectHow: selectHow)
         }
         // A chosen menu item's success signal is the MENU CLOSING — the pressed element is
@@ -627,7 +638,14 @@ final class AXExecutor {
             from = r.location + max(1, r.length)
         }
         if match.location == NSNotFound { match = ns.range(of: text) } // occurrence drifted → first match
+        // Case-insensitive fallback: apps auto-capitalize typed text ("milk" → "Milk"), which
+        // otherwise breaks every select a procedure compiled from the original casing (a live
+        // replay drifted on exactly this). The caller reports the real casing — never silent.
+        if match.location == NSNotFound {
+            match = ns.range(of: text, options: [.caseInsensitive])
+        }
         if match.location == NSNotFound { return ("select_text: \"\(truncate(text))\" not found in the field", "none") }
+        selectedActualText = ns.substring(with: match)
 
         let want = NSRange(location: match.location, length: match.length)
         let tookRange = { [weak self] in self?.selectedRange(element) == want }

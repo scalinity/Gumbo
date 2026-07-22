@@ -377,6 +377,25 @@ export function createMacTools(
     },
   });
 
+  // Observation-only like ax_snapshot/ax_query: no audit line, no observe() — it reads,
+  // never acts. The styled ranges come from the same channel the teach capture and the
+  // replay acceptance diff trust; for native-app styling it is DETERMINISTIC where
+  // screen_look only estimates (vision affirmed bold+highlight that were absent, live).
+  const readDocument = tool({
+    name: 'read_document',
+    description:
+      "Read the focused document/note of a native app: full TEXT plus its STYLED RANGES — bold, " +
+      'italic, underline, highlight colors, and list structure (dashed/bulleted/checklist), with ' +
+      'exact character offsets, straight from Accessibility. THE way to verify styling and ' +
+      'structure in a native app (Notes etc.): deterministic, never guessed — trust it over ' +
+      'screen_look for text styling. Pass the app name.',
+    parameters: z.object({ app: z.string().describe('App whose focused document to read, e.g. "Notes"') }),
+    async execute({ app }) {
+      const result = await macBridge.request({ kind: 'document_state', app }, { signal });
+      return present(result);
+    },
+  });
+
   const checkPermissions = tool({
     name: 'check_permissions',
     description:
@@ -412,5 +431,5 @@ export function createMacTools(
     },
   });
 
-  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, focusApp, screenOcr, screenLook, clickPoint, requestHandoff, preserveClipboard];
+  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, focusApp, screenOcr, screenLook, clickPoint, requestHandoff, preserveClipboard, readDocument];
 }
