@@ -35,7 +35,8 @@ const OK_BODY = {
   output: [
     { type: 'reasoning', summary: [], status: 'completed' },
     // The measured live shape (2026-07-22): X-side sub-searches are custom_tool_call
-    // items carrying name + input JSON; web-side ones are opaque web_search_call items.
+    // items carrying name + input JSON. Web-side web_search_call items are opaque (no
+    // query disclosed) and must NOT produce trace lines — noise, not transcript.
     { type: 'custom_tool_call', name: 'x_keyword_search', input: '{"query":"from:xai since:2026-07-21","limit":"10"}', status: 'completed' },
     { type: 'web_search_call', status: 'completed' },
     {
@@ -93,8 +94,9 @@ test('parses the trailing message answer + url_citations, deriving spoken-ready 
     { title: 'X post', url: 'https://x.com/xai/status/123' },
     { title: 'example.com', url: 'https://example.com/blog' },
   ]);
-  // Grok's own sub-searches surface as a transcript trace (query extracted from input JSON).
-  assert.deepEqual(lookup.trace, ["x_keyword_search: from:xai since:2026-07-21", "web_search (query not disclosed by xAI)"]);
+  // Grok's own sub-searches surface as a transcript trace (query extracted from input
+  // JSON); the opaque web_search_call in the fixture yields NO line.
+  assert.deepEqual(lookup.trace, ['x_keyword_search: from:xai since:2026-07-21']);
 });
 
 test('strips inline [[n]](url) citation markers mid-sentence and tidies whitespace', async () => {

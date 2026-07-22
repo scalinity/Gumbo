@@ -170,21 +170,19 @@ export async function grokLiveSearch(
     const sources = parseCitations(parts);
     // Grok's OWN sub-searches ride output[] as custom_tool_call items (measured live —
     // the docs don't describe them). Surfaced so a background task's transcript can show
-    // what the Grok channel actually searched, not just its synthesized answer. X-side
-    // searches carry their full query; web-side ones arrive as web_search_call items
-    // whose query xAI does not disclose — counted, never silently dropped.
+    // what the Grok channel actually searched, not just its synthesized answer. Only the
+    // X-side searches carry query text; web-side web_search_call items are opaque (xAI
+    // does not disclose their queries) and are deliberately left out — a "searched
+    // something, can't say what" line is noise, not transcript.
     const trace: string[] = [];
     for (const o of raw.output ?? []) {
-      if (o.type === 'custom_tool_call') {
-        let detail = o.input ?? '';
-        try {
-          const parsed = JSON.parse(o.input ?? '{}') as { query?: unknown };
-          if (typeof parsed.query === 'string' && parsed.query) detail = parsed.query;
-        } catch { /* unparseable input renders raw */ }
-        trace.push(`${o.name ?? 'search'}: ${detail}`.slice(0, 200));
-      } else if (o.type === 'web_search_call') {
-        trace.push('web_search (query not disclosed by xAI)');
-      }
+      if (o.type !== 'custom_tool_call') continue;
+      let detail = o.input ?? '';
+      try {
+        const parsed = JSON.parse(o.input ?? '{}') as { query?: unknown };
+        if (typeof parsed.query === 'string' && parsed.query) detail = parsed.query;
+      } catch { /* unparseable input renders raw */ }
+      trace.push(`${o.name ?? 'search'}: ${detail}`.slice(0, 200));
     }
     auditSearchCall({ provider: 'grok', endpoint: '/responses', query, resultCount: sources.length, ok: true });
     return { answer, sources, trace };
