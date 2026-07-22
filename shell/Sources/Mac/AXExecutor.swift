@@ -89,7 +89,11 @@ final class AXExecutor {
                     identifier: action["identifier"] as? String
                 ).wire()
             case "document_state":
-                return documentState(app: action["app"] as? String).wire()
+                return documentState(
+                    app: action["app"] as? String,
+                    identifier: action["identifier"] as? String,
+                    role: action["role"] as? String
+                ).wire()
             default: return AXResult.failure("out_of_scope", "Unknown action kind \"\(kind)\".").wire()
             }
         }
@@ -188,13 +192,17 @@ final class AXExecutor {
         // is blue" against a plain snapshot always fails and drops a CORRECT replay into
         // the fallback (which then "fixes" it). Append the focused selection's style
         // (AXAttributedStringForRange → AXStyleName) so observations can see formatting.
+        // Read the TARGET APP's focused element, never the system-wide one — a snapshot
+        // of app X must not leak whatever text happens to be selected in app Y.
         var focusedRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(AXUIElement.systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-           let fEl = focusedRef.map({ $0 as! AXUIElement }), !isSecureField(fEl),
-           let sel = selectedRange(fEl), sel.length > 0 {
-            let text = truncate(stringAttr(fEl, kAXSelectedTextAttribute) ?? "", 40)
-            let style = selectionStyle(fEl)
-            output += "\n(selected right now: \"\(text)\"\(style.map { " — style: \($0)" } ?? ""))"
+        if AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+           let fRaw = focusedRef, CFGetTypeID(fRaw) == AXUIElementGetTypeID() {
+            let fEl = fRaw as! AXUIElement
+            if !isSecureField(fEl), let sel = selectedRange(fEl), sel.length > 0 {
+                let text = truncate(stringAttr(fEl, kAXSelectedTextAttribute) ?? "", 40)
+                let style = selectionStyle(fEl)
+                output += "\n(selected right now: \"\(text)\"\(style.map { " — style: \($0)" } ?? ""))"
+            }
         }
         return AXResult(ok: true, output: output, errorKind: nil, health: nil)
     }
@@ -257,6 +265,14 @@ final class AXExecutor {
 
     // MARK: act — dispatch ladder + settle + before/after diff
 
+    /// Keyboard-built selections are linear in length (one shift+right per character on
+    /// the serial AX queue, ~20 ms each) — beyond this bound the queue-hold outweighs the
+    /// event-real benefit and the pure AX range write takes over.
+    private let keyboardSelectionMaxChars = 120
+    /// documentState walks a whole window tree at teach-stop — capped so a browser-sized
+    /// tree cannot hold the serial queue past the daemon's RPC budget.
+    private let documentScanNodeCap = 2500
+
     /// Set by a successful select_text, cleared by every other act (and key): the ONE case
     /// where an active selection is the intended operand of the next type (select-then-type
     /// = replace). Anything else typing over a leftover selection would silently destroy it
@@ -270,6 +286,7 @@ final class AXExecutor {
         // wait_for matches on role+name against fresh reads, not a ref — it exists for slow
         // transitions where the target didn't exist at snapshot time.
         if verb == "wait_for" {
+            lastSelectedElement = nil // an intervening act (even an observing wait) ends the select-then-type replace intent
             return waitFor(role: action["role"] as? String, name: action["name"] as? String, timeoutMs: timeoutMs)
         }
 
@@ -312,8 +329,10 @@ final class AXExecutor {
         }
         let pid = pidOf(element)
         let before = describe(element)
-        // Read BEFORE acting: a chosen menu item vanishes with its menu.
-        let inMenuName = (verb == "press" && insideOpenMenu(element))
+        // One ancestor walk, shared by the in-menu success report and performPress's
+        // escalation decision. Read BEFORE acting: a chosen menu item vanishes with its menu.
+        let inOpenMenu = (verb == "press" || verb == "show_menu") && insideOpenMenu(element)
+        let inMenuName = (verb == "press" && inOpenMenu)
             ? (stringAttr(element, kAXTitleAttribute) ?? stringAttr(element, kAXDescriptionAttribute) ?? "the item")
             : nil
 
@@ -322,7 +341,7 @@ final class AXExecutor {
 
         var actErr: String?
         switch verb {
-        case "press": actErr = performPress(element, pid: pid)
+        case "press": actErr = performPress(element, pid: pid, inOpenMenu: inOpenMenu)
         case "focus": actErr = performFocus(element)
         case "set_value": actErr = performSetValue(element, value: action["value"] as? String ?? "")
         case "type":
@@ -333,23 +352,7 @@ final class AXExecutor {
             actErr = performSelectText(element, text: action["value"] as? String ?? "", occurrence: action["occurrence"] as? Int ?? 0)
             if actErr == nil { lastSelectedElement = element }
         case "replace_text":
-            // Surgical text replacement: writes the CURRENT selection's text directly via
-            // AXSelectedText — zero keystrokes, so auto-capitalize/auto-format cannot alter
-            // it (typing "test" over a selection can land as "Test"; this cannot).
-            guard let sel = selectedRange(element), sel.length > 0 else {
-                return AXResult.failure("element_not_found", "replace_text needs an active selection — select_text the target first.")
-            }
-            var settable: DarwinBoolean = false
-            AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
-            guard settable.boolValue else {
-                return AXResult.failure("ax_unavailable", "this field does not support direct text replacement.")
-            }
-            let replacement = action["value"] as? String ?? ""
-            let err = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, replacement as CFString)
-            guard err == .success else {
-                return AXResult.failure("ax_unavailable", "replace_text failed (AX error \(err.rawValue)).")
-            }
-            return AXResult(ok: true, output: "Replaced the selection with \"\(truncate(replacement))\".", errorKind: nil, health: nil, noChange: false)
+            return performReplaceText(element, replacement: action["value"] as? String ?? "")
         default: return AXResult.failure("out_of_scope", "Unknown verb \"\(verb)\".")
         }
         if let actErr {
@@ -442,11 +445,20 @@ final class AXExecutor {
     /// GLOBAL HID click at their live frame — the same event path as click_point, tagged
     /// synthetic so the kill-switch ignores it, sanctioned during tasks by the same
     /// bracket. The frame is read fresh from the AX tree at act time, never recorded.
-    private func performPress(_ element: AXUIElement, pid: pid_t) -> String? {
+    private func performPress(_ element: AXUIElement, pid: pid_t, inOpenMenu: Bool = false) -> String? {
         let phantomDisabled = boolAttr(element, kAXEnabledAttribute) == false
-        if phantomDisabled || insideOpenMenu(element) {
+        if phantomDisabled || inOpenMenu {
             guard let center = frameCenter(element) else {
                 return "the control needs a real click but exposes no frame"
+            }
+            // Occlusion gate: a global click lands on whatever is TOPMOST at the point —
+            // a notification banner or another app's window over the target would receive
+            // it. Fire only when the hit-test at the point resolves back into the SAME
+            // app; a hit-test ERROR is not proof of occlusion, so it does not block.
+            var hitRef: AXUIElement?
+            let hitErr = AXUIElementCopyElementAtPosition(AXUIElement.systemWide, Float(center.x), Float(center.y), &hitRef)
+            if hitErr == .success, let hit = hitRef, pidOf(hit) != pid {
+                return "the control is covered by another surface at its position — refusing to click blind (bring the app frontmost, or dismiss whatever is over it)"
             }
             SyntheticInput.click(at: center, pid: nil) // nil pid = global HID — the only path these controls hear
             return nil
@@ -480,6 +492,25 @@ final class AXExecutor {
     private func performFocus(_ element: AXUIElement) -> String? {
         let err = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         return err == .success ? nil : "AXFocused set error \(err.rawValue)"
+    }
+
+    /// Surgical text replacement: writes the CURRENT selection's text directly via
+    /// AXSelectedText — zero keystrokes, so auto-capitalize/auto-format cannot alter it
+    /// (typing "test" over a selection can land as "Test"; this cannot).
+    private func performReplaceText(_ element: AXUIElement, replacement: String) -> AXResult {
+        guard let sel = selectedRange(element), sel.length > 0 else {
+            return AXResult.failure("element_not_found", "replace_text needs an active selection — select_text the target first.")
+        }
+        var settable: DarwinBoolean = false
+        AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
+        guard settable.boolValue else {
+            return AXResult.failure("ax_unavailable", "this field does not support direct text replacement.")
+        }
+        let err = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, replacement as CFString)
+        guard err == .success else {
+            return AXResult.failure("ax_unavailable", "replace_text failed (AX error \(err.rawValue)).")
+        }
+        return AXResult(ok: true, output: "Replaced the selection with \"\(truncate(replacement))\".", errorKind: nil, health: nil, noChange: false)
     }
 
     /// Try the direct AXValue write first (fast, fires no key events); check settable first.
@@ -524,7 +555,7 @@ final class AXExecutor {
         let pid = pidOf(element)
         _ = performFocus(element)
         let charCount = ns.substring(with: match).count
-        if charCount <= 120 {
+        if charCount <= keyboardSelectionMaxChars {
             var caret = CFRange(location: match.location, length: 0)
             if let axCaret = AXValueCreate(.cfRange, &caret),
                AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axCaret) == .success {
@@ -948,34 +979,49 @@ final class AXExecutor {
     /// teach-stop so the compiler builds CONTENT from the observed RESULT — corrections,
     /// undos, and caret wandering during the demonstration are already reflected in the
     /// final text, which keystroke archaeology can never reliably reconstruct.
-    private func documentState(app requestedApp: String?) -> AXResult {
+    private func documentState(app requestedApp: String?, identifier: String? = nil, role targetRole: String? = nil) -> AXResult {
         guard let target = resolveApp(requestedApp) else {
             return AXResult.failure("element_not_found", requestedApp.map { "No running app matches \"\($0)\"." } ?? "No frontmost application.")
         }
         let appElement = AXUIElement.application(target.pid)
         appElement.setMessagingTimeout(messagingTimeout)
         let root = focusedWindow(of: appElement) ?? appElement
-        // Dominant document = the LARGEST text area by frame (sidebars/search fields are small).
+        // Prefer the DEMONSTRATED field (identifier from the last recorded text step) —
+        // the capture's scope should match what the user actually typed in, never widen to
+        // whatever text area happens to be biggest. Largest-area is the fallback only.
+        // The walk is node-capped: a browser-sized tree must not hold the serial AX queue
+        // past the daemon's RPC budget.
         var best: (el: AXUIElement, area: CGFloat)?
+        var demonstrated: AXUIElement?
+        var visited = 0
+        let wantId = (identifier ?? "").trimmingCharacters(in: .whitespaces)
         func scan(_ el: AXUIElement, depth: Int) {
-            if depth > 30 { return }
-            if stringAttr(el, kAXRoleAttribute) == "AXTextArea", !isSecureField(el) {
-                var pos = CGPoint.zero
-                var size = CGSize.zero
-                var pv: CFTypeRef?
-                var sv: CFTypeRef?
-                if AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pv) == .success, let p = pv,
-                   AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sv) == .success, let s = sv {
-                    AXValueGetValue(p as! AXValue, .cgPoint, &pos)
-                    AXValueGetValue(s as! AXValue, .cgSize, &size)
+            if depth > 30 || visited >= documentScanNodeCap || demonstrated != nil { return }
+            visited += 1
+            let role = stringAttr(el, kAXRoleAttribute)
+            if role == "AXTextArea" || role == "AXTextField", !isSecureField(el) {
+                if !wantId.isEmpty, stringAttr(el, kAXIdentifierAttribute) == wantId {
+                    demonstrated = el
+                    return
                 }
-                let area = size.width * size.height
-                if area > (best?.area ?? 0) { best = (el, area) }
+                if role == "AXTextArea" {
+                    var pos = CGPoint.zero
+                    var size = CGSize.zero
+                    var pv: CFTypeRef?
+                    var sv: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pv) == .success, let p = pv,
+                       AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sv) == .success, let s = sv {
+                        AXValueGetValue(p as! AXValue, .cgPoint, &pos)
+                        AXValueGetValue(s as! AXValue, .cgSize, &size)
+                    }
+                    let area = size.width * size.height
+                    if area > (best?.area ?? 0) { best = (el, area) }
+                }
             }
             for c in axChildren(el) { scan(c, depth: depth + 1) }
         }
         scan(root, depth: 0)
-        guard let doc = best?.el else {
+        guard let doc = demonstrated ?? best?.el else {
             return AXResult.failure("element_not_found", "no text document found in \(target.name).")
         }
         guard let full = stringAttr(doc, kAXValueAttribute), !full.isEmpty else {

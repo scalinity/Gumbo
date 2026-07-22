@@ -118,6 +118,13 @@ final class Recorder {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             flushBurst()
             dragging = false
+            // Capture any PENDING selection BEFORE emitting this click: AX can publish a
+            // double-click's selection late, in which case it is first observable at the
+            // NEXT mousedown — capturing after emitClick would then record the steps in
+            // inverted order ([click Format][select]) and mislead the compiler's
+            // drop-the-gesture rule. The selection always predates this click; dedup
+            // makes the call a no-op when nothing new is selected.
+            captureSelectionIfAny()
             emitClick(executor.hitTest(at: raw.location), raw)
             captureSelectionIfAny() // a double/triple-click that highlighted a word/line
         case .leftMouseDragged, .rightMouseDragged:
@@ -151,6 +158,10 @@ final class Recorder {
         // Command/control chords are discrete actions (⌘S, ⌃⇥) — never burst text.
         if raw.flags.contains(.maskCommand) || raw.flags.contains(.maskControl) {
             flushBurst()
+            // A selection made just before a chord (double-click word → ⌘B) has no
+            // intervening mouse event to capture it — grab it here so the chord's operand
+            // is recorded before the chord itself.
+            captureSelectionIfAny()
             emit(["kind": "key", "app": frontAppName(), "value": chordLabel(raw)])
             return
         }
