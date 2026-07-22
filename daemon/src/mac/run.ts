@@ -1,16 +1,22 @@
 import { execFile } from 'node:child_process';
-import { config, secretEnvKeys } from '../config.ts';
+import { config } from '../config.ts';
 import { auditMacAction } from './audit.ts';
 import { gateScript, describeMacDo } from './policy.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
-/** The daemon's provider keys must NEVER reach a spawned subprocess (config.ts). mac_do is
- *  the model-authored bash sink, so it strips them exactly like claude-runner's
- *  subprocessEnv() — otherwise `mac_do("printenv OPENAI_API_KEY")` would echo a key back
- *  into the realtime context. */
-function strippedEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of secretEnvKeys) delete env[key];
+/** No daemon-held secret may reach a spawned subprocess (config.ts). mac_do is the
+ *  model-authored bash sink, so it gets a minimal ALLOWLISTED environment rather than a
+ *  denylist strip — a denylist only covers the keys it names, and `mac_do("printenv")`
+ *  would echo every unlisted credential (GITHUB_TOKEN, AWS_*, …) back into the realtime
+ *  context. The child is a login shell (-lc), so the user's profile re-creates its own
+ *  PATH/exports anyway; only the bootstrap vars are passed through. */
+const ENV_ALLOWLIST = ['HOME', 'PATH', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'TERM'];
+/** Exported for offline unit tests. */
+export function minimalEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of Object.keys(process.env)) {
+    if (ENV_ALLOWLIST.includes(key) || key === 'LANG' || key.startsWith('LC_')) env[key] = process.env[key];
+  }
   return env;
 }
 
@@ -28,7 +34,7 @@ interface BashResult {
  *  is waiting, and a hung child must never wedge it. Injectable so tests don't shell out. */
 function runBashDaemonSide(script: string, timeoutMs: number): Promise<BashResult> {
   return new Promise((resolvePromise) => {
-    execFile('/bin/bash', ['-lc', script], { timeout: timeoutMs, maxBuffer: config.mac.outputMaxChars, env: strippedEnv() }, (err, stdout, stderr) => {
+    execFile('/bin/bash', ['-lc', script], { timeout: timeoutMs, maxBuffer: config.mac.outputMaxChars, env: minimalEnv() }, (err, stdout, stderr) => {
       const output = (String(stdout ?? '') + String(stderr ?? '')).trim();
       if (err) {
         const code = (err as NodeJS.ErrnoException).code;

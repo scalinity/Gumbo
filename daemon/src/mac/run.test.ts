@@ -141,10 +141,10 @@ test('a failed execution surfaces the typed error and audits ok=false', async ()
   assert.equal(lastAudit().error, 'script_error');
 });
 
-test('the REAL bash lane strips provider secrets from the child env but keeps other vars (review 🔴)', async () => {
-  // No runBash override → exercises runBashDaemonSide's actual execFile + strippedEnv().
+test('the REAL bash lane passes only the allowlisted env — unlisted secrets are gone (scan HIGH)', async () => {
+  // No runBash override → exercises runBashDaemonSide's actual execFile + minimalEnv().
   process.env.OPENAI_API_KEY = 'sk-secret-should-not-leak';
-  process.env.MAC_TEST_SENTINEL = 'kept';
+  process.env.GITHUB_TOKEN = 'ghp-unlisted-secret'; // NOT in secretEnvKeys — the allowlist must drop it anyway
   try {
     const secret = await executeMacDo('printenv OPENAI_API_KEY || echo STRIPPED', 'bash', {
       macBridge: fakeBridge() as never,
@@ -152,14 +152,33 @@ test('the REAL bash lane strips provider secrets from the child env but keeps ot
     });
     assert.match(secret, /STRIPPED/, 'the provider key must not be visible to the child');
     assert.doesNotMatch(secret, /sk-secret-should-not-leak/, 'the key value must never appear in output');
-    const kept = await executeMacDo('printenv MAC_TEST_SENTINEL', 'bash', {
+    const unlisted = await executeMacDo('printenv GITHUB_TOKEN || echo GONE', 'bash', {
       macBridge: fakeBridge() as never,
       confirm: async () => false,
     });
-    assert.match(kept, /kept/, 'non-secret env is preserved (env is stripped, not wiped)');
+    assert.match(unlisted, /GONE/, 'a secret the denylist never named is dropped by the allowlist');
+    assert.doesNotMatch(unlisted, /ghp-unlisted-secret/);
+    const home = await executeMacDo('printenv HOME', 'bash', {
+      macBridge: fakeBridge() as never,
+      confirm: async () => false,
+    });
+    assert.match(home, /\//, 'bootstrap vars like HOME still reach the child');
   } finally {
     delete process.env.OPENAI_API_KEY;
-    delete process.env.MAC_TEST_SENTINEL;
+    delete process.env.GITHUB_TOKEN;
+  }
+});
+
+test('minimalEnv: allowlist + locale only — nothing else survives', async () => {
+  const { minimalEnv } = await import('./run.ts');
+  process.env.SOME_RANDOM_TOKEN = 'x';
+  try {
+    const env = minimalEnv();
+    assert.equal(env.SOME_RANDOM_TOKEN, undefined);
+    assert.equal(env.HOME, process.env.HOME);
+    assert.equal(env.PATH, process.env.PATH);
+  } finally {
+    delete process.env.SOME_RANDOM_TOKEN;
   }
 });
 
