@@ -5,7 +5,8 @@
 // minutes. Scope is ~/Gumbo documents only (isEditableFile); repo/code edits still go
 // through spawn_claude_session. Every well-formed request terminates in EXACTLY ONE of
 // file.edited | file.edit_failed, so the viewer's busy state always has an exit.
-import { copyFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { constants, copyFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { Agent, run } from '@openai/agents';
 import { config } from '../config.ts';
 import { echoForInstructions } from '../audio/announce.ts';
@@ -104,13 +105,28 @@ export async function runFileEdit(opts: {
   // catch a valid-but-SHORTER rewrite (a real failure mode for long docs), and ~/Gumbo has
   // no git/versioning like the image path's new-file-per-edit, so a .bak is the only
   // recovery (review 🟡).
+  //
+  // Link-safety (scan HIGH, CWE-59/CWE-367): both the backup and the write used to follow
+  // links by pathname. copyFileSync onto `<file>.bak` would follow a pre-planted .bak
+  // symlink and clobber e.g. ~/.zshrc; writeFileSync truncates in place, so a hard-linked
+  // editable file (or a swap after the realpath check) hit aliases outside ~/Gumbo. So:
+  //   - backup: unlink any existing `.bak` (removes the LINK, never its target), then copy
+  //     with COPYFILE_EXCL — O_EXCL creation that fails (not follows) if a link races back in;
+  //   - write: emit to a fresh temp file in the validated parent dir with wx (exclusive,
+  //     no-follow), then renameSync over the target. rename replaces the directory entry
+  //     atomically — it breaks a hardlink (new inode) and never writes THROUGH a symlink.
+  const bakPath = `${writeTo}.bak`;
+  const tmpPath = join(dirname(writeTo), `.${basename(writeTo)}.tmp-${process.pid}-${Date.now()}`);
   try {
-    copyFileSync(writeTo, `${writeTo}.bak`);
-    writeFileSync(writeTo, edited);
+    rmSync(bakPath, { force: true }); // unlinks a stale/planted .bak link itself, not its target
+    copyFileSync(writeTo, bakPath, constants.COPYFILE_EXCL);
+    writeFileSync(tmpPath, edited, { flag: 'wx', mode: 0o600 });
+    renameSync(tmpPath, writeTo);
   } catch (err) {
+    try { rmSync(tmpPath, { force: true }); } catch { /* best-effort temp cleanup */ }
     return fail(`could not write the document: ${String(err)}`, read.path);
   }
-  store.addEvent(null, 'file.edited', { path: read.path, prompt, backup: `${writeTo}.bak` });
+  store.addEvent(null, 'file.edited', { path: read.path, prompt, backup: bakPath });
 
   // The write LANDED — present + announce are best-effort and must NOT be able to
   // re-emit file.edit_failed (the exactly-once invariant). They ran inside the write try

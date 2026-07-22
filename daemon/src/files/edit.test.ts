@@ -68,6 +68,39 @@ test('runFileEdit symlink escape: a link under ~/Gumbo pointing outside is refus
   assert.ok(!h.types().includes('file.edited'), 'nothing was edited');
 });
 
+// Scan HIGH (2026-07-22): a pre-planted `<file>.bak` symlink used to be followed by the
+// backup copy, clobbering an arbitrary same-user file with the old document content.
+test('runFileEdit .bak symlink escape: a planted backup link never clobbers its target', async () => {
+  const h = harness();
+  const outside = mkdtempSync(join(tmpdir(), 'gumbo-bak-outside-'));
+  const secret = join(outside, 'zshrc');
+  writeFileSync(secret, 'ORIGINAL SECRET');
+  const path = docUnderHome('bakdoc.md', '# Original\n\nbody');
+  // Plant the malicious .bak link BEFORE the edit.
+  symlinkSync(secret, `${path}.bak`);
+  await runFileEdit({ path, prompt: 'tweak it', store: h.store, present: h.present, announce: h.announce, editFn: async () => '# Edited' });
+  assert.equal(readFileSync(secret, 'utf8'), 'ORIGINAL SECRET', 'the .bak symlink target must NOT be written through');
+  assert.equal(readFileSync(path, 'utf8'), '# Edited', 'the real edit still landed');
+  // The .bak is now a real regular file holding the prior content, not a link.
+  assert.equal(readFileSync(`${path}.bak`, 'utf8'), '# Original\n\nbody');
+});
+
+// A hard link to an outside file must not be truncated-in-place by the write.
+test('runFileEdit breaks a hardlink instead of writing through it (atomic rename)', async () => {
+  const h = harness();
+  const outside = mkdtempSync(join(tmpdir(), 'gumbo-hard-outside-'));
+  const target = join(outside, 'important.txt');
+  writeFileSync(target, 'OUTSIDE CONTENT');
+  const path = docUnderHome('harddoc.md', 'placeholder');
+  // Replace the doc with a HARD link to the outside file (same inode).
+  const { linkSync, rmSync } = await import('node:fs');
+  rmSync(path);
+  linkSync(target, path);
+  await runFileEdit({ path, prompt: 'x', store: h.store, present: h.present, announce: h.announce, editFn: async () => 'NEW BODY' });
+  assert.equal(readFileSync(target, 'utf8'), 'OUTSIDE CONTENT', 'the hard-linked outside file must be untouched');
+  assert.equal(readFileSync(path, 'utf8'), 'NEW BODY', 'the workspace path got the new content on a fresh inode');
+});
+
 test('runFileEdit non-editable path (outside ~/Gumbo) refused before any model call', async () => {
   const h = harness();
   const outside = mkdtempSync(join(tmpdir(), 'gumbo-repo-'));
