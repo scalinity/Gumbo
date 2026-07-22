@@ -2762,3 +2762,22 @@ places the fixes had looked, and both lessons generalize:
 - Tooling gotcha that cost a false alarm: Xcode debug builds are a 59 KB loader stub + the
   real code in Contents/MacOS/Gumbo.debug.dylib, and BSD strings/grep miss Swift literals in
   Mach-O sections — verify build freshness by byte-searching the debug dylib.
+
+### M8 close-out — all four live-demo gates passed (2026-07-22)
+
+- Gates verified live: watch-me teach → deterministic replay (typed and styled-paste variants,
+  acceptance diff green with zero divergences on the paste run); secret redaction (credential
+  entry recorded content-free, compiled to handoff steps, both handoffs re-fired and resumed on
+  replay); save-from-run (recency + ambiguity guards, source task named in the confirmation);
+  scheduled routines (first-Monday recurrence parse, near-now unattended fire with completion
+  announce, series cancel).
+- The demo-driven hardening arcs are documented in the dated 2026-07-22 entries above: real-input
+  selections with mechanism reporting, acceptance-diff completeness + post-fallback re-verify,
+  completion-state recognition, Format-popover styling, compiler mechanism fidelity,
+  case-insensitive selection fallback, read_document verification, sub-agent request timeouts,
+  required task_type routing, and the deep-research lane.
+- All branch commit messages were rewritten pre-merge into the impersonal technical voice
+  (message-only filter-branch passes; every tree verified unchanged).
+- Known post-merge operational note: debug rebuilds of the shell drop the Apple-events
+  (Automation) TCC grant — re-grant per app after a rebuild; a stable code-signing identity is
+  the durable fix and belongs to post-M8 work.
