@@ -275,9 +275,19 @@ function sandboxWrappedSpawn(profile: string): (opts: SpawnOptions) => SpawnedPr
 // Least privilege: hand the Claude subprocess the environment it needs (HOME/PATH/USER for
 // the keychain login lookup, TMPDIR, locale, …) MINUS every daemon-held provider secret —
 // the session needs none of them, and 'auto' mode auto-runs safe bash that could read them.
-function subprocessEnv(): Record<string, string | undefined> {
+// Beyond the named provider keys, any variable whose NAME looks credential-shaped is
+// stripped too (scan MEDIUM: a GH_TOKEN/AWS_SECRET_ACCESS_KEY inherited from the daemon's
+// launch environment would survive a fixed denylist and be one `printenv` away from the
+// transcript). The CLI's own needs (HOME, PATH, USER, proxy vars) never match this shape.
+const SECRET_ENV_NAME = /TOKEN|SECRET|PASSW|CREDENTIAL|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|_AUTH\b|^AUTH_|^DATABASE_URL$/i;
+
+/** Exported for offline unit tests. */
+export function subprocessEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
   for (const key of secretEnvKeys) delete env[key];
+  for (const key of Object.keys(env)) {
+    if (SECRET_ENV_NAME.test(key)) delete env[key];
+  }
   return env;
 }
 

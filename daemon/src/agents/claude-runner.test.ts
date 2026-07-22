@@ -68,6 +68,29 @@ test('handlePlan prefers inline plan text, falls back to the captured plan-file 
   assert.deepEqual(recorded, surfaced, 'the claude.plan event records what was surfaced');
 });
 
+test('subprocessEnv strips provider keys AND credential-shaped names, keeps runtime vars (scan MEDIUM)', async () => {
+  const { subprocessEnv } = await import('./claude-runner.ts');
+  process.env.OPENAI_API_KEY = 'sk-listed';
+  process.env.GH_TOKEN = 'ghp-unlisted';
+  process.env.AWS_SECRET_ACCESS_KEY = 'aws-unlisted';
+  process.env.MY_APP_PASSWORD = 'pw';
+  process.env.DATABASE_URL = 'postgres://u:pw@host/db';
+  process.env.HARMLESS_FLAG = 'on';
+  try {
+    const env = subprocessEnv();
+    assert.equal(env.OPENAI_API_KEY, undefined, 'named provider key stripped');
+    assert.equal(env.GH_TOKEN, undefined, 'TOKEN-shaped name stripped');
+    assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined, 'SECRET-shaped name stripped');
+    assert.equal(env.MY_APP_PASSWORD, undefined, 'PASSW-shaped name stripped');
+    assert.equal(env.DATABASE_URL, undefined, 'inline-credential URL stripped');
+    assert.equal(env.HARMLESS_FLAG, 'on', 'non-credential vars survive');
+    assert.equal(env.HOME, process.env.HOME, 'runtime vars the CLI needs survive');
+    assert.equal(env.PATH, process.env.PATH);
+  } finally {
+    for (const k of ['OPENAI_API_KEY', 'GH_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'MY_APP_PASSWORD', 'DATABASE_URL', 'HARMLESS_FLAG']) delete process.env[k];
+  }
+});
+
 test('buildSandboxProfile: confines writes to cwd + workspace, denies secret reads', () => {
   const taskId = 'profile-task';
   const workspace = join(config.home.tasks, taskId);
