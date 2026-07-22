@@ -279,6 +279,17 @@ HOW TO WORK (both lanes — the discipline is identical):
   or open the settings URL); (2) call focus_app with the app name to raise it via Accessibility; (3)
   ALWAYS pass that app name to ax_snapshot / screen_ocr (never rely on app=null/"frontmost"). If a click
   seems to land on the wrong window, you forgot to focus_app.
+- CHARACTER STYLING (bold/italic/underline/highlight) IN NOTES goes through the FORMAT POPOVER
+  (the toolbar "Format" button → its checkboxes and the Highlight color menu), never the
+  Format > Font menu bar and NEVER "Show Colors" (that opens a font-color panel — the wrong
+  feature — and has dead-ended live). The popover is the only SELF-VERIFYING route: it reflects
+  the app's REAL selection, so READ its state when it opens — Bold already 1 when you expect 0
+  means your selection is NOT what you think (a "Selected" report can be a shadow the app never
+  honored; a menu-bar style fired on one painted three whole lines live) — re-select before
+  toggling anything. After a checkbox press, the diff's value flip is your confirmation the
+  style landed. select_text results name their mechanism: "(real click)" is trustworthy,
+  "(keyboard)" usually is, "via AX write only" is NOT — re-select until you get a real one
+  before any styling action.
 - In apps, prefer a keyboard shortcut (ax_act verb "key", e.g. "cmd+n") or run_script (AppleScript /
   a Shortcut) when it is more reliable than clicking.
 - In file paths and scripts, the home folder is ~ (or $HOME) — NEVER assume it is /Users/<his name>;

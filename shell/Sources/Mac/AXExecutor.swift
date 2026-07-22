@@ -379,9 +379,12 @@ final class AXExecutor {
         // format actions may not track — say so, so neither the engine nor the model trusts
         // it blindly before a formatting action.
         if verb == "select_text" {
+            // Every rung names itself — a trace where "Selected" can mean three different
+            // mechanisms cannot be debugged (a live ghost-selection hunt died on exactly
+            // that ambiguity). "real click" is the only rung the app cannot disagree with.
             let body = selectHow == "ax-write"
                 ? "Selected \"\(truncate(action["value"] as? String ?? ""))\" via AX write only — the app may not track this selection for formatting; verify the next action's effect on the content."
-                : "Selected \"\(truncate(action["value"] as? String ?? ""))\"."
+                : "Selected \"\(truncate(action["value"] as? String ?? ""))\" (\(selectHow))."
             return AXResult(ok: true, output: body, errorKind: nil, health: nil, noChange: false, selectHow: selectHow)
         }
         // A chosen menu item's success signal is the MENU CLOSING — the pressed element is
