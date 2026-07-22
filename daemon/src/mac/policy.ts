@@ -359,10 +359,12 @@ const SUBMIT_NAME = /\b(send|submit|buy|purchase|pay|order|checkout|post|publish
 /** Normalize an accessible name before the lexicon test: NFKC folds fullwidth/compatibility
  *  forms, and stripping zero-width + collapsing whitespace defeats `S​e​n​d`-style padding
  *  evasion (review 🟡). NOTE the residual, honestly: this does NOT fold cross-script
- *  homoglyphs (Cyrillic "Ѕend"), and it cannot see a consequential JS `onclick` on an
- *  innocuously-named control OUTSIDE a <form> — those are the documented ceiling of a
- *  name/form heuristic. The mitigations are the untrusted-screen-text rule in the loop
- *  instructions and that the model has no incentive to disguise its own actions. */
+ *  homoglyphs (Cyrillic "Ѕend"), and while the scripted-control signals below catch
+ *  attribute-level JS (javascript: hrefs, formaction, inline onclick), a handler attached
+ *  via addEventListener is invisible to ANY deterministic DOM read — that remains the
+ *  documented ceiling of the heuristic. The mitigations are the untrusted-screen-text rule
+ *  in the loop instructions and that the model has no incentive to disguise its own
+ *  actions. */
 function normalizeName(name: string): string {
   return name
     .normalize('NFKC')
@@ -382,11 +384,19 @@ export function browserActDecision(act: {
   name?: string | null;
   formMethod?: string | null;
   chord?: string | null;
+  /** Deterministic script-side-effect signal from BrowserClient.scriptedControl (a short
+   *  reason like "a javascript: link"), null/absent for a plain control. */
+  scripted?: string | null;
 }): MacPolicyResult {
   const method = (act.formMethod ?? '').toLowerCase();
   if (act.verb === 'click') {
     if (act.name && SUBMIT_NAME.test(normalizeName(act.name))) {
       return { route: 'confirm', reason: `clicking "${act.name}"` };
+    }
+    // An innocuously named control carrying attribute-level JS can send/purchase/delete
+    // from script (scan HIGH) — the name told us nothing, the attributes do.
+    if (act.scripted) {
+      return { route: 'confirm', reason: `clicking ${act.scripted}${act.name ? ` ("${act.name}")` : ''}` };
     }
     if (method === 'post' && act.role === 'button') {
       return { route: 'confirm', reason: 'submitting a form' };

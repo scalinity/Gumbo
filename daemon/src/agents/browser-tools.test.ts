@@ -36,6 +36,7 @@ function fakeSurface(overrides: Partial<BrowserSurface> & { actResult?: BrowserR
     switchTab: overrides.switchTab ?? (async () => ({ ok: true, output: '(snapshot)' })),
     refInfo: overrides.refInfo ?? (() => ({ role: 'button', name: 'Go' })),
     formMethod: overrides.formMethod ?? (async () => null),
+    scriptedControl: overrides.scriptedControl ?? (async () => null),
     currentUrl: overrides.currentUrl ?? (() => 'https://ok.test/page'),
     screenPointForRef: overrides.screenPointForRef ?? (async () => null),
   };
@@ -111,6 +112,30 @@ test('Enter in a POST form confirms; in a GET form it stays auto', async () => {
   const surfaceGet = fakeSurface({ formMethod: async () => 'get' });
   await byName(tools(surfaceGet, async () => ((asked += 1), true)), 'browser_act').invoke({}, actArgs({ verb: 'press', ref: null, value: 'Enter' }));
   assert.equal(asked, 1, 'GET form Enter does not ask');
+});
+
+// Scan HIGH (2026-07-22): an innocuously NAMED control carrying attribute-level JS
+// (javascript: href, formaction, inline onclick) can send/purchase from script — the
+// deterministic scriptedControl read confirms the click even though the lexicon passes.
+test('a scripted control with an innocuous name confirms THROUGH the tool', async () => {
+  const surface = fakeSurface({ refInfo: () => ({ role: 'link', name: 'Continue' }), scriptedControl: async () => 'a javascript: link' });
+  const asked: string[] = [];
+  const out = await byName(
+    tools(surface, async (detail) => {
+      asked.push(detail);
+      return false;
+    }),
+    'browser_act',
+  ).invoke({}, actArgs());
+  assert.match(out, /didn't approve/);
+  assert.equal(surface.acts.length, 0, 'declined → never acted');
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /javascript: link/);
+  // A plain control with the same name stays auto.
+  const plain = fakeSurface({ refInfo: () => ({ role: 'link', name: 'Continue' }) });
+  let askedPlain = 0;
+  await byName(tools(plain, async () => ((askedPlain += 1), true)), 'browser_act').invoke({}, actArgs());
+  assert.equal(askedPlain, 0, 'no scripted signal → free navigation');
 });
 
 // Second-review 🟡: the select-in-POST-form gate was DEAD in production because the tool

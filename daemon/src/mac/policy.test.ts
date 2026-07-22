@@ -217,6 +217,14 @@ test('browserActDecision: submit/purchase lexicon + POST-form rules, auto otherw
   assert.equal(browserActDecision({ verb: 'fill', name: 'To' }).route, 'auto', 'typing/filling is always free');
 });
 
+test('browserActDecision: an attribute-scripted control confirms even with an innocuous name (scan HIGH)', async () => {
+  const { browserActDecision } = await import('./policy.ts');
+  assert.equal(browserActDecision({ verb: 'click', role: 'link', name: 'Continue', scripted: 'a javascript: link' }).route, 'confirm');
+  assert.equal(browserActDecision({ verb: 'click', role: 'button', name: 'Next', scripted: 'an inline click handler' }).route, 'confirm');
+  assert.equal(browserActDecision({ verb: 'click', role: 'button', name: 'More', scripted: 'a formaction override' }).route, 'confirm');
+  assert.equal(browserActDecision({ verb: 'click', role: 'link', name: 'Continue', scripted: null }).route, 'auto', 'a plain control with the same name stays auto');
+});
+
 test('browserActDecision (review /address): normalized-name evasion + select-in-POST-form', async () => {
   const { browserActDecision } = await import('./policy.ts');
   // Zero-width padding and fullwidth forms no longer dodge the lexicon.

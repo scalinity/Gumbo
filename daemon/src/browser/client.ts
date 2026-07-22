@@ -193,6 +193,29 @@ export class BrowserClient {
     }
   }
 
+  /** Deterministic script-side-effect signals on a ref's element — input to the click
+   *  gate (scan HIGH). Catches the classic consequential-JS patterns an innocuous name
+   *  hides: javascript: hrefs, formaction overrides, inline on-click handlers.
+   *  addEventListener-attached handlers are invisible to any DOM read — that residual
+   *  stays the documented ceiling of the name/form heuristic (see policy.normalizeName).
+   *  Returns a short reason for the confirm line, or null for a plain control. */
+  async scriptedControl(ref: string): Promise<string | null> {
+    try {
+      return await this.locatorFor(ref).evaluate(
+        (el) => {
+          if (/^\s*javascript:/i.test(el.getAttribute('href') ?? '')) return 'a javascript: link';
+          if (el.hasAttribute('formaction')) return 'a formaction override';
+          if (el.hasAttribute('onclick') || el.hasAttribute('onmousedown') || el.hasAttribute('onmouseup')) return 'an inline click handler';
+          return null;
+        },
+        undefined,
+        { timeout: 2000 },
+      );
+    } catch {
+      return null; // unreadable → the lexicon/form rules still apply
+    }
+  }
+
   /** Global-screen center of a ref's element, for the ghost cursor (pure visualization).
    *  Viewport CSS px + the window's content origin — both in points on macOS, matching
    *  the ghost's AXFrame coordinate space. The origin formula is the classic

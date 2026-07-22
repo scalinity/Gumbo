@@ -48,6 +48,7 @@ function harness(opts: {
     refInfo: () => ({ role: 'button', name: 'Send' }),
     findRef: () => 'g1e1',
     formMethod: async () => null,
+    scriptedControl: async () => null,
     currentUrl: () => 'https://replay.test/page',
     screenPointForRef: async () => null,
     ...opts.surface,

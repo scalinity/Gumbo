@@ -20,6 +20,9 @@ export interface BrowserSurface {
   /** M8 replay: taught {role,name} → current-generation ref (null = no unambiguous match). */
   findRef(role: string | null, name: string | null): string | null;
   formMethod(ref: string | null): Promise<string | null>;
+  /** Deterministic script-side-effect signal for a ref (javascript: href, formaction,
+   *  inline handler) — a short reason, or null for a plain control. */
+  scriptedControl(ref: string): Promise<string | null>;
   currentUrl(): string | null;
   /** Global-screen center of a ref's element — the ghost cursor's target (null = don't fly). */
   screenPointForRef(ref: string): Promise<{ x: number; y: number } | null>;
@@ -160,7 +163,10 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
       const info = ref ? surface.refInfo(ref) : null;
       const needsForm = verb === 'click' || verb === 'select' || (verb === 'press' && /\benter\b/i.test(value ?? ''));
       const formMethod = needsForm ? await surface.formMethod(ref) : null;
-      const decision = browserActDecision({ verb, role: info?.role, name: info?.name, formMethod, chord: value });
+      // Deterministic scripted-control read (javascript: href / formaction / inline
+      // handler): an innocuous name on an attribute-scripted control still confirms.
+      const scripted = verb === 'click' && ref ? await surface.scriptedControl(ref) : null;
+      const decision = browserActDecision({ verb, role: info?.role, name: info?.name, formMethod, chord: value, scripted });
       let gate: 'auto' | 'confirmed' = 'auto';
       const url = surface.currentUrl() ?? undefined;
       if (decision.route === 'confirm') {
