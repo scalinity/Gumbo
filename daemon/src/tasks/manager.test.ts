@@ -437,6 +437,30 @@ test('M8 teaching: the step cap stops the recording loudly, keeping what it capt
   }
 });
 
+// Scan BUG (2026-07-22): the cap was bypassed while stopping — steps kept appending
+// unbounded. The hard cap (maxSteps + flushGrace) now drops the overflow loudly.
+test('M8 teaching: a burst while stopping is bounded by the hard cap, not appended forever', async () => {
+  const { store, manager } = teachManager();
+  const origMax = config.teach.maxSteps;
+  const origGrace = config.teach.flushGraceSteps;
+  (config.teach as { maxSteps: number }).maxSteps = 3;
+  (config.teach as { flushGraceSteps: number }).flushGraceSteps = 2;
+  try {
+    const task = await manager.startTeaching('runaway');
+    // Fire well past maxSteps + grace (= 5). The auto-stop trips at 3; a queued burst then
+    // keeps arriving. Total accepted steps must never exceed the hard cap.
+    for (let i = 0; i < 50; i += 1) manager.teachEvent({ kind: 'click', app: 'Notes', name: `B${i}` });
+    await settle();
+    const stepEvents = store.listEvents({ taskId: task.id }).filter((e) => e.type === 'teach.step');
+    assert.ok(stepEvents.length <= 5, `accepted steps bounded by the hard cap (got ${stepEvents.length})`);
+    const overflow = store.listEvents({ taskId: task.id }).filter((e) => e.type === 'teach.overflow');
+    assert.equal(overflow.length, 1, 'exactly one overflow event, not one per dropped step');
+  } finally {
+    (config.teach as { maxSteps: number }).maxSteps = origMax;
+    (config.teach as { flushGraceSteps: number }).flushGraceSteps = origGrace;
+  }
+});
+
 test('M8 teaching: the distill seam lands the procedure summary in ONE report; failure is loud, steps preserved', async () => {
   const { store, manager } = teachManager();
   manager.distillProcedure = async (name) => `Saved procedure "${name}" v1 (taught) — 3 steps.`;

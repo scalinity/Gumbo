@@ -609,7 +609,7 @@ export class TaskManager {
   // finishWithReport → the existing announce path.
   private teaching: {
     taskId: string; name: string; title: string; workspace: string;
-    steps: TeachStep[]; timer: NodeJS.Timeout; stopping?: boolean;
+    steps: TeachStep[]; timer: NodeJS.Timeout; stopping?: boolean; overflowed?: boolean;
   } | null = null;
 
   /** M8 Phase 2 seam, wired in index.ts to the procedure compiler. When present,
@@ -665,6 +665,19 @@ export class TaskManager {
   teachEvent(raw: unknown) {
     const t = this.teaching;
     if (!t) return; // stale/late event after stop — wire noise, not a signal
+    // HARD cap enforced BEFORE persisting (scan BUG): once the soft cap trips the auto-stop,
+    // steps keep arriving during the record_stop ack window (the legitimate flush). That
+    // window is bounded by flushGraceSteps; beyond maxSteps+grace a burst is DROPPED — one
+    // overflow event, never unbounded pushes — so a malformed/malicious client can't bloat
+    // memory, the event log, the report, and the compile prompt while stopping.
+    const hardCap = config.teach.maxSteps + config.teach.flushGraceSteps;
+    if (t.steps.length >= hardCap) {
+      if (!t.overflowed) {
+        t.overflowed = true;
+        this.store.addEvent(t.taskId, 'teach.overflow', { cap: hardCap, dropped: 'further steps ignored' });
+      }
+      return;
+    }
     const step = sanitizeTeachStep(raw);
     if (!step) return;
     // Steps DO land while stopping: the shell's final typing-burst flush arrives between

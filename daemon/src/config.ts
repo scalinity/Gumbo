@@ -215,6 +215,11 @@ export const config = {
   // truncation (Law 5): hitting one ends the recording with the reason announced.
   teach: {
     maxSteps: 400, // a demonstration is dozens of steps; hundreds means a forgotten recorder
+    // The soft cap (maxSteps) TRIGGERS the loud auto-stop; the shell's final typing-burst
+    // flush then lands a few more steps during the stop-ack window. flushGraceSteps bounds
+    // that window — beyond maxSteps+grace, steps are DROPPED (one overflow event), so a
+    // malformed/malicious client or a huge queued burst can't bloat memory/sqlite unbounded.
+    flushGraceSteps: 50,
     maxDurationMs: 10 * 60_000, // auto-stop — a demo is minutes, not hours
     valueMaxChars: 400, // per-step typed-text cap (sanitize)
   },
