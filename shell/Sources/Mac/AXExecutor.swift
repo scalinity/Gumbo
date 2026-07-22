@@ -280,6 +280,13 @@ final class AXExecutor {
             return AXResult.failure("ax_unavailable", "\(verb) failed: \(actErr)")
         }
 
+        // select_text's effect is the SELECTION, which describe()/diff can't see — report it
+        // directly (performSelectText already verified it via AXSelectedText) so an empty element
+        // diff never reads as "no observable change" and misleads the loop into re-selecting.
+        if verb == "select_text" {
+            return AXResult(ok: true, output: "Selected \"\(truncate(action["value"] as? String ?? ""))\".", errorKind: nil, health: nil, noChange: false)
+        }
+
         settle(element: element, timeoutMs: timeoutMs)
         let after = describe(element)
         // Verify by DIFF, never return code — AXPress false-passes on backgrounded/disabled
