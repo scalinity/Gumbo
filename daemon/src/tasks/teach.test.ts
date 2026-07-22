@@ -69,6 +69,26 @@ test('sanitize: credential-shaped field LABELS coerce to secure_input too (belt 
   assert.equal(plain?.value, 'Q3 planning');
 });
 
+// Scan HIGH (2026-07-22): web/custom fields often have an empty/generic NAME but a
+// credential-shaped IDENTIFIER — those values used to survive as content.
+test('sanitize: a credential-shaped IDENTIFIER coerces to secure_input even with a blank/generic name', () => {
+  for (const identifier of ['password', 'user_password', 'otp', 'otp-input', 'token', 'auth_token', 'card_cvv']) {
+    const step = sanitizeTeachStep({ kind: 'type', app: 'Chrome', identifier, name: '', value: 'sekrit' });
+    assert.ok(step, `${identifier} step dropped entirely`);
+    assert.equal(step.kind, 'secure_input', `identifier "${identifier}" should coerce to secure_input`);
+    assert.equal(step.value, undefined, `identifier "${identifier}" content must be dropped`);
+  }
+  // A paste into a credential-id field degrades too (same disclosure risk).
+  const paste = sanitizeTeachStep({ kind: 'paste', app: 'Chrome', identifier: 'password', value: 'hunter2', rtf: 'cnRm' });
+  assert.equal(paste?.kind, 'secure_input');
+  assert.equal(paste?.value, undefined);
+  assert.equal(paste?.rtf, undefined);
+  // An ordinary identifier keeps its content.
+  const plain = sanitizeTeachStep({ kind: 'type', app: 'Notes', identifier: 'titleField', name: '', value: 'Q3 planning' });
+  assert.equal(plain?.kind, 'type');
+  assert.equal(plain?.value, 'Q3 planning');
+});
+
 test('sanitize: a secure_input step never carries a value, whatever the shell sent', () => {
   const step = sanitizeTeachStep({ kind: 'secure_input', app: 'Safari', name: 'Password', value: 'leaked?' });
   assert.ok(step);

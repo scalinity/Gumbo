@@ -462,6 +462,31 @@ test('M8 teaching: the distill seam lands the procedure summary in ONE report; f
   assert.match(report2, /1 step recorded/, 'steps survive a failed distill');
 });
 
+// Scan HIGH (2026-07-22): the final-document capture must skip a credential-shaped last
+// field — by identifier or by being a secure_input step — never just by name.
+test('M8 teaching: a credential-identifier or secure_input last step skips the document capture', async () => {
+  // Last text step has a blank name but a credential IDENTIFIER → coerced to secure_input by
+  // the sanitizer, and the capture must be skipped (no document_state request).
+  const { store, manager, bridge } = teachManager();
+  const task = await manager.startTeaching('login flow');
+  manager.teachEvent({ kind: 'click', app: 'Safari', role: 'AXButton', name: 'Sign in' });
+  manager.teachEvent({ kind: 'type', app: 'Safari', role: 'AXTextField', identifier: 'password', name: '', value: 'hunter2' });
+  await manager.stopTeaching();
+  await settle();
+  assert.ok(!bridge.requests.includes('document_state'), 'no capture of a credential field');
+  const report = readFileSync(join(task.workspace, 'report.md'), 'utf8');
+  assert.match(report, /capture skipped: the demonstrated field is credential-shaped/);
+  assert.doesNotMatch(report, /hunter2/, 'the credential value never reaches the report');
+
+  // A named credential field still skips (the pre-existing behavior, now via the shared helper).
+  const { manager: m2, bridge: b2 } = teachManager();
+  await m2.startTeaching('login flow 2');
+  m2.teachEvent({ kind: 'type', app: 'Safari', role: 'AXTextField', name: 'Password', value: 'sekret' });
+  await m2.stopTeaching();
+  await settle();
+  assert.ok(!b2.requests.includes('document_state'), 'a named credential field still skips capture');
+});
+
 // ——— M8 scheduled routines: fire → queue → spawn/skip + the unattended policy ———
 
 const PROC_BODY = JSON.stringify({

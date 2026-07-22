@@ -8,7 +8,7 @@ import { ClaudeRunner, type ClaudeRunnerOpts, type ClaudeSessionRunner } from '.
 import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import type { MacBridge } from '../ws/mac.ts';
-import { sanitizeTeachStep, teachingReport, SECRET_FIELD_RE, type TeachStep } from './teach.ts';
+import { sanitizeTeachStep, teachingReport, isCredentialDescriptor, type TeachStep } from './teach.ts';
 import { validateProcedure, type Procedure } from '../agents/procedures.ts';
 
 /** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod).
@@ -707,9 +707,11 @@ export class TaskManager {
     const LAUNCHERS = new Set(['Siri', 'Spotlight', 'Gumbo']); // Gumbo: the finish-teaching orb click records as a step
     const lastText = [...t.steps].reverse().find((s) => (s.kind === 'type' || s.kind === 'select_text') && !LAUNCHERS.has(s.app))
       ?? [...t.steps].reverse().find((s) => !LAUNCHERS.has(s.app));
-    if (lastText?.app && this.macBridge && SECRET_FIELD_RE.test(lastText.name ?? '')) {
+    if (lastText?.app && this.macBridge && (lastText.kind === 'secure_input' || isCredentialDescriptor(lastText))) {
       // Never capture a credential-shaped field's document — the capture would persist
-      // its content into the memory table and the compile input.
+      // its content into the memory table and the compile input. secure_input is an
+      // UNCONDITIONAL skip (the step was already recognized as a credential entry), and the
+      // descriptor check now covers the identifier/role too, not just the accessible name.
       outcomeNote = '\n(final-document capture skipped: the demonstrated field is credential-shaped)\n';
     } else if (lastText?.app && this.macBridge) {
       // Capture the DEMONSTRATED field (identifier/role from the last text step), not

@@ -47,6 +47,21 @@ const PASTE_RTF_MAX = 400_000; // base64 chars
  *  shell is the primary gate (content never leaves it); this is the belt. */
 export const SECRET_FIELD_RE = /passw|passcode|passphrase|\botp\b|2fa|verification|secret|token|\bpin\b|cvv|security code|credential/i;
 
+/** The ONE credential check every teaching path shares (scan HIGH): a field is
+ *  credential-shaped if its subrole is the native secure type OR any of its available
+ *  descriptors — name, identifier, role — reads credential-shaped. Web/custom login forms
+ *  often leave the accessible NAME empty or generic while the IDENTIFIER is `password`,
+ *  `otp`, `token`, etc., so checking name alone let those values through. Used by the step
+ *  sanitizer and by the final-document capture gate so they can never disagree. */
+export function isCredentialDescriptor(d: { name?: string | null; identifier?: string | null; role?: string | null; subrole?: string | null }): boolean {
+  return (
+    d.subrole === 'AXSecureTextField' ||
+    SECRET_FIELD_RE.test(d.name ?? '') ||
+    SECRET_FIELD_RE.test(d.identifier ?? '') ||
+    SECRET_FIELD_RE.test(d.role ?? '')
+  );
+}
+
 function str(v: unknown, max: number): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v.slice(0, max) : undefined;
 }
@@ -81,8 +96,9 @@ export function sanitizeTeachStep(raw: unknown): TeachStep | null {
   // Belt: content into anything credential-shaped becomes a semantic step with NO content (the
   // subrole could have been lost in transit, or the label is a variant the shell's lexicon
   // missed). secure_input is structurally content-free. Selecting text in — or pasting into —
-  // a secure field is the same disclosure risk, so those degrade too.
-  if ((step.kind === 'type' || step.kind === 'select_text' || step.kind === 'paste') && (subrole === 'AXSecureTextField' || SECRET_FIELD_RE.test(name ?? ''))) {
+  // a secure field is the same disclosure risk, so those degrade too. The check covers the
+  // IDENTIFIER, not just the name, so a web field labelled `password`/`otp` by id still degrades.
+  if ((step.kind === 'type' || step.kind === 'select_text' || step.kind === 'paste') && isCredentialDescriptor({ name, identifier, role, subrole })) {
     step.kind = 'secure_input';
   }
   if (step.kind === 'secure_input') { delete step.value; delete step.occurrence; delete step.rtf; }
