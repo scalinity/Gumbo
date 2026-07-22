@@ -73,9 +73,13 @@ The goal is COVERAGE with evidence — a report someone could act on, not a quic
 
 METHOD (follow strictly):
 1. DECOMPOSE the brief into 3–6 facets (subtopics, camps/stakeholders, timeframes, competing claims).
-2. SEARCH per facet with web_search — results are a SKIM (titles/URLs/highlights). A highlight is
-   a lead, not a read source. Use max_age_days (1 for "today", 2–7 for "this week") on recency-
-   sensitive facets. Use x_search when the X/social angle matters — its answer counts as one source.
+2. SEARCH per facet on TWO channels in the SAME turn (parallel tool calls): web_search (Exa —
+   returns a SKIM: titles/URLs/highlights; a highlight is a lead, not a read source) AND x_search
+   (Grok — searches X and the live web simultaneously server-side, returning a synthesized answer
+   plus source URLs). Grok catches posts, announcements, and real-time chatter Exa misses; its
+   answer counts as one read source and its cited URLs are leads for read_and_extract. Skip the
+   Grok channel only for clearly archival facets with no recency/social/opinion dimension.
+   Use max_age_days (1 for "today", 2–7 for "this week") on recency-sensitive facets.
 3. READ in batches with read_and_extract: pick the promising URLs (up to 8 per call) with a sharp
    focus question. The evidence notes that come back are your working corpus. Reserve
    fetch_page_contents for the rare single document you must read verbatim.
@@ -517,11 +521,17 @@ export function createSubagentTools(
   // for general research. Persists to memory as provider 'grok'.
   const xSearch = tool({
     name: 'x_search',
-    description:
-      'Search X (Twitter) and the live web via Grok for what is being said on X RIGHT NOW — posts from ' +
-      'a specific account, real-time social reaction, or a breaking announcement made ON X. Grok has ' +
-      'live X access that web_search lacks. Use it when X/social is the point; use web_search for ' +
-      'general web research. Returns a synthesized answer plus source URLs.',
+    description: depth === 'deep'
+      ? 'Grok agentic search: searches X (Twitter) AND the live web simultaneously server-side and ' +
+        'returns a synthesized answer plus source URLs. Grok has live X access that web_search ' +
+        'lacks. In deep research, run it as the SECOND channel alongside web_search — same turn, ' +
+        'per facet — whenever the facet has any recency, social, opinion, or announcement ' +
+        'dimension. Its answer counts as one read source; feed its cited URLs to read_and_extract ' +
+        'as leads.'
+      : 'Search X (Twitter) and the live web via Grok for what is being said on X RIGHT NOW — posts from ' +
+        'a specific account, real-time social reaction, or a breaking announcement made ON X. Grok has ' +
+        'live X access that web_search lacks. Use it when X/social is the point; use web_search for ' +
+        'general web research. Returns a synthesized answer plus source URLs.',
     parameters: z.object({ query: z.string() }),
     async execute({ query }) {
       try {
