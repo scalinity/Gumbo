@@ -92,6 +92,10 @@ export class MacBridge {
       result.health = r.health as MacHealth;
     }
     if ((r as { no_change?: unknown }).no_change === true) result.no_change = true;
+    const selectHow = (r as { select_how?: unknown }).select_how;
+    if (selectHow === 'real click' || selectHow === 'keyboard' || selectHow === 'ax-write') {
+      result.select_how = selectHow;
+    }
     return result;
   }
 

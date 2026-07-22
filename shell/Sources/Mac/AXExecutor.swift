@@ -11,12 +11,17 @@ struct AXResult {
     /// act only: the settled before/after diff was empty. Structured so the daemon's stall
     /// detector never has to grep human-readable output (screen text could spoof it).
     var noChange: Bool = false
+    /// select_text only: WHICH mechanism made the selection ("real click" / "keyboard" /
+    /// "ax-write"). Structured for the same reason as noChange — the replay engine must
+    /// distrust an ax-write shadow selection without ever grepping output text.
+    var selectHow: String? = nil
 
     func wire() -> [String: Any] {
         var dict: [String: Any] = ["ok": ok, "output": output]
         if let errorKind { dict["error_kind"] = errorKind }
         if let health { dict["health"] = health }
         if noChange { dict["no_change"] = true }
+        if let selectHow { dict["select_how"] = selectHow }
         return dict
     }
 
@@ -340,6 +345,7 @@ final class AXExecutor {
         lastSelectedElement = nil
 
         var actErr: String?
+        var selectHow = ""
         switch verb {
         case "press": actErr = performPress(element, pid: pid, inOpenMenu: inOpenMenu)
         case "focus": actErr = performFocus(element)
@@ -349,7 +355,9 @@ final class AXExecutor {
             actErr = performType(element, text: action["value"] as? String ?? "", pid: pid, replacingSelection: replacing)
         case "show_menu": actErr = performShowMenu(element, pid: pid)
         case "select_text":
-            actErr = performSelectText(element, text: action["value"] as? String ?? "", occurrence: action["occurrence"] as? Int ?? 0)
+            let sel = performSelectText(element, text: action["value"] as? String ?? "", occurrence: action["occurrence"] as? Int ?? 0)
+            actErr = sel.error
+            selectHow = sel.how
             if actErr == nil { lastSelectedElement = element }
         case "replace_text":
             return performReplaceText(element, replacement: action["value"] as? String ?? "")
@@ -358,14 +366,23 @@ final class AXExecutor {
         default: return AXResult.failure("out_of_scope", "Unknown verb \"\(verb)\".")
         }
         if let actErr {
-            return AXResult.failure("ax_unavailable", "\(verb) failed: \(actErr)")
+            // A target string missing from the field is a RESOLUTION failure (the drift/
+            // retry class), not an AX-capability failure — report it as such.
+            let kind = actErr.contains("not found in the field") ? "element_not_found" : "ax_unavailable"
+            return AXResult.failure(kind, "\(verb) failed: \(actErr)")
         }
 
         // select_text's effect is the SELECTION, which describe()/diff can't see — report it
-        // directly (performSelectText already verified it via AXSelectedText) so an empty element
-        // diff never reads as "no observable change" and misleads the loop into re-selecting.
+        // directly (performSelectText already verified it by range) so an empty element diff
+        // never reads as "no observable change" and misleads the loop into re-selecting.
+        // The mechanism matters to the caller: an "ax-write" selection is a SHADOW the app's
+        // format actions may not track — say so, so neither the engine nor the model trusts
+        // it blindly before a formatting action.
         if verb == "select_text" {
-            return AXResult(ok: true, output: "Selected \"\(truncate(action["value"] as? String ?? ""))\".", errorKind: nil, health: nil, noChange: false)
+            let body = selectHow == "ax-write"
+                ? "Selected \"\(truncate(action["value"] as? String ?? ""))\" via AX write only — the app may not track this selection for formatting; verify the next action's effect on the content."
+                : "Selected \"\(truncate(action["value"] as? String ?? ""))\"."
+            return AXResult(ok: true, output: body, errorKind: nil, health: nil, noChange: false, selectHow: selectHow)
         }
         // A chosen menu item's success signal is the MENU CLOSING — the pressed element is
         // gone, so the element diff would read "(no observable change)" and the loop would
@@ -543,14 +560,59 @@ final class AXExecutor {
         return err == .success ? nil : "AXValue set error \(err.rawValue)"
     }
 
-    /// Select a text range SEMANTICALLY, no coordinates: find the `occurrence`-th match of `text`
-    /// in the element's value and set kAXSelectedTextRange to it — reproducing a drag/double-click
-    /// highlight so a following format action (color, bold) applies to it. AX offsets are UTF-16.
-    /// Verifies via AXSelectedText and returns an error (→ replay drifts, never colors the wrong
-    /// text) when the app ignores the write or the text isn't present.
-    private func performSelectText(_ element: AXUIElement, text: String, occurrence: Int) -> String? {
-        guard !text.isEmpty else { return "select_text: empty target" }
-        guard let full = stringAttr(element, kAXValueAttribute) else { return "select_text: the field exposes no text value" }
+    /// The live screen bounds of a character range (kAXBoundsForRange) — read fresh at act
+    /// time, never recorded, so clicking them stays semantic. Top-left-origin global coords,
+    /// the same space SyntheticInput.click posts into. nil when the app doesn't implement
+    /// the parameterized read or the range is off-screen/degenerate.
+    private func rangeBounds(_ element: AXUIElement, location: Int, length: Int) -> CGRect? {
+        var r = CFRange(location: location, length: length)
+        guard let axRange = AXValueCreate(.cfRange, &r) else { return nil }
+        var out: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, axRange, &out) == .success,
+              let v = out, CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+        var rect = CGRect.zero
+        guard AXValueGetValue(v as! AXValue, .cgRect, &rect), rect.height > 0 else { return nil }
+        return rect
+    }
+
+    /// Occlusion/identity gate for clicking INTO text: the systemwide hit-test at the point
+    /// must climb back to the target element itself — same-pid alone is not enough here,
+    /// because the app's own popover hovering over the text would swallow the click (and a
+    /// swatch mis-click formats the document). A hit-test ERROR is not proof of occlusion.
+    private func pointHitsElement(_ point: CGPoint, target: AXUIElement, pid: pid_t) -> Bool {
+        var hitRef: AXUIElement?
+        let err = AXUIElementCopyElementAtPosition(AXUIElement.systemWide, Float(point.x), Float(point.y), &hitRef)
+        guard err == .success, let hit = hitRef else { return true }
+        if pidOf(hit) != pid { return false }
+        var node: AXUIElement? = hit
+        var hops = 0
+        while let n = node, hops < 6 {
+            if CFEqual(n, target) { return true }
+            node = parentOf(n)
+            hops += 1
+        }
+        return false
+    }
+
+    /// Select a text range SEMANTICALLY, no coordinates recorded: find the `occurrence`-th
+    /// match of `text` in the element's value and make the app REALLY select it. Mechanism
+    /// ladder, most trustworthy first — `how` names which rung fired so callers can weigh it:
+    ///  1. "real click": click + shift+click at the range's live character bounds — the same
+    ///     input a human drag produces. The only rung the app cannot disagree with: caret and
+    ///     selection are built by its own real-input path, so the format actions that follow
+    ///     act on exactly what was verified.
+    ///  2. "keyboard": AX caret write verified by read-back, then shift+rights. Honest when it
+    ///     verifies, but the anchor verification READS THE SAME CHANNEL IT WROTE — an app whose
+    ///     AX layer shadows range writes can pass it while its real caret sits elsewhere (the
+    ///     one-selection-off highlight bug survived this rung's checks on a live replay).
+    ///  3. "ax-write": bare AX range write — a SHADOW selection: reads back correctly, but
+    ///     format actions may not track it. Reported distinctly; the replay engine treats it
+    ///     as unproven unless the next step edits text through the same AX channel.
+    /// Verification is by RANGE (focus-independent — AXSelectedText reads empty on an
+    /// unfocused field even when the range took). AX offsets are UTF-16.
+    private func performSelectText(_ element: AXUIElement, text: String, occurrence: Int) -> (error: String?, how: String) {
+        guard !text.isEmpty else { return ("select_text: empty target", "none") }
+        guard let full = stringAttr(element, kAXValueAttribute) else { return ("select_text: the field exposes no text value", "none") }
         let ns = full as NSString
         var from = 0, idx = 0
         var match = NSRange(location: NSNotFound, length: 0)
@@ -562,19 +624,37 @@ final class AXExecutor {
             from = r.location + max(1, r.length)
         }
         if match.location == NSNotFound { match = ns.range(of: text) } // occurrence drifted → first match
-        if match.location == NSNotFound { return "select_text: \"\(truncate(text))\" not found in the field" }
+        if match.location == NSNotFound { return ("select_text: \"\(truncate(text))\" not found in the field", "none") }
 
-        // Verification is by RANGE (focus-independent — AXSelectedText reads empty on an
-        // unfocused field even when the range took). The keyboard rung must be ANCHORED:
-        // firing shift+rights from an unverified caret extends a WRONG selection with
-        // real events, and the app's format actions then target THAT selection while the
-        // AX-written range reads back "correct" (a live replay painted every highlight
-        // one selection off exactly this way). Never press a key until the caret
-        // read-back confirms the anchor; if a stray keyboard selection was built, collapse
-        // it (a real left-arrow) so no event-real ghost selection survives the fallback.
         let want = NSRange(location: match.location, length: match.length)
         let tookRange = { [weak self] in self?.selectedRange(element) == want }
         let pid = pidOf(element)
+
+        // Rung 1 — REAL selection: click at the first char's leading edge, shift+click at
+        // the last char's trailing edge. Two attempts: a lingering popover's dismissal can
+        // consume the first click (macOS transient popovers eat the closing click).
+        if let startRect = rangeBounds(element, location: match.location, length: 1),
+           let endRect = rangeBounds(element, location: max(match.location, match.location + match.length - 1), length: 1) {
+            let start = CGPoint(x: startRect.minX + 2, y: startRect.midY)
+            let end = CGPoint(x: endRect.maxX - 2, y: endRect.midY)
+            if pointHitsElement(start, target: element, pid: pid), pointHitsElement(end, target: element, pid: pid) {
+                for _ in 0..<2 {
+                    SyntheticInput.click(at: start, pid: nil) // global HID — the real caret
+                    usleep(90_000)
+                    SyntheticInput.click(at: end, pid: nil, flags: .maskShift)
+                    usleep(150_000)
+                    if tookRange() { return (nil, "real click") }
+                }
+                // Whatever the clicks built is not the target — collapse it so no
+                // event-real ghost survives into the rungs below.
+                _ = SyntheticInput.pressKey("left", pid: pid)
+                usleep(60_000)
+            }
+        }
+
+        // Rung 2 — keyboard build from a VERIFIED caret anchor: never press a key until the
+        // caret read-back confirms the anchor; if the keys built something else, collapse it
+        // (a real left-arrow) so no event-real ghost selection survives the fallback.
         let setCaretVerified = { [weak self] () -> Bool in
             var caret = CFRange(location: match.location, length: 0)
             guard let axCaret = AXValueCreate(.cfRange, &caret),
@@ -599,17 +679,17 @@ final class AXExecutor {
                 usleep(20_000)
             }
             usleep(150_000)
-            if tookRange() { return nil }
-            // The keys built something OTHER than the target — collapse the event-real
-            // ghost before falling back, or a later format action would style it.
+            if tookRange() { return (nil, "keyboard") }
             _ = SyntheticInput.pressKey("left", pid: pid)
             usleep(60_000)
         }
+
+        // Rung 3 — AX shadow write. Reported as such; callers must distrust it for formatting.
         var range = CFRange(location: match.location, length: match.length)
-        guard let axRange = AXValueCreate(.cfRange, &range) else { return "select_text: could not build range" }
+        guard let axRange = AXValueCreate(.cfRange, &range) else { return ("select_text: could not build range", "none") }
         AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
-        if tookRange() { return nil }
-        return "select_text: the selection did not take (this field may not support programmatic selection)"
+        if tookRange() { return (nil, "ax-write") }
+        return ("select_text: the selection did not take (this field may not support programmatic selection)", "none")
     }
 
     /// Focus, then enter text — per character for a NATIVE field, by clipboard paste for a

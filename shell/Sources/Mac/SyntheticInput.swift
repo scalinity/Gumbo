@@ -37,17 +37,22 @@ enum SyntheticInput {
     /// the only rung that moves the real cursor — used for drags and stubborn widgets).
     /// clicks: 2 = a real double-click (each pair stamped with its click state — two
     /// independent single clicks do NOT register as a double).
-    static func click(at point: CGPoint, pid: pid_t?, button: CGMouseButton = .left, clicks: Int = 1) {
+    /// flags: modifier keys held for the click (.maskShift = a shift+click, which extends
+    /// the app's REAL text selection from the real caret — the drag-equivalent).
+    static func click(at point: CGPoint, pid: pid_t?, button: CGMouseButton = .left, clicks: Int = 1, flags: CGEventFlags = []) {
         let (downType, upType): (CGEventType, CGEventType) = button == .right
             ? (.rightMouseDown, .rightMouseUp)
             : (.leftMouseDown, .leftMouseUp)
         let move = tagged(CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button))
+        move?.flags = flags
         post(move, pid: pid)
         for state in 1...max(1, clicks) {
             let down = tagged(CGEvent(mouseEventSource: source, mouseType: downType, mouseCursorPosition: point, mouseButton: button))
             let up = tagged(CGEvent(mouseEventSource: source, mouseType: upType, mouseCursorPosition: point, mouseButton: button))
             down?.setIntegerValueField(.mouseEventClickState, value: Int64(state))
             up?.setIntegerValueField(.mouseEventClickState, value: Int64(state))
+            down?.flags = flags
+            up?.flags = flags
             post(down, pid: pid)
             post(up, pid: pid)
         }

@@ -231,6 +231,14 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         .map((e) => `${e.type}: ${JSON.stringify(e.payload).slice(0, 200)}`)
         .join('\n');
       parts.push(`Recent activity (oldest first):\n${recent}`);
+      // "Is it stuck?" needs the AGE of that activity, not just its shape — a live run
+      // showed 80 s of silence being read back as "making progress" because the recent
+      // events looked busy. State the gap so the answer can be honest.
+      const last = events[events.length - 1];
+      if (task.status === 'running' && last) {
+        const ageS = Math.round((Date.now() - last.ts) / 1000);
+        parts.push(`Last activity: ${ageS}s ago.${ageS > 60 ? ' That is a LONG silent gap — if nothing is visibly happening, the task may be stalled; say so honestly (cancelling it is a reasonable option to offer).' : ''}`);
+      }
       return parts.join('\n\n');
     },
   });

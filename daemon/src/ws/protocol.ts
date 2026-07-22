@@ -83,6 +83,10 @@ export type MacActionResult = {
    *  stall detector keys on this, never on output text (on-screen content echoed into the
    *  output could otherwise spoof or suppress it). */
   no_change?: boolean;
+  /** select_text only: which mechanism made the selection. 'ax-write' is a SHADOW — the
+   *  range reads back but the app's format actions may not track it; the replay engine
+   *  branches on this structurally (never on output text, same rationale as no_change). */
+  select_how?: 'real click' | 'keyboard' | 'ax-write';
 };
 
 // client → daemon

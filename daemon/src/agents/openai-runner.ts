@@ -1,4 +1,5 @@
-import { Agent, run, tool, codeInterpreterTool, MaxTurnsExceededError } from '@openai/agents';
+import { Agent, run, tool, codeInterpreterTool, MaxTurnsExceededError, setDefaultOpenAIClient } from '@openai/agents';
+import OpenAI from 'openai';
 import { z } from 'zod';
 import { config, todayLabel } from '../config.ts';
 import type { Store } from '../events/store.ts';
@@ -11,12 +12,24 @@ import { createBrowserTools } from './browser-tools.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import { wrapSteering } from './steering.ts';
 import { visionQuery } from './vision.ts';
-import { fallbackBrief, replayProcedure } from './procedure-runner.ts';
+import { fallbackBrief, replayProcedure, verifyAgainstExpect } from './procedure-runner.ts';
 import { wrapUnattendedApps } from './unattended.ts';
 import type { CompleteFn, Procedure } from './procedures.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
 export type SubagentKind = 'research' | 'mac';
+
+// A stalled model call must FAIL, not hang the loop (a live fallback run sat 88 s doing
+// nothing — no tool calls, no events — until the user hit the kill switch; the SDK's default
+// client waits ~10 min per request). Every Agents-SDK request gets a hard per-request
+// timeout; the client's own retries absorb the transient stalls that timeout exposes.
+// The 'unset' fallback keeps import-time construction from throwing under the test suite
+// (boot validation still refuses to run the real daemon without the key).
+setDefaultOpenAIClient(new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY ?? 'unset',
+  timeout: config.models.requestTimeoutMs,
+  maxRetries: 2,
+}));
 
 // Rebuilt per run so the date is always current — without it the model assumes its
 // training-data "today" and returns stale results for time-sensitive briefs.
@@ -644,6 +657,17 @@ export async function runSubagent(opts: {
     // M8: the structured last-result side-channel the replay engine reads — never the
     // result strings (screen text could spoof any textual signal). Inert outside replay.
     let lastObservation: ToolObservation | null = null;
+    // M8 closed loop, second half: when the deterministic replay fell back, the fallback
+    // loop's OWN completion is not the last word — the document gets re-captured and
+    // re-diffed, and the report states what actually stands (a live fallback "fixed" one
+    // text delta while the misplaced highlights it was never told about shipped silently).
+    let procedureFellBack = false;
+    const withReplayVerify = async (report: string): Promise<string> => {
+      if (!procedureFellBack || !opts.procedure?.procedure.expect) return report;
+      const line = await verifyAgainstExpect(opts.procedure.procedure, { taskId, store, macBridge: macBridge!, signal })
+        .catch((err: unknown) => `Post-fix document check could not run (${err instanceof Error ? err.message : String(err)}).`);
+      return line ? `${report}\n\n${line}` : report;
+    };
     const observe = (obs: ToolObservation) => { lastObservation = obs; };
     let macToolset = isMac
       ? [
@@ -686,6 +710,7 @@ export async function runSubagent(opts: {
       // Drift → the SAME task falls through into the full act→observe loop below, with
       // the skeleton + verified progress as context. Success then self-heals (manager).
       brief = fallbackBrief(originalBrief, opts.procedure.procedure, replay);
+      procedureFellBack = true;
     }
 
     // Steering wraps EVERY computer tool — guidance lands at the model's next attention
@@ -765,9 +790,9 @@ export async function runSubagent(opts: {
         if (err instanceof MaxTurnsExceededError) return partialReport();
         throw err;
       }
-      return String(retry.finalOutput ?? '');
+      return withReplayVerify(String(retry.finalOutput ?? ''));
     }
-    return final;
+    return withReplayVerify(final);
   } finally {
     if (isMac) macBridge!.taskFinished();
     // Capture-then-close the browser context (storage state persists the session for the

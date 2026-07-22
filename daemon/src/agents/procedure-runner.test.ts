@@ -502,3 +502,37 @@ test('fallbackBrief carries the LITERAL typed values + a verbatim-reproduction i
   assert.match(brief, /checklist|checkbox/i, 'warned off the app-native checklist widget');
   assert.doesNotMatch(brief, /undefined/, 'a valueless (handoff) step never prints "undefined"');
 });
+
+test('diffOutcome: a text delta on one line does not hide a style delta on another', () => {
+  // The live run-2 miss: the fallback was told about a dropped space but never about the
+  // highlight painted on the wrong character — both must surface.
+  const taught = CAP('List\nClaude\n I think', ['[0-4] "List": Title', '[5-11] "Claude": Orange highlight', '[12-20] " I think": checklist list item']);
+  const got = CAP('List\nClaude\nI think', ['[0-4] "List": Title', '[5-6] "C": Orange highlight', '[12-19] "I think": checklist list item']);
+  const deltas = diffOutcome(taught, got);
+  assert.ok(deltas.some((d) => d.includes('line 3')), 'the dropped leading space is a text delta');
+  assert.ok(deltas.some((d) => d.includes('Orange highlight')), 'the mis-painted highlight on a MATCHING line surfaces alongside the text delta');
+});
+
+test('an AX-write-only selection drifts before a format step, but is accepted before a text edit', async () => {
+  // The executor reports WHICH rung selected (structured select_how, never output text);
+  // an 'ax-write' shadow selection must never feed a format action (the app styles its
+  // REAL selection instead), while a text edit through the same AX channel is safe.
+  const shadow = { ok: true, output: 'Selected "Claude".', select_how: 'ax-write' };
+  const mk = () => harness({
+    bridge: (a) => (a.kind === 'resolve' ? { ok: true, output: 'sel1' }
+      : a.kind === 'act' && a.verb === 'select_text' ? (shadow as never)
+      : { ok: true, output: '+ changed' }),
+  });
+  const select = { lane: 'ax', desc: 'Select Claude', target: { app: 'Notes', role: 'TextArea', name: 'Body' }, verb: 'select_text', value: 'Claude' } as Procedure['steps'][number];
+  const r1 = await mk().run({
+    name: 'hl', goal: 'highlight a word', preconditions: [], apps: ['Notes'],
+    steps: [select, { lane: 'ax', desc: 'Pick orange', target: { app: 'Notes', role: 'MenuItem', name: 'Orange' }, verb: 'click' }],
+  });
+  assert.equal(r1.outcome, 'fallback');
+  assert.match((r1 as { reason: string }).reason, /shadow write/);
+  const r2 = await mk().run({
+    name: 'edit', goal: 'replace a word', preconditions: [], apps: ['Notes'],
+    steps: [select, { lane: 'ax', desc: 'Replace it', target: { app: 'Notes', role: 'TextArea', name: 'Body' }, verb: 'replace_text', value: 'Code' }],
+  });
+  assert.equal(r2.outcome, 'completed');
+});

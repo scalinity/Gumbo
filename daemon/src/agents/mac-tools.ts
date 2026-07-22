@@ -47,6 +47,9 @@ export type ToolObservation = {
   noChange?: boolean;
   /** A confirm gate (host, submit, risky script, handoff) resolved as a deny. */
   declined?: boolean;
+  /** ax_act select_text only: which mechanism made the selection ('ax-write' = a shadow
+   *  the app's format actions may not track — the replay engine branches on this). */
+  selectHow?: string;
 };
 
 /** Optional M7 wiring: requestHandoff pauses the task for the user's own step (manager owns
@@ -158,7 +161,7 @@ export function createMacTools(
       );
       const summary = `${verb} ${ref ?? role ?? ''}`.trim();
       auditMacAction({ tier: 'subagent', kind: 'act', action: summary, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
-      deps.observe?.({ tool: 'ax_act', ok: result.ok, errorKind: result.error_kind, noChange: result.no_change === true });
+      deps.observe?.({ tool: 'ax_act', ok: result.ok, errorKind: result.error_kind, noChange: result.no_change === true, selectHow: result.select_how });
       // Keyed on the STRUCTURED no_change flag, not output text — screen content echoed
       // into the diff could otherwise spoof (or suppress) the stall signal (review 🔵).
       const stalled = result.ok && result.no_change === true;

@@ -77,6 +77,10 @@ export const config = {
     realtime: 'gpt-realtime-2.1',
     subagent: 'gpt-5.6-terra',
     supervisor: 'gpt-5.6-terra',
+    // Hard per-request ceiling for Agents-SDK model calls (the SDK default is ~10 min —
+    // a stalled call read as a silent hang on a live fallback run). Generous enough for
+    // long reasoning turns; the client retries what the timeout exposes.
+    requestTimeoutMs: 120_000,
     // M3 cold announcements. Verified live (2026-07-15): /v1/audio/speech accepts the
     // 'marin' voice on this model with response_format 'pcm' → 24 kHz mono pcm16, the
     // exact shell wire format — same voice as the realtime session, zero transcoding.
