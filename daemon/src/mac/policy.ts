@@ -137,6 +137,23 @@ function commandName(token: string): string {
   return slash === -1 ? bare : bare.slice(slash + 1);
 }
 
+/** A COMMAND-position token carrying shell expansion (`rm$IFS-rf`, `$(which rm) …`) can
+ *  reassemble into ANY command at exec time — including a delete or secret read — after the
+ *  pattern gate already looked, so the whole table is blind to it. Bash expands the command
+ *  word before command lookup; we can't, so we confirm (the SHELL_EXPANSION stance, applied
+ *  to command position, not just delete targets). Leading `VAR=value` env-assignment
+ *  prefixes are skipped so `FOO=$BAR ls` still checks `ls`. */
+function unresolvableCommandWord(command: string): string | null {
+  for (const segment of command.split(/\|\||&&|[;|&\n]/)) {
+    const tokens = segment.trim().split(/\s+/).filter(Boolean);
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1; // env-assignment prefix
+    if (i >= tokens.length) continue;
+    if (SHELL_EXPANSION.test(tokens[i])) return tokens[i];
+  }
+  return null;
+}
+
 /** A delete whose target isn't provably inside a safe root → confirm. Conservative by
  *  design: an unresolvable target (shell expansion, stdin-fed xargs) confirms. */
 function riskyDelete(command: string): string | null {
@@ -196,6 +213,11 @@ export function macDoDecision(script: string): MacPolicyResult {
   if (shellOuts > literalShellOuts) {
     return { route: 'confirm', reason: 'unresolvable shell-out (do shell script)' };
   }
+  // An expanded command WORD (`rm$IFS-rf`) is unresolvable — confirm before the delete
+  // check, which would otherwise not recognize the obfuscated `rm` as a delete token.
+  // Checked on raw AND shadow so a quoted split can't hide the expansion.
+  const expandedCmd = unresolvableCommandWord(script) ?? unresolvableCommandWord(shadow);
+  if (expandedCmd) return { route: 'confirm', reason: `unresolvable command (shell expansion in "${expandedCmd}")` };
   const badDelete = riskyDelete(script);
   if (badDelete) return { route: 'confirm', reason: `delete outside safe dirs (${badDelete})` };
   return { route: 'auto', reason: 'read-only / reversible command' };

@@ -143,6 +143,16 @@ test('patterns are scoped per command line — a $ on a later line does not tain
   assert.equal(macDoDecision('open -a Notes\necho "$HOME"').route, 'auto', 'benign multiline must not over-confirm');
 });
 
+test('a command WORD built by shell expansion is unresolvable → confirm (scan HIGH: rm$IFS-rf bypass)', () => {
+  assert.equal(macDoDecision('rm$IFS-rf ~/Documents').route, 'confirm', 'expanded rm reassembles past the delete gate');
+  assert.equal(macDoDecision('$(which rm) -rf /tmp/x').route, 'confirm', 'command substitution as the command word');
+  assert.equal(macDoDecision('`echo rm` -rf x').route, 'confirm', 'backtick command word');
+  assert.equal(macDoDecision('do shell script "rm$IFS-rf ~/x"').route, 'confirm', 'the bypass through AppleScript too');
+  // Command-word expansion confirms; an operand $ is still only about the delete/exfil lanes.
+  assert.equal(macDoDecision('echo "$HOME"').route, 'auto', 'a $ in an operand is not a command-word expansion');
+  assert.equal(macDoDecision('FOO=$BAR ls /tmp').route, 'auto', 'an env-assignment prefix is skipped; ls is the real command');
+});
+
 test('a delete with an unresolvable (shell-expanded) target confirms rather than guessing', () => {
   assert.equal(macDoDecision('rm -rf "$TARGET"/cache').route, 'confirm');
   assert.equal(macDoDecision('rm -rf `cat /tmp/list`').route, 'confirm');
