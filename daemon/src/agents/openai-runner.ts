@@ -357,9 +357,11 @@ whole of it — climb these ladders before concluding you can't:
   before ever saying you can't open an app.
 - ENTER TEXT that isn't landing (the diff came back "(no observable change)"): (1) make sure the app is
   truly frontmost (focus_app) and click/press INTO the body element first so it's the first responder,
-  THEN ax_act type; (2) for a SCRIPTABLE app, run_script AppleScript is the MOST reliable path — e.g.
-  Notes: \`tell application "Notes" to make new note with body "First line
-Second line"\` (Mail, TextEdit, Reminders, Pages are scriptable too); (3) set_value as a last resort.
+  THEN ax_act type — for a STYLED note this retry is the ONLY acceptable route (a scripted or pasted
+  body loses the Title and all styling); (2) for PLAIN unstyled text in a scriptable app (Mail,
+  TextEdit, Reminders), run_script AppleScript can write the content — but \`tell application "X"\`
+  needs that app's Automation permission: on a "Not authorized to send Apple events" error, that
+  consent is absent — skip this rung IMMEDIATELY, never retry it; (3) set_value as a last resort.
   Do not accept an empty note or empty field — keep climbing until the text is actually visible.
 - CLICK a control that won't respond: ax_act press → a keyboard shortcut or the menu bar (key /
   show_menu) → the vision lane (screen_ocr then click_point on the returned coordinates).
