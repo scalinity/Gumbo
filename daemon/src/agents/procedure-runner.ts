@@ -360,9 +360,13 @@ export function fallbackBrief(originalBrief: string, procedure: Procedure, repla
       const on = s.target?.name ? ` on "${s.target.name}"` : '';
       let detail = '';
       if (s.value !== undefined && s.value !== '') {
-        detail = s.lane === 'key'
-          ? ` — press ${s.value}`
-          : ` — type EXACTLY (verbatim, same characters and format): ${JSON.stringify(s.value)}`;
+        if (s.verb === 'select_text') {
+          detail = ` — SELECT/highlight this exact text (do NOT type it): ${JSON.stringify(s.value)}${s.occurrence ? ` (the occurrence at index ${s.occurrence})` : ''}`;
+        } else if (s.lane === 'key') {
+          detail = ` — press ${s.value}`;
+        } else {
+          detail = ` — type EXACTLY (verbatim, same characters and format): ${JSON.stringify(s.value)}`;
+        }
       }
       return `${i + 1}. [${s.lane}] ${s.desc}${on}${detail}`;
     })
