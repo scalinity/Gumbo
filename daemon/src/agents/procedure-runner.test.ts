@@ -248,6 +248,69 @@ test('diffOutcome: identical captures pass; lost structure, missed styles, and c
   assert.deepEqual(diffOutcome(taught, fragmented), []);
 });
 
+const CAP = (text: string, runs: string[]) =>
+  `=== final document (app "Notes") ===\n${text}\n=== styled ranges (character offsets into the text above) ===\n${runs.join('\n')}`;
+
+test('acceptance verify: matching re-capture completes; divergence falls back with labeled deltas; a failed re-read is honest', async () => {
+  const expectCap = CAP('Hello', ['[0-5] "Hello": Title']);
+  const proc: Procedure = {
+    name: 'note', goal: 'write hello', preconditions: [], apps: ['Notes'],
+    steps: [{ lane: 'ax', desc: 'Type hello', target: { app: 'Notes', role: 'AXTextArea', name: 'Body' }, verb: 'type', value: 'Hello' }],
+    expect: expectCap,
+  };
+  const mk = (doc: () => { ok: boolean; output: string; error_kind?: string }) =>
+    harness({
+      bridge: (a) => (a.kind === 'resolve' ? { ok: true, output: 'g1e1' }
+        : a.kind === 'document_state' ? (doc() as never)
+        : { ok: true, output: '+ changed' }),
+    });
+
+  let r = await mk(() => ({ ok: true, output: expectCap })).run(proc);
+  assert.equal(r.outcome, 'completed');
+  assert.match((r as { report: string }).report, /document verified/);
+
+  const h2 = mk(() => ({ ok: true, output: CAP('Hallo', ['[0-5] "Hallo": Title']) }));
+  r = await h2.run(proc);
+  assert.equal(r.outcome, 'fallback');
+  const fb = r as { atStep: number; progress: string };
+  assert.equal(fb.atStep, 1, 'verification failure lands past the last step');
+  assert.match(fb.progress, /DOCUMENT DIVERGENCES/);
+  assert.match(fb.progress, /untrusted document TEXT/, 'quoted screen text carries the untrusted label');
+  const docCall = h2.calls.find((c) => c.kind === 'document_state');
+  assert.equal(docCall?.app, 'Notes', 'the re-read app comes from the capture header');
+
+  r = await mk(() => ({ ok: false, output: 'no text document', error_kind: 'element_not_found' })).run(proc);
+  assert.equal(r.outcome, 'fallback');
+  assert.match((r as { reason: string }).reason, /could not be verified/);
+  assert.doesNotMatch((r as { progress: string }).progress, /DIVERGENCES/, 'an unobserved divergence is never framed as one');
+});
+
+test('ensure-visible: with no preceding Button click to re-execute, an unresolvable target drifts', async () => {
+  const h = harness({
+    bridge: (a) => (a.kind === 'resolve'
+      ? { ok: false, output: 'no element matches', error_kind: 'element_not_found' }
+      : { ok: true, output: '+ changed' }),
+  });
+  const r = await h.run({
+    name: 'x', goal: 'g', preconditions: [], apps: ['Notes'],
+    steps: [{ lane: 'ax', desc: 'Pick pink', target: { app: 'Notes', role: 'MenuItem', name: 'Pink' }, verb: 'click' }],
+  });
+  assert.equal(r.outcome, 'fallback');
+  assert.match((r as { reason: string }).reason, /target not found/);
+});
+
+test('a selectorless act step drifts instead of logging a false success', async () => {
+  const h = harness({
+    bridge: (a) => (a.kind === 'resolve' ? { ok: true, output: 'g1e1' } : { ok: true, output: '+ changed' }),
+  });
+  const r = await h.run({
+    name: 'x', goal: 'g', preconditions: [], apps: ['Notes'],
+    steps: [{ lane: 'ax', desc: 'Click something unrecorded', target: { app: 'Notes' }, verb: 'click' }],
+  });
+  assert.equal(r.outcome, 'fallback');
+  assert.match((r as { reason: string }).reason, /no target selector/);
+});
+
 test('drift after the retry bails to fallback with step + reason + verified progress', async () => {
   const h = harness({
     bridge: (a) => (a.kind === 'resolve'

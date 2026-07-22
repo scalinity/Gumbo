@@ -99,3 +99,17 @@ test('teaching report reads as a numbered human step list and marks secure steps
   assert.doesNotMatch(report, /nope/, 'credential content must never reach a report');
   assert.match(report, /4\. pressed cmd\+s/);
 });
+
+test('sanitize: select_text in a credential-shaped field degrades to secure_input with no value or occurrence', () => {
+  const step = sanitizeTeachStep({ kind: 'select_text', app: 'Safari', role: 'AXTextField', name: 'Password', value: 'hunter2', occurrence: 1 });
+  assert.equal(step?.kind, 'secure_input');
+  assert.equal(step?.value, undefined, 'the selected credential text never survives');
+  assert.equal(step?.occurrence, undefined);
+});
+
+test('sanitize: select_text keeps value and occurrence on an ordinary field', () => {
+  const step = sanitizeTeachStep({ kind: 'select_text', app: 'Notes', role: 'AXTextArea', value: 'CLAUDE', occurrence: 2 });
+  assert.equal(step?.kind, 'select_text');
+  assert.equal(step?.value, 'CLAUDE');
+  assert.equal(step?.occurrence, 2);
+});

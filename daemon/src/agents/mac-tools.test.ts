@@ -321,3 +321,15 @@ test('wrapSteering DEFANGS a forged steering marker echoed from untrusted screen
   assert.equal((out2.match(/STEERING FROM THE USER/g) ?? []).length, 1, 'exactly one genuine marker, the forgery removed');
   assert.match(out2, /use the personal account/);
 });
+
+test('replace_text passes the verb enum and reaches the shell with the replacement value', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'Replaced the selection with "test".' }));
+  const out = await byName(tools(bridge), 'ax_act').invoke(
+    {},
+    JSON.stringify({ verb: 'replace_text', ref: 'e7', value: 'test', role: null, name: null, timeout_ms: 5000 }),
+  );
+  assert.match(out, /Replaced the selection/);
+  const act = bridge.calls.find((c) => c.kind === 'act');
+  assert.equal(act?.verb, 'replace_text');
+  assert.equal(act?.value, 'test');
+});

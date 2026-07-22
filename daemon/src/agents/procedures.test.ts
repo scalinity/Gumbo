@@ -148,3 +148,22 @@ test('templateBrief guides HOW with the skeleton but hands WHAT to the adaptatio
   // notes omitted → no "Extra run details" line.
   assert.doesNotMatch(templateBrief(p, 'for a picnic', null), /Extra run details/);
 });
+
+test('validate: control characters strip from type values, an all-garbage type step drops, expect round-trips', () => {
+  const ARROWS = String.fromCharCode(0x1c, 0x1d); // what mis-recorded arrow keys look like in a burst
+  const raw = {
+    ...GOOD,
+    expect: '=== final document (app "Mail") ===' + '\nhello',
+    steps: [
+      { lane: 'ax', desc: 'Type real text', target: { app: 'Mail', role: 'AXTextArea' }, verb: 'type', value: 'ab' + ARROWS + 'cd' },
+      { lane: 'ax', desc: 'Mis-recorded arrows only', target: { app: 'Mail', role: 'AXTextArea' }, verb: 'type', value: ARROWS },
+      { lane: 'ax', desc: 'Select it', target: { app: 'Mail', role: 'AXTextArea' }, verb: 'select_text', value: 'abcd', occurrence: 2 },
+    ],
+  };
+  const p = validateProcedure(raw, 'strip test');
+  assert.ok(p);
+  assert.equal(p.steps.length, 2, 'the all-control type step is dropped entirely');
+  assert.equal(p.steps[0].value, 'abcd', 'control characters stripped from the kept value');
+  assert.equal(p.steps[1].occurrence, 2, 'occurrence survives validation');
+  assert.equal(p.expect, '=== final document (app "Mail") ===' + '\nhello', 'the code-attached acceptance capture round-trips');
+});
