@@ -2630,3 +2630,46 @@ the user's demos surfaced five real gaps (logs referenced: mac-audit.jsonl, task
 Daemon hot-reloads; shell rebuilt. 432/1-skip (+1 app-open routing test). Honest residual: reliably
 typing into Notes' rich body is a hard AX target — the AppleScript rung + verify-before-done are the
 mitigation, but rich-text apps remain the stress case.
+
+### M8 formatting-replay forensics — the actuator tiers of macOS 26 SwiftUI surfaces (2026-07-21)
+
+The packing-list color exam (highlight colors on selected words) failed three runs in a row; a
+live-probe session (scratch Swift AX probes against Notes, terminal already AX-trusted) mapped WHY
+and produced the working ladder. The findings generalize; record them before they're re-derived
+the hard way:
+
+- **Three actuator tiers, measured.** (1) `AXPress` fires reliably on ordinary buttons AND menu-BAR
+  items (pressing `Format ▸ Font ▸ Highlight` applied instantly, no menu visually open). (2)
+  pid-targeted synthetic events (SyntheticInput's default) drive typing and keyboard selection fine
+  but NEVER reach menu tracking or SwiftUI popovers — a pid click on a toolbar button doesn't even
+  open its popover. (3) Global HID events (nil-pid post, the click_point path) are the ONLY input
+  SwiftUI popover controls and open tracking menus respond to.
+- **`AXEnabled` on SwiftUI popover controls is a permanent lie.** Notes' Format popover controls
+  read `(disabled)` ALWAYS — while demonstrably tracking the live selection (Bold flipped to
+  value=1 under a ⌘A) and while real clicks on them work. An `element_disabled` refusal added on
+  the strength of that attribute blocked the one working path and CAUSED a drift; reverted same
+  night. The disabled read is now the escalation TRIGGER instead: performPress global-clicks the
+  element's fresh AX frame when it reads disabled or sits inside an open `AXMenu`.
+- **Context menus opened by `AXShowMenu` are AX-readable but fully deaf**: AXPress, AXPick,
+  pid-keys, even global clicks at item frames all no-op (the menu may never visually open). Walk
+  them for structure, never for actuation. The menu BAR is the reliable menu surface (`menu_path`
+  verb, targetless form).
+- **Programmatic selection is engine-real but event-invisible.** `AXSelectedTextRange` writes land
+  in the text engine (menu-bar actions apply to the range) but fire no input events, so
+  event-driven UI state never hears about them. select_text now anchors the caret via AX and
+  extends with real shift+right keystrokes — readable back AND user-shaped.
+- **Formatting is invisible to value diffs; `AXAttributedStringForRange` → `AXStyleName` is the
+  verify channel** ("Heading, Pink highlight, Contains paragraphs"). menu_path echoes it in its
+  result so a color application is checkable without vision.
+- **Verified end-to-end** on the failed demo's note: keyboard-built selection → AXPress Format →
+  global click on the phantom-disabled color dot → global click on the Pink `AXMenuItem` (found
+  because snapshots now also walk app-level `AXMenu` children) → readback "Pink highlight".
+- Same session: step-0 cold-launch snapshot retry (focus_app answers ok mid-launch; the comment
+  promised slack the code didn't have), `activate`/selector-less steps satisfied by ensureApp
+  (resolve used to hard-fail them), a role-unique resolve rung (recorded `Note[id=<uuid>]`
+  identifiers can never match a fresh note), type-collapses-stale-selection unless straight after
+  select_text (a leftover selection let a `type` DELETE the selected entry), recorder emits
+  discrete `delete` key steps when backspacing already-flushed text (a swallowed backspace shipped
+  a deleted "d" into the compile), compiler collapses consecutive re-selections and drops
+  delete-corrected characters, and `MaxTurnsExceededError` ends as an honest partial report
+  instead of a raw task failure.
