@@ -48,13 +48,13 @@ function seedProfilePrefs(): void {
 /**
  * M7 browser lane: Playwright on a DEDICATED PERSISTENT automation profile
  * (~/Gumbo/browser/profile) — never the user's live Chrome (locked decision: anti-bot burns,
- * the always-open debug port, the profile lock, his whole logged-in life as blast radius).
+ * the always-open debug port, the profile lock, their whole logged-in life as blast radius).
  * HEADED via the installed Chrome (`channel:'chrome'`, no bundled-browser download) so
- * the user can watch, steer, and — in a handoff — act himself.
+ * the user can watch, steer, and — in a handoff — act themselves.
  *
- * The profile PERSISTING (2026-07-20, the user's call — he wants uBlock) replaces the
+ * The profile PERSISTING (2026-07-20, the user's call — they want uBlock) replaces the
  * original capture-once-replay storage state and buys two things: logins stick the moment
- * he performs them (Chrome owns the disk state — nothing for us to capture, nothing for a
+ * they perform them (Chrome owns the disk state — nothing for us to capture, nothing for a
  * crash to lose), and extensions installed once from the Web Store ride along in every
  * task (Playwright's default --disable-extensions is stripped for exactly that; branded
  * Chrome no longer honors --load-extension side-loading, so Web-Store-into-profile is THE
@@ -109,7 +109,7 @@ export class BrowserClient {
         const msg = err instanceof Error ? err.message.split('\n')[0] : String(err);
         throw new Error(`Could not launch Google Chrome on the automation profile: ${msg} — if an automation-profile window is already open (e.g. installing an extension), close it and retry.`);
       }
-      // the user quitting the automation Chrome must not wedge the lane — reset so the
+      // The user quitting the automation Chrome must not wedge the lane — reset so the
       // next task relaunches cleanly ('close' fires however Chrome went away), and tell
       // whoever is listening (a pending handoff declines itself).
       this.context.on('close', () => {

@@ -53,7 +53,7 @@ export type ToolObservation = {
 };
 
 /** Optional M7 wiring: requestHandoff pauses the task for the user's own step (manager owns
- *  the lifecycle — status flip, kill-switch stand-down, notch Done). A login he performs
+ *  the lifecycle — status flip, kill-switch stand-down, notch Done). A login they perform
  *  during the handoff needs no capture step — the persistent automation profile is
  *  Chrome's own disk state. Absent in tests that don't exercise it. */
 export interface MacToolDeps {
@@ -196,7 +196,7 @@ export function createMacTools(
       // SAME choke point as hot mac_do (gateScript: normalize, then decide on the string
       // the executor will run). In this lane a Shortcut confirms too — it's an opaque,
       // arbitrarily-destructive named action triggered off screen-read context, unlike the
-      // hot lane where the user speaks the name himself. Declined = audited, never runs.
+      // hot lane where the user speaks the name themselves. Declined = audited, never runs.
       const { script, decision } = gateScript(interpreter, rawScript, 'subagent');
       let gate: 'auto' | 'confirmed' | 'declined' = decision.route === 'auto' ? 'auto' : 'confirmed';
       if (decision.route === 'confirm') {
@@ -204,7 +204,7 @@ export function createMacTools(
         if (!approved) {
           auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script}`, gate: 'declined', ok: false, error: decision.reason, taskId });
           deps.observe?.({ tool: 'run_script', ok: false, declined: true });
-          return `the user didn't approve that script (${decision.reason}) — try another approach or skip it.`;
+          return `The user didn't approve that script (${decision.reason}) — try another approach or skip it.`;
         }
       }
       const result = await macBridge.request(
@@ -333,15 +333,15 @@ export function createMacTools(
     },
   });
 
-  // M7 cooperative handoff: pause → the user does the ONE step himself → verify → resume.
-  // The kill-switch tap classifies his input as the handoff (not an abort) while this is
+  // M7 cooperative handoff: pause → the user does the ONE step themselves → verify → resume.
+  // The kill-switch tap classifies their input as the handoff (not an abort) while this is
   // pending; deny/timeout comes back false and the model wraps up instead of retrying.
   const requestHandoff = tool({
     name: 'request_handoff',
     description:
       'Pause and hand the machine to the user for ONE step you must not do yourself — a login, a ' +
       'password or 2FA prompt, a permission dialog, a captcha, a payment screen. Describe exactly ' +
-      'what he should do. Returns "done" when he finishes (then VERIFY with a fresh snapshot that ' +
+      'what they should do. Returns "done" when they finish (then VERIFY with a fresh snapshot that ' +
       'the state actually advanced) or "declined" (then wrap up and report what remains). Never try ' +
       'to get past a login yourself.',
     parameters: z.object({
@@ -353,9 +353,9 @@ export function createMacTools(
       auditMacAction({ tier: 'subagent', kind: 'act', action: `handoff: ${reason.slice(0, 160)}`, gate: done ? 'confirmed' : 'declined', ok: done, taskId });
       deps.observe?.({ tool: 'request_handoff', ok: done, declined: !done });
       if (!done) {
-        return "the user declined (or didn't respond in time) — wrap up: report what you completed and what remains, and end the task.";
+        return "The user declined (or didn't respond in time) — wrap up: report what you completed and what remains, and end the task.";
       }
-      return 'the user says the step is done. VERIFY it before continuing: take a fresh snapshot (browser_snapshot / ax_snapshot / screen_ocr) and confirm the state advanced — e.g. the login form is gone.';
+      return 'The user says the step is done. VERIFY it before continuing: take a fresh snapshot (browser_snapshot / ax_snapshot / screen_ocr) and confirm the state advanced — e.g. the login form is gone.';
     },
   });
 
@@ -413,10 +413,10 @@ export function createMacTools(
     name: 'preserve_clipboard',
     description:
       "Save or restore the user's clipboard losslessly (every type — text, image, files). Call " +
-      "action:'save' RIGHT BEFORE you Copy an image to save it (the Copy overwrites his clipboard), " +
-      "then action:'restore' AFTER the file is written and verified — so his clipboard ends up exactly " +
-      'as he left it. It changes nothing on disk and needs no approval. Safety net: if you forget to ' +
-      'restore, his clipboard is restored automatically when the task ends.',
+      "action:'save' RIGHT BEFORE you Copy an image to save it (the Copy overwrites their clipboard), " +
+      "then action:'restore' AFTER the file is written and verified — so their clipboard ends up exactly " +
+      'as they left it. It changes nothing on disk and needs no approval. Safety net: if you forget to ' +
+      'restore, their clipboard is restored automatically when the task ends.',
     parameters: z.object({ action: z.enum(['save', 'restore']) }),
     // No auditMacAction line and no deps.observe() — deliberately, like ax_query/ax_snapshot:
     // this only round-trips the user's OWN clipboard (no external sink, no on-disk effect), and

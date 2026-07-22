@@ -45,9 +45,9 @@ test('validateProcedure redaction: credential-labeled typing becomes a content-f
   const p = validateProcedure({
     goal: 'log in and check the balance',
     steps: [
-      { lane: 'browser', desc: 'Enter the username', target: { role: 'textbox', name: 'Username' }, verb: 'fill', value: 'the user@example.test' },
+      { lane: 'browser', desc: 'Enter the username', target: { role: 'textbox', name: 'Username' }, verb: 'fill', value: 'user@example.test' },
       { lane: 'browser', desc: 'Enter the password', target: { role: 'textbox', name: 'Password' }, verb: 'fill', value: 'hunter2' },
-      { lane: 'handoff', desc: 'the user signs in', value: 'should-not-survive' },
+      { lane: 'handoff', desc: 'The user signs in', value: 'should-not-survive' },
     ],
   }, 'check balance');
   assert.ok(p);
@@ -74,7 +74,7 @@ test('distillTeaching compiles, saves v1, and events procedure.learned', async (
     { kind: 'type', app: 'Mail', role: 'AXTextField', name: 'Subject', value: 'Expenses June', ts: 2 },
   ], 'task1');
   assert.match(summary, /Saved procedure "file expenses" v1 \(taught\) — 3 steps/);
-  assert.match(prompts[0], /demonstration the user performed himself/);
+  assert.match(prompts[0], /demonstration the user performed themselves/);
   assert.match(prompts[0], /click on Button "Compose"/);
   const row = store.getProcedure('file expenses');
   assert.ok(row);

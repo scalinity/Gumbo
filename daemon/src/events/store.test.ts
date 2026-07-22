@@ -90,9 +90,9 @@ test('getTaskBrief is null when task.created carries no brief field', () => {
 
 test('recentTranscripts stitches user/assistant lines oldest-first with roles mapped', () => {
   store.addEvent(null, 'transcript.user', { text: 'hello gumbo' });
-  store.addEvent(null, 'transcript.assistant', { text: 'hi the user' });
+  store.addEvent(null, 'transcript.assistant', { text: 'hi there' });
   const lines = store.recentTranscripts(0).map((l) => `${l.role}:${l.text}`);
-  assert.deepEqual(lines, ['user:hello gumbo', 'assistant:hi the user']);
+  assert.deepEqual(lines, ['user:hello gumbo', 'assistant:hi there']);
 });
 
 const usageBase = {

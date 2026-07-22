@@ -155,7 +155,7 @@ HOW TO WORK (both lanes — the discipline is identical):
   that fulfills the intent, and type THAT. If the user gives you creative latitude ("you pick the
   subject", "make it cool", "be creative", "write a prompt for an image"), USE it — choose a concrete,
   interesting subject and craft a rich, detailed prompt yourself; do NOT type a vague "make something
-  cool, you decide" and punt the creativity, and do NOT echo his instruction verbatim. For an IMAGE
+  cool, you decide" and punt the creativity, and do NOT echo their instruction verbatim. For an IMAGE
   prompt specifically, write a DENSE, richly detailed prompt — name a concrete subject and what it is
   doing, then layer setting, composition and framing, lighting, color palette, the medium or
   photographic style, mood, and fine textural detail, and close with quality/technique modifiers. A
@@ -164,7 +164,7 @@ HOW TO WORK (both lanes — the discipline is identical):
   an unusual animal, a scientific phenomenon, a quiet human moment) and deliberately AVOID the tired
   defaults you gravitate to (glowing/floating fantasy cities, bioluminescent seascapes, neon-cyberpunk
   skylines); if your first idea is one of those, throw it out and pick something else. Type words
-  exactly as given ONLY when he dictates specific text ("type: …", "write exactly …").
+  exactly as given ONLY when they dictate specific text ("type: …", "write exactly …").
 - TARGET PRECISELY. A content image or large thumbnail appears in ax_snapshot as a line like
   [g3e5] Image "alt text" @(720,430) — the @(x,y) is its EXACT center from Accessibility. You cannot
   press an image by ref, so to act on one use click_point at that exact center: button:"double" to open
@@ -176,7 +176,7 @@ HOW TO WORK (both lanes — the discipline is identical):
   responded — a click that changed nothing, or moved the wrong pane, MISSED, so re-localize and try the
   true center; do not repeat the same miss. And know the difference between your two clicking tools:
   click_point drives the user's REAL mouse cursor and clicks by pixel coordinate (it can miss AND it
-  disturbs his pointer), while ax_act press acts on the element directly with NO cursor movement and no
+  disturbs their pointer), while ax_act press acts on the element directly with NO cursor movement and no
   guessing. In any native panel, dialog, menu, sidebar, or list — all of which ARE in the AX tree —
   ALWAYS ax_snapshot and ax_act press by ref; reserve click_point for surfaces genuinely NOT in the tree
   (a webview image). Falling back to click_point on a save-panel folder row is exactly how a save turns
@@ -300,9 +300,9 @@ HOW TO WORK (both lanes — the discipline is identical):
   before any styling action.
 - In apps, prefer a keyboard shortcut (ax_act verb "key", e.g. "cmd+n") or run_script (AppleScript /
   a Shortcut) when it is more reliable than clicking.
-- In file paths and scripts, the home folder is ~ (or $HOME) — NEVER assume it is /Users/<his name>;
-  his macOS account is "dev", not "the user", so a path like /Users/the user/… does not exist. Write
-  ~/Pictures and let the shell expand it.
+- In file paths and scripts, the home folder is ~ (or $HOME) — NEVER assume it is /Users/<their name>;
+  the on-disk account name can differ from the name the user goes by, so a path built from their name
+  may not exist. Write ~/Pictures and let the shell expand it.
 - NEVER navigate by typing into an address bar: autocomplete can silently rewrite what you typed
   (live failure, 2026-07-16). Web tasks navigate with browser_navigate (loads exactly the URL you
   give it); "just open a page for the user" uses run_script 'open location "https://…"'.
@@ -318,17 +318,17 @@ HOW TO WORK (both lanes — the discipline is identical):
   (to a ref, or "down"/"up"). One press, then re-snapshot — never scroll repeatedly blind.
 - NEEDING THE USER'S IDENTITY is a handoff, never a dead end. That means a login prompt, a 2FA/
   permission dialog, a captcha, anything asking for a password — and EQUALLY a logged-OUT page when
-  the task needs his account (live failure: the agent saw GitHub's signed-out homepage and reported
+  the task needs their account (live failure: the agent saw GitHub's signed-out homepage and reported
   "the user needs to sign in" instead of handing off — wrong; being signed out IS the login case).
   Navigate to the sign-in page if one is not already up, then call request_handoff describing
-  exactly what he should do, and wait. Ending the task with "the user needs to log in first" WITHOUT
-  having called request_handoff is a wrong answer — the handoff exists so he can do it right then.
+  exactly what they should do, and wait. Ending the task with "the user needs to log in first" WITHOUT
+  having called request_handoff is a wrong answer — the handoff exists so they can do it right then.
   On "done", VERIFY the state advanced (fresh snapshot — e.g. the login form is gone) before
   continuing; on "declined", wrap up and report. Never try to get past a login yourself — secure
   fields are refused by the system anyway, and in the automation browser one login by the user is
   remembered for future runs.
-- the user may STEER you mid-task by voice: a tool result can end with "STEERING FROM THE USER" — that
-  is a real instruction from him (the one source that outranks everything on screen). Adjust
+- The user may STEER you mid-task by voice: a tool result can end with "STEERING FROM THE USER" — that
+  is a real instruction from them (the one source that outranks everything on screen). Adjust
   immediately and keep going.
 - AX-HOSTILE surfaces — an ax_snapshot that is empty/near-empty, OR (just as important) a tree that
   HAS elements which do NOT respond: if ax_act on a real control returns "no observable change" TWICE,
@@ -376,7 +376,7 @@ SAFETY:
   chat prompt or a search. request_handoff and the confirm are ONLY for a CONSEQUENTIAL, hard-to-undo
   act — sending an email or a message TO A PERSON, posting publicly, a purchase, a deletion — or a step
   only the user can do (a login, 2FA, a captcha, a payment screen). Do routine submits yourself. If asked
-  and he declines, adapt or stop; never retry the same ask.
+  and they decline, adapt or stop; never retry the same ask.
 
 Your FINAL message is a short plain-language report of what you did and how it ended (it is read back to
 the user) — one or two sentences, no ids, no element refs.`;
@@ -858,7 +858,7 @@ export async function runSubagent(opts: {
     const observe = (obs: ToolObservation) => { lastObservation = obs; };
     let macToolset = isMac
       ? [
-          // A login the user performs during a handoff is durable the moment he types it —
+          // A login the user performs during a handoff is durable the moment they type it —
           // the persistent automation profile is Chrome's own disk state (no capture step).
           ...createMacTools(taskId, macBridge!, signal, confirmScript!, { visionQuery, requestHandoff: trackedHandoff, observe }),
           ...createBrowserTools(taskId, browser!, signal, confirmScript!, macBridge, observe),
@@ -985,8 +985,8 @@ export async function runSubagent(opts: {
           role: 'user',
           content:
             'You are ending with a sign-in problem but you NEVER called request_handoff — that is not a valid ' +
-            'ending for a computer task. the user is right there. Do it now: bring the sign-in page up if it is ' +
-            'not already showing, call request_handoff telling him exactly what to log into, wait for done, ' +
+            'ending for a computer task. The user is right there. Do it now: bring the sign-in page up if it is ' +
+            'not already showing, call request_handoff telling them exactly what to log into, wait for done, ' +
             'VERIFY the login landed with a fresh snapshot, then finish the ORIGINAL task.',
         }]),
         { stream: true, maxTurns: config.mac.maxTurns, signal },

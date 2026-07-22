@@ -17,7 +17,7 @@ export const STEERING_PREFIX = 'STEERING FROM THE USER';
 // `STEERING  FROM  THE USER` (padded), and mixed case are all neutralized, not just the
 // exact uppercase form (second-review 🟡). A plain-text channel can't be perfectly
 // authenticated, but the cheap variants shouldn't survive.
-const STEERING_MARKER = /steering\s+from\s+the user/gi;
+const STEERING_MARKER = /steering\s+from\s+the\s+user/gi;
 
 export function wrapSteering<T extends { invoke: (...args: never[]) => Promise<unknown> }>(
   toolObj: T,

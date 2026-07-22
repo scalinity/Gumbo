@@ -243,7 +243,7 @@ test('sendToSession refuses a finished computer task with a clear message', () =
 // ——— kill-switch stand-down around notch confirms (live-demo Catch-22) ———
 // Answering ANY notch prompt takes the user's mouse — the tap must read that as the
 // answer, not an abort. Pinned after the browser host confirm died to the kill switch
-// the moment he moved toward Approve.
+// the moment they moved toward Approve.
 
 test('makeStandDown brackets a confirm with setHandoff true→false and passes the result through', async () => {
   const calls: boolean[] = [];

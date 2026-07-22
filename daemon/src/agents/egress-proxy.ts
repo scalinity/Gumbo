@@ -167,7 +167,7 @@ export async function startEgressProxy(
         (ok) => ok,
         () => {
           // Transient escalation error → deny THIS attempt but don't cache it, so a later connect
-          // can re-escalate once the supervisor recovers (a genuine the user-deny stays cached). 🔵
+          // can re-escalate once the supervisor recovers (a genuine user-deny stays cached). 🔵
           decided.delete(host);
           return false;
         },

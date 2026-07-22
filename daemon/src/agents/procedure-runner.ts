@@ -332,7 +332,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
   for (let i = 0; i < procedure.steps.length; i += 1) {
     if (deps.signal.aborted) throw new Error('cancelled');
     if (deps.steeringPending()) {
-      return { outcome: 'fallback', atStep: i, reason: 'the user steered mid-replay — handing to the full loop so his guidance is followed', progress: log.join('\n') };
+      return { outcome: 'fallback', atStep: i, reason: 'the user steered mid-replay — handing to the full loop so their guidance is followed', progress: log.join('\n') };
     }
     const step: ProcedureStep = { ...procedure.steps[i] };
     if (step.param && paramValues[i] !== undefined) step.value = paramValues[i];
@@ -604,7 +604,7 @@ async function resolveParams(
     'You resolve run-specific parameter values for the replay of a saved Mac procedure. Output STRICT JSON only: ' +
       '{"values": {"<stepIndex>": "<value>"}}. Update each recorded value to what THIS run needs (today\'s date, ' +
       "the user's notes); keep the recorded value when nothing suggests a change. Never invent credentials.",
-    `Procedure: ${procedure.name} — ${procedure.goal}\nToday: ${today}\nthe user's run notes: ${notes ?? '(none)'}\nParameterized steps:\n${listing}`,
+    `Procedure: ${procedure.name} — ${procedure.goal}\nToday: ${today}\nThe user's run notes: ${notes ?? '(none)'}\nParameterized steps:\n${listing}`,
     signal,
   );
   try {

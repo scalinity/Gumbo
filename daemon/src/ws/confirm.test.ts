@@ -25,7 +25,7 @@ test('deny immediately when no shell is connected (fail safe)', async () => {
   assert.equal(sent.length, 0, 'no confirm_request when nobody can answer');
 });
 
-test('resolve true on the user approval', async () => {
+test('resolve true on the user\'s approval', async () => {
   const { hub, sent } = fakeHub(true);
   const bridge = new ConfirmBridge(hub, 1000);
   const p = bridge.request('t', 'Task', 'Run: x', 'reason');

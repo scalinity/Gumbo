@@ -19,7 +19,7 @@ One principal, one machine, ~five action channels, ~five egress sinks, a voice s
 undo. Every design decision flows from that shape — never from internet or enterprise
 conventions generalized past their assumptions.
 
-- **The the user-moment test (the binding build filter, SPEC §cross-cutting):** before building
+- **The user-moment test (the binding build filter, SPEC §cross-cutting):** before building
   any sub-item, name the concrete moment in the user's day it serves — "what did my sister text me",
   "undo that", "what's this beeping", "stop asking about this". "A paper recommended it" /
   "the field converged here" is context, never a reason. Mechanisms whose real audience is a
@@ -145,9 +145,9 @@ conventions generalized past their assumptions.
   it reentrant-deadlocks). The intervention cap interrupts via a `setImmediate`-scheduled
   `query.interrupt()` for the same reason.
 - **FOOTGUN (latent, review 2026-07-16):** the runner leaves `settingSources` at default, so a
-  session loads the user's `~/.claude` skills/agents/CLAUDE.md — AND his `settings.json` permission
+  session loads the user's `~/.claude` skills/agents/CLAUDE.md — AND their `settings.json` permission
   rules. A `Bash(...)` allow rule there resolves before the supervisor and would silently ungate
-  that command class. the user has no allow rules today (verified), so it's inert — but if
+  that command class. The user has no allow rules today (verified), so it's inert — but if
   escalations ever stop firing, check `~/.claude/settings.json` `permissions.allow` first.
 
 ## M4.1 OS sandbox (whole-CLI Seatbelt wrap — governs file tools AND bash; rebuilt 2026-07-16)
@@ -191,11 +191,11 @@ conventions generalized past their assumptions.
 ## Working rules
 
 - Dev only: `npm run dev` (daemon: `tsx watch`; dashboard: Vite). Don't run build/compile
-  commands (`tsc`, `vite build`, `xcodebuild`) unless the user asks — exception: he authorized
+  commands (`tsc`, `vite build`, `xcodebuild`) unless the user asks — exception: they authorized
   `xcodegen`/`xcodebuild` for `shell/`.
 - Daemon tests: `npm test -w daemon` (`node --test`, strip-only TS — no constructor parameter
   properties or other non-erasable syntax).
 - Sandboxed runs can't write `~/Gumbo`; set `GUMBO_HOME=<scratchpad>` (and `GUMBO_PORT` to avoid
   colliding with a live daemon on 8737).
-- Gumbo addresses the user as **the user**. Minimal implementations only — no speculative features;
-  when in doubt, apply the the user-moment test.
+- Gumbo addresses the user by name. Minimal implementations only — no speculative features;
+  when in doubt, apply the user-moment test.

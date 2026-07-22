@@ -109,7 +109,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       '`tell application "Notes" to activate`. When the user names an APP (ChatGPT, Slack, Notes…), open ' +
       'the installed Mac APP, not a website — use `tell application "<name>" to activate`; Gumbo ' +
       'resolves close/partial names to the installed app (say "ChatGPT" even if it is "ChatGPT Classic") ' +
-      'and launches it if needed. Only open a website when he names a site or URL. Also single-shot: ' +
+      'and launches it if needed. Only open a website when they name a site or URL. Also single-shot: ' +
       'toggle a setting, read system info ' +
       '(tmutil, defaults read, osascript one-liners). Only escalate to spawn_subagent(task_type "mac") ' +
       'when you must then CLICK, TYPE, or navigate menus INSIDE the app. NEVER pair the two for the web: ' +
@@ -227,7 +227,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         // Direct SQL, not the 200-event window above — a chatty session can push the
         // plan event out of the slice while it's still the one awaiting approval.
         const plan = (store.getLatestEventPayload(task_id, 'claude.plan') as { plan?: string } | null)?.plan;
-        if (plan && plan !== '{}') parts.push(`Claude's plan (awaiting the user's approval — read it to him on request):\n${plan.slice(0, 3000)}`);
+        if (plan && plan !== '{}') parts.push(`Claude's plan (awaiting the user's approval — read it to them on request):\n${plan.slice(0, 3000)}`);
       }
       const recent = events
         .slice(-12)
@@ -311,7 +311,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       runImageGeneration({ prompt, shape, quality, store, announce: deps.announce }).catch((err: unknown) => {
         store.addEvent(null, 'session.error', { message: `image announce: ${String(err)}` });
       });
-      return 'Image generation started — a generating orb is already on the user\'s screen (top right) and will become the image when it lands; you will be told when it does. If you already told him it\'s coming, add at most ONE short sentence — never repeat yourself, and never tell him to check the gallery or open anything himself.';
+      return 'Image generation started — a generating orb is already on the user\'s screen (top right) and will become the image when it lands; you will be told when it does. If you already told them it\'s coming, add at most ONE short sentence — never repeat yourself, and never tell them to check the gallery or open anything themselves.';
     },
   });
 
@@ -320,10 +320,10 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   const openImage = tool({
     name: 'open_image',
     description:
-      "Open one of the user's existing images from his gallery on his screen (the viewer/editor) and " +
-      'make it the edit target. Use whenever he references an image he already has ("get the ember ' +
+      "Open one of the user's existing images from their gallery on their screen (the viewer/editor) and " +
+      'make it the edit target. Use whenever they reference an image they already have ("get the ember ' +
       'back up", "open the dragon one") — NEVER regenerate an image that already exists. Pass words ' +
-      "from how he referred to it, or null for his most recent image. Image names are plain words — " +
+      "from how they referred to it, or null for their most recent image. Image names are plain words — " +
       'say them naturally, without the .png.',
     parameters: z.object({
       name: z.string().nullable().describe("Words identifying the image ('green ember'), or null for the most recent"),
@@ -335,7 +335,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         const recent = findGalleryImages(null, 5);
         return recent.length === 0
           ? 'The gallery is empty — nothing to open yet.'
-          : `No image matches "${query}". Recent images: ${recent.join(', ')} — ask the user which he means.`;
+          : `No image matches "${query}". Recent images: ${recent.join(', ')} — ask the user which they mean.`;
       }
       const file = matches[0];
       if (query && matches.length > 1) {
@@ -355,7 +355,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     description:
       'Edit a previously generated image with a plain-language instruction. Use when the user asks to ' +
       'change, tweak, fix, or redo an image. Pass file null (the usual case): that targets the image ' +
-      'he has open in the image panel — including any area he highlighted with the brush — or, if ' +
+      'they have open in the image panel — including any area they highlighted with the brush — or, if ' +
       'none is open, the most recently created image ("edit the image you just made"). Only pass a ' +
       'filename if the user explicitly named a different image. Returns immediately; the edit lands ' +
       "as a NEW version and you will be told when it's ready.",
@@ -376,7 +376,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       // forest" refusing while the image sat right there in the gallery (live, 20:33).
       const target = named ?? ctx?.file ?? deps.imageContext.latest ?? findGalleryImages(null, 1)[0];
       if (!target) {
-        return 'No image is open, none was named, and the gallery is empty — ask the user to describe the image he wants created.';
+        return 'No image is open, none was named, and the gallery is empty — ask the user to describe the image they want created.';
       }
       // The brush selection belongs to the viewer's OPEN image; a target resolved any
       // other way (named differently, or the latest-created fallback) must not inherit it.
@@ -389,7 +389,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       runImageEdit({ file: target, prompt, strokes, store, announce: deps.announce }).catch((err: unknown) => {
         store.addEvent(null, 'session.error', { message: `image edit announce: ${String(err)}` });
       });
-      return `Edit started in the background${strokes && strokes.length > 0 ? ' on the highlighted area' : ''} — a working orb is on the user's screen and becomes the new version when it lands; you will be told when it does. If you already told him it's on the way, add at most ONE short sentence.`;
+      return `Edit started in the background${strokes && strokes.length > 0 ? ' on the highlighted area' : ''} — a working orb is on the user's screen and becomes the new version when it lands; you will be told when it does. If you already told them it's on the way, add at most ONE short sentence.`;
     },
   });
 
@@ -403,7 +403,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       'natural phrasing ("at 5", "in 10 minutes") to an absolute future local date-time yourself ' +
       'using the current date and time from your instructions.',
     parameters: z.object({
-      text: z.string().describe('What to remind the user about, in his words'),
+      text: z.string().describe('What to remind the user about, in their words'),
       fire_at: z
         .string()
         .describe('Absolute LOCAL date-time, ISO 8601 with no timezone suffix, e.g. 2026-07-16T17:00:00'),
@@ -484,7 +484,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       'Monday at 8:30", "the first Monday of each month at 9"). Only saved procedures can be ' +
       'scheduled (teach one or save one first — run_procedure without a match lists what exists). ' +
       'Unattended runs NEVER auto-approve anything: a step that would ask the user pauses the run ' +
-      'and waits for him. Runs fire only while this Mac is awake with Gumbo running (no ' +
+      'and waits for them. Runs fire only while this Mac is awake with Gumbo running (no ' +
       'Reminders.app entry) — for a spoken reminder use set_reminder instead. For one-shots ' +
       'resolve fire_at yourself like set_reminder; for recurring pass recurrence and fire_at null.',
     parameters: z.object({
@@ -550,10 +550,10 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   const presentFileTool = tool({
     name: 'present_file',
     description:
-      'Show the user a file on his screen — a document card appears in the corner and opens in a ' +
+      'Show the user a file on their screen — a document card appears in the corner and opens in a ' +
       'clean reader (markdown rendered nicely). Use whenever a task produced a file (a spec, ' +
-      'plan, report, doc, or code) and the user should see it — offer it instead of telling him ' +
-      'to go find the file himself. Pass the absolute path exactly as it appears in the task ' +
+      'plan, report, doc, or code) and the user should see it — offer it instead of telling them ' +
+      'to go find the file themselves. Pass the absolute path exactly as it appears in the task ' +
       'report or activity.',
     parameters: z.object({
       path: z.string().describe('Absolute path of the file to show'),
@@ -565,21 +565,21 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       const shown = deps.presentFile(read);
       store.addEvent(null, 'file.presented', { path: read.path, shown });
       return shown
-        ? 'It is on the user\'s screen now — the document card in the corner opens the full view (he can also prompt edits from there). Tell him it\'s up.'
+        ? 'It is on the user\'s screen now — the document card in the corner opens the full view (they can also prompt edits from there). Tell them it\'s up.'
         : 'No shell is connected, so nothing can be shown on screen — tell the user, and offer to read it aloud instead.';
     },
   });
 
-  // Editable file viewer (2026-07-16): the user prompts a change to the document he has open
+  // Editable file viewer (2026-07-16): the user prompts a change to the document they have open
   // and the agent rewrites it in place (lightweight LLM round-trip, no coding session). The
   // filename never passes through the voice model — resolved from the viewer's file_context.
   const editFileTool = tool({
     name: 'edit_file',
     description:
       'Edit the document the user currently has open in the file viewer — apply a plain-language ' +
-      'change (fix wording, correct a fact, add or remove a section, reformat). Use when he asks ' +
-      'to change, fix, tweak, or rewrite the document he is looking at. Returns immediately; the ' +
-      'updated version refreshes on screen. Only works on documents in his Gumbo workspace — for ' +
+      'change (fix wording, correct a fact, add or remove a section, reformat). Use when they ask ' +
+      'to change, fix, tweak, or rewrite the document they are looking at. Returns immediately; the ' +
+      'updated version refreshes on screen. Only works on documents in their Gumbo workspace — for ' +
       'repo or code files use spawn_claude_session instead.',
     parameters: z.object({
       prompt: z.string().describe("The edit instruction, faithful to the user's words"),
@@ -592,7 +592,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       runFileEdit({ path: open, prompt, store, present: deps.presentFile, announce: deps.announce }).catch((err: unknown) => {
         store.addEvent(null, 'session.error', { message: `file edit announce: ${String(err)}` });
       });
-      return "Editing the document in the background — tell the user it's on the way; the updated version will refresh on his screen. You'll be told when it lands.";
+      return "Editing the document in the background — tell the user it's on the way; the updated version will refresh on their screen. You'll be told when it lands.";
     },
   });
 
@@ -602,16 +602,16 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   const teachProcedure = tool({
     name: 'teach_procedure',
     description:
-      'Learn a Mac procedure by WATCHING the user demonstrate it himself. action "start" begins ' +
-      'recording his clicks and typing as a named procedure — use when he says "watch me", "let me ' +
-      'show you how", "I\'ll teach you"; needs a short name (infer one from what he says he\'s about ' +
-      'to demonstrate, e.g. "file expense report"). While recording, everything he does on the Mac ' +
+      'Learn a Mac procedure by WATCHING the user demonstrate it themselves. action "start" begins ' +
+      'recording their clicks and typing as a named procedure — use when they say "watch me", "let me ' +
+      'show you how", "I\'ll teach you"; needs a short name (infer one from what they say they\'re about ' +
+      'to demonstrate, e.g. "file expense report"). While recording, everything they do on the Mac ' +
       'is the demonstration; passwords are never recorded. action "stop" ends and saves the ' +
-      'recording — use when he says "done", "that\'s it", "stop watching". action "cancel" discards ' +
+      'recording — use when they say "done", "that\'s it", "stop watching". action "cancel" discards ' +
       'it ("never mind", "forget that"). Recording shows in the notch the whole time. action ' +
       '"save_last_run": when Gumbo itself just finished a multi-step computer task and the user says ' +
       '"save that as a procedure" / "remember how you did that" — distills that run instead of a ' +
-      'demonstration (name: infer from his words or the task). ACKNOWLEDGE FIRST: say one short ' +
+      'demonstration (name: infer from their words or the task). ACKNOWLEDGE FIRST: say one short ' +
       'line ("Saving that run now") BEFORE calling — distillation takes ~20 silent seconds and an ' +
       'unacknowledged request feels unheard; the tool result then carries the real confirmation ' +
       'to speak (never a second acknowledgment). action "list": what procedures are ' +
@@ -630,12 +630,12 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         .boolean()
         .nullable()
         .default(null)
-        .describe('save_last_run only: pass true ONLY after the user explicitly confirms he wants a task that finished a while ago (the tool refuses stale saves otherwise); null everywhere else'),
+        .describe('save_last_run only: pass true ONLY after the user explicitly confirms they want a task that finished a while ago (the tool refuses stale saves otherwise); null everywhere else'),
       task_id: z
         .string()
         .nullable()
         .default(null)
-        .describe('save_last_run only: the internal id of the run the user chose, ONLY after the tool listed several recent candidates and he picked one; null everywhere else'),
+        .describe('save_last_run only: the internal id of the run the user chose, ONLY after the tool listed several recent candidates and they picked one; null everywhere else'),
     }),
     execute: async ({ action, name, confirm_old, task_id }) => {
       try {
@@ -656,13 +656,13 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
           }
           const removed = store.deleteProcedure(row.name);
           store.addEvent(null, 'procedure.deleted', { name: row.name, versions: removed });
-          return `Deleted "${row.name}"${removed > 1 ? ` (all ${removed} versions)` : ''}. Tell the user BY NAME what you removed — when he says "delete them all", name each one as it goes, so he knows exactly what's gone.`;
+          return `Deleted "${row.name}"${removed > 1 ? ` (all ${removed} versions)` : ''}. Tell the user BY NAME what you removed — when they say "delete them all", name each one as it goes, so they know exactly what's gone.`;
         }
         if (action === 'start') {
           const trimmed = name?.trim();
           if (!trimmed) return 'A name is needed to start — ask the user what to call this procedure.';
           await manager.startTeaching(trimmed);
-          return `Recording — watching the user demonstrate "${trimmed}". Tell him to go ahead and to say "done" when he's finished.`;
+          return `Recording — watching the user demonstrate "${trimmed}". Tell them to go ahead and to say "done" when they're finished.`;
         }
         if (action === 'stop') {
           try {
@@ -670,7 +670,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
             return `Recording stopped (${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}"). The save is still compiling; a separate directive will arrive in a moment, and THAT turn — not this one — is where the confirmation gets spoken. For THIS turn say at most a tiny acknowledgment like "Got it." — NEVER say "Learned", "saved", "ready", or the procedure name now (the user would hear the confirmation twice), and never pre-narrate ("distilling…", "I'll let you know").`;
           } catch {
             // Already stopped — the user likely finished by clicking the teaching orb and THEN also
-            // said "done". The procedure was already captured; never tell him nothing was stored.
+            // said "done". The procedure was already captured; never tell them nothing was stored.
             return `Nothing is recording right now. If you JUST finished a demonstration (e.g. by clicking its orb), it's ALREADY SAVED — reassure the user it's captured and ready to run. Do NOT claim it wasn't saved.`;
           }
         }
@@ -698,7 +698,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
               const listed = recent
                 .map((t) => `"${t.title}" (internal id ${t.id}, ${Math.max(1, Math.round((Date.now() - t.updated_at) / 60_000))} min ago)`)
                 .join('; ');
-              return `NOT saved — several computer tasks just finished and "that" is ambiguous: ${listed}. A follow-up fix/repair run is usually NOT the procedure the user means (its steps assume the broken state). Ask him WHICH run to save — name them naturally, never say the ids aloud — then call save_last_run again with task_id set to his choice.`;
+              return `NOT saved — several computer tasks just finished and "that" is ambiguous: ${listed}. A follow-up fix/repair run is usually NOT the procedure the user means (its steps assume the broken state). Ask them WHICH run to save — name them naturally, never say the ids aloud — then call save_last_run again with task_id set to their choice.`;
             }
           }
           // "That" means something Gumbo JUST did. A quick voice answer (x_lookup,
@@ -712,7 +712,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
           if (!task_id && age > config.procedures.saveLastRunMaxAgeMs && confirm_old !== true) {
             const agoMin = Math.round(age / 60_000);
             const ago = agoMin < 60 ? `${agoMin} minutes` : `${Math.round(agoMin / 6) / 10} hours`;
-            return `NOT saved — nothing recent qualifies. The newest finished computer task is "${last.title}", from ${ago} ago; quick spoken answers (news lookups, searches) are not replayable computer tasks and cannot be saved. Tell the user exactly that, name "${last.title}" and its age, and ask if that old task is really what he wants saved. ONLY if he says yes, call save_last_run again with confirm_old true.`;
+            return `NOT saved — nothing recent qualifies. The newest finished computer task is "${last.title}", from ${ago} ago; quick spoken answers (news lookups, searches) are not replayable computer tasks and cannot be saved. Tell the user exactly that, name "${last.title}" and its age, and ask if that old task is really what they want saved. ONLY if they say yes, call save_last_run again with confirm_old true.`;
           }
           const saved = await deps.procedures.saveFromTask(last.id, name?.trim() || last.title);
           return `Saved "${saved.name}" (version ${saved.version}, ${saved.stepCount} steps) as a reusable procedure — distilled from the task "${last.title}". SAY the source out loud (e.g. "Saved ${saved.name} — from the run that did ${last.title}") so a wrong source gets caught immediately.`;
@@ -733,9 +733,9 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     name: 'run_procedure',
     description:
       'Run a SAVED procedure — something Gumbo learned by watching the user demonstrate it, or saved ' +
-      'from a successful run. Use when he asks for a task he taught or saved ("file this month\'s ' +
-      'expense report", "do the invoices thing like I showed you"). Pass his words as `procedure` — ' +
-      'exact name or a description both match. If nothing matches, tell him what IS saved and offer a ' +
+      'from a successful run. Use when they ask for a task they taught or saved ("file this month\'s ' +
+      'expense report", "do the invoices thing like I showed you"). Pass their words as `procedure` — ' +
+      'exact name or a description both match. If nothing matches, tell them what IS saved and offer a ' +
       'normal task (spawn_subagent) instead — never guess. A faithful run is fast and quiet, and still ' +
       'asks via the notch before anything risky (approvals never carry over from the demonstration). ' +
       'If the user asks for the task but CHANGED — "…but for a picnic", "…but make it formal", "…for the ' +

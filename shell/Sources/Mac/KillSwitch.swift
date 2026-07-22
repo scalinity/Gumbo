@@ -12,8 +12,8 @@ import CoreGraphics
 ///  1. Pure-modifier events (.flagsChanged) never abort — the ⌃⌥ push-to-talk chord IS a
 ///     flagsChanged, and voice steering into a running task requires holding it. A
 ///     modifier alone can neither type nor click, so this gives up no takeover coverage.
-///  2. Handoff mode: while the daemon says the user is performing a step HIMSELF (login,
-///     dialog), his input is the handoff, not an abort.
+///  2. Handoff mode: while the daemon says the user is performing a step THEMSELVES (login,
+///     dialog), their input is the handoff, not an abort.
 final class KillSwitch {
     /// Fired once per arm, on the main thread, with the abort reason for the daemon.
     var onFire: ((String) -> Void)?
@@ -40,7 +40,7 @@ final class KillSwitch {
         didSet {
             // Re-arm GRACE (live demo 2026-07-20): the user's trailing mouse drift right
             // after clicking Approve aborted the task — a hand doesn't freeze at the
-            // click frame. Input shortly after a stood-down window ends is still him
+            // click frame. Input shortly after a stood-down window ends is still them
             // finishing the answer, not a takeover; steady-state stays hair-trigger.
             // Same threading story as the Bool: an aligned Double store/load can't tear
             // on arm64, and one misjudged event is harmless.
@@ -88,7 +88,7 @@ final class KillSwitch {
         CGEvent.tapEnable(tap: tap, enable: true)
         // M8: arming gets the same grace as a handoff end — a fresh arm is always
         // adjacent to some interaction of the user's (an unattended routine RE-arming the
-        // instant he clicks Approve on its parked confirm is the sharp case: his trailing
+        // instant they click Approve on its parked confirm is the sharp case: their trailing
         // mouse drift must not abort the resuming task). Steady-state stays hair-trigger.
         // Accepted residual (review 🔵, documented-and-kept): an ATTENDED fresh arm gets
         // the same 1.5 s window — the shell can't distinguish the cases (mac_task is one
@@ -130,7 +130,7 @@ final class KillSwitch {
             }
             return
         }
-        // M7 handoff/confirm: the user is doing his step — his input is the point, not an abort.
+        // M7 handoff/confirm: the user is doing their step — their input is the point, not an abort.
         if handoffActive { return }
         // …and the moments right after: trailing motion from answering the prompt.
         if CFAbsoluteTimeGetCurrent() - handoffEndedAt < rearmGraceSeconds { return }

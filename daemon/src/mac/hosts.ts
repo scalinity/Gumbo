@@ -62,7 +62,7 @@ export function hostOf(url: string): string | null {
   }
 }
 
-/** True when the URL's host is the user-approved: an exact entry or a subdomain of one
+/** True when the URL's host is user-approved: an exact entry or a subdomain of one
  *  (bare domains match subdomains, like sandbox.allowedDomains). */
 export function hostAllowed(url: string): boolean {
   const host = hostOf(url);

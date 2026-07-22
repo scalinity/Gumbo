@@ -2,7 +2,7 @@ import AppKit
 
 /// M8 image-save: lossless clipboard preservation around a "Copy Image → write to disk"
 /// flow. The Copy clobbers the user's clipboard with the image; `snapshot()` before it and
-/// `restore()` after put back EXACTLY what he had — every representation (plain/rich text,
+/// `restore()` after put back EXACTLY what they had — every representation (plain/rich text,
 /// image, file URLs), not just the string flavor `SyntheticInput.paste` keeps. One saved
 /// snapshot at a time (a single sub-agent save flow, n-of-1); a second snapshot overwrites
 /// the first. Called on the main thread from MacBridge's dispatch (like the other

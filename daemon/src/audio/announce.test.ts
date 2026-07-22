@@ -13,7 +13,7 @@ const { needsInputAnnounce } = await import('./announce.ts');
 
 test('needsInputAnnounce interpolates title and reason into both halves', () => {
   const { cold, live } = needsInputAnnounce('Harness spec', 'the plan needs your approval');
-  assert.equal(cold, 'the user, the Harness spec task is paused — the plan needs your approval.');
+  assert.equal(cold, 'The user, the Harness spec task is paused — the plan needs your approval.');
   assert.match(live, /"Harness spec" just paused and needs the user: the plan needs your approval\./);
   assert.match(live, /Never mention task ids\./);
   for (const s of [cold, live]) assert.ok(!/task[_ ]?id\s*[:=]|\bt-[a-z0-9]/i.test(s), 'no id-shaped content');

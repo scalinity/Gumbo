@@ -404,7 +404,7 @@ test('handoff steps ride the M7 machinery: done continues, declined stops', asyn
   const proc: Procedure = {
     name: 'login flow', goal: 'authenticated action', preconditions: [], apps: ['Notes'],
     steps: [
-      { lane: 'handoff', desc: 'the user signs in' },
+      { lane: 'handoff', desc: 'The user signs in' },
       { lane: 'ax', desc: 'Click New Note', target: { app: 'Notes', role: 'AXButton', name: 'New Note' }, verb: 'click' },
     ],
   };
@@ -492,7 +492,7 @@ test('fallbackBrief carries the LITERAL typed values + a verbatim-reproduction i
     steps: [
       { lane: 'ax', desc: 'Type the first item', target: { app: 'Notes', role: 'AXTextArea', name: 'Body' }, verb: 'type', value: '- Towels' },
       { lane: 'key', desc: 'Next line', verb: 'key', value: 'return' },
-      { lane: 'handoff', desc: 'the user signs in' }, // no value — redacted; must not print "undefined"
+      { lane: 'handoff', desc: 'The user signs in' }, // no value — redacted; must not print "undefined"
     ],
   };
   const brief = fallbackBrief('do the packing list', proc, { atStep: 0, reason: 'snapshot failed', progress: '' });

@@ -16,6 +16,10 @@ const port = Number.isInteger(envPort) && envPort > 0 && envPort < 65536 ? envPo
 const dashboardPort = 5173;
 const agentHome = process.env.GUMBO_HOME ?? join(homedir(), 'Gumbo');
 
+// The person Gumbo talks to. Optional — when unset, the voice persona never addresses
+// anyone by name (see realtime/session.ts); it's never guessed or hardcoded.
+const userName = process.env.USER_NAME?.trim() || '';
+
 // Organized agent home — never a flat dumping ground. Only `served` subtrees are
 // reachable over /files; `db` and future private state stay off the wire.
 export const home = {
@@ -71,6 +75,7 @@ export const config = {
   host: '127.0.0.1', // loopback only — do not bind all interfaces
   allowedOrigins: [`http://localhost:${dashboardPort}`, `http://127.0.0.1:${dashboardPort}`],
   agentHome,
+  userName,
   home,
   dbPath: join(home.db, 'gumbo.db'),
   models: {
@@ -167,7 +172,7 @@ export const config = {
     // screen_look's nested vision-model query (capture → ask → text answer). Screenshots
     // deliberately NEVER enter the loop context — this bounds the one-shot ask instead.
     visionTimeoutMs: 60_000,
-    // M7 cooperative handoff: the user performs one step himself (login, permission dialog,
+    // M7 cooperative handoff: the user performs one step themselves (login, permission dialog,
     // captcha) and taps Done. Generous like planConfirmTimeoutMs — a login takes minutes,
     // not seconds. Deny-on-timeout stays: an unanswered handoff wraps the task up cleanly.
     handoffTimeoutMs: 300_000,
@@ -223,7 +228,7 @@ export const config = {
   // (~/Gumbo/browser/profile) — never the user's live Chrome (locked decision: anti-bot
   // flags CDP sessions; a burned live profile is unacceptable blast radius). The profile
   // persists across tasks (2026-07-20): logins stick as the user types them, and extensions
-  // he installs once (uBlock) ride along — Chrome's password manager is disabled at
+  // they install once (uBlock) ride along — Chrome's password manager is disabled at
   // profile creation, so "no stored passwords, ever" holds. The browser is HEADED so
   // the user can watch and, in a handoff, act. Runs entirely in-daemon (no TCC involved),
   // so unlike the AX lane there is no shell RPC underneath.
@@ -234,7 +239,7 @@ export const config = {
     settlePollMs: 150, // matches the AX executor's debounced-signature cadence
     snapshotMaxChars: 24_000, // aria snapshot cap the model sees (big pages truncate with a note)
     diffMaxLines: 80, // before/after diff cap — past this, advise a fresh snapshot
-    // Base host allowlist (the user-configured, like sandbox.allowedDomains). Bare domains
+    // Base host allowlist (user-configured, like sandbox.allowedDomains). Bare domains
     // match subdomains. Remembered approvals persist in ~/Gumbo/browser/hosts.json —
     // unknown hosts escalate to a notch confirm (M4.1 egress posture), never a silent 403.
     allowedHosts: [] as string[],
@@ -344,7 +349,7 @@ export const config = {
     timeoutMs: 300_000,
     // The voice model picks a shape; sizes verified against the live API (÷16 rule).
     sizes: { square: '1024x1024', landscape: '1536x1024', portrait: '1024x1536' } as Record<string, string>,
-    // Highest-fidelity default (the user, 2026-07-16 — his "highest quality" ask was
+    // Highest-fidelity default (the user, 2026-07-16 — their "highest quality" ask was
     // silently droppable when quality wasn't a knob). Probed live: quality takes
     // low|medium|high|auto on both generations and edits; no reasoning-class param
     // exists on this endpoint, and gpt-image-2 REJECTS gpt-image-1's input_fidelity

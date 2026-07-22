@@ -29,7 +29,7 @@ final class MacBridge {
     private var recordingActive = false
     // AX + scripts run off the main thread (dense traversal / a blocking child process
     // would jank the notch). Serial so the ref-map generation stays coherent.
-    private let work = DispatchQueue(label: "ai.scalinity.gumbo.mac.bridge")
+    private let work = DispatchQueue(label: "ai.Gumbo.app.mac.bridge")
 
     init() {
         // Kill switch fires on the main thread; forward it to the daemon so it cancels the
@@ -68,8 +68,8 @@ final class MacBridge {
             // just-copied image mid-save.
             return true
         case "mac_handoff":
-            // M7: the user is doing a step himself — stand the kill switch down and hide
-            // the ghost (his real cursor is the one that matters right now).
+            // M7: the user is doing a step themselves — stand the kill switch down and hide
+            // the ghost (their real cursor is the one that matters right now).
             let active = msg["active"] as? Bool ?? false
             DispatchQueue.main.async {
                 self.killSwitch.handoffActive = active

@@ -49,7 +49,7 @@ would find only after absorbing everything Gumbo already is and asking "what's b
 ═══════════════════════════════════════════════════════════════════════
 WHAT GUMBO IS (the full architecture — so your research is grounded, not generic)
 ═══════════════════════════════════════════════════════════════════════
-A personal macOS voice agent for a single user (the user), local and privacy-first. Three
+A personal macOS voice agent for a single user, local and privacy-first. Three
 processes: a Node/TypeScript daemon = the "brain" (binds loopback only, holds ALL API keys);
 a Swift/SwiftUI menu-bar "shell" = the "hands" (owns all macOS TCC grants: microphone,
 Accessibility, Automation, Screen Recording); a React/Vite dashboard (never sees keys).

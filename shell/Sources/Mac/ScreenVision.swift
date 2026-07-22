@@ -257,7 +257,7 @@ enum ScreenVision {
     }
 
     private static func timeoutError() -> Error {
-        NSError(domain: "ai.scalinity.gumbo.vision", code: -2, userInfo: [NSLocalizedDescriptionKey: "capture timed out"])
+        NSError(domain: "ai.Gumbo.app.vision", code: -2, userInfo: [NSLocalizedDescriptionKey: "capture timed out"])
     }
 
     /// Screen Recording denial → typed capture_denied (the daemon tells the user exactly
@@ -271,7 +271,7 @@ enum ScreenVision {
         if denied {
             return AXResult.failure("capture_denied", "Screen Recording is not granted (\(text)).")
         }
-        if ns.code == -2 && ns.domain == "ai.scalinity.gumbo.vision" {
+        if ns.code == -2 && ns.domain == "ai.Gumbo.app.vision" {
             return AXResult.failure("timeout", "Timed out \(what).")
         }
         return AXResult.failure("ax_unavailable", "Failed \(what): \(text)")

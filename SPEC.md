@@ -527,9 +527,9 @@ Same loop, same guardrails, same audit — new LANES only; nothing here changes 
   sessions; a burned live profile is unacceptable blast radius; attaching to the live browser
   would also require a permanently open debug port and fight Chrome's profile singleton — asked
   and re-declined 2026-07-20). The automation profile is PERSISTENT (`launchPersistentContext`,
-  amended 2026-07-20 — the user wants uBlock): logins stick the moment he performs them (Chrome
+  amended 2026-07-20 — the user wants uBlock): logins stick the moment they perform them (Chrome
   owns the disk state; the original capture-once-replay storage-state machinery is retired), and
-  extensions he installs once from the Web Store ride along (Playwright's default
+  extensions they install once from the Web Store ride along (Playwright's default
   `--disable-extensions` is stripped; branded Chrome no longer honors `--load-extension`
   side-loading, so Web-Store-into-profile is the supported route). Chrome's password manager is
   disabled at profile creation — "no stored passwords, ever" holds; the on-disk cookie store is
@@ -558,7 +558,7 @@ Same loop, same guardrails, same audit — new LANES only; nothing here changes 
   are the documented #1 cause of offset clicks.
 - **Cooperative handoff:** M6 classifies login/permission/secure-field as pause states; v2
   completes the round trip. The notch shows why it paused and what happens next; the user performs
-  the one step HIMSELF — the kill-switch tap already distinguishes his input, so his manual step
+  the one step THEMSELVES — the kill-switch tap already distinguishes their input, so their manual step
   is *detected as the handoff*, not an abort — then the agent verifies the state diff and
   resumes. Pause → human step → verify → resume.
 - **Voice steering:** the `send_to_session` idiom, extended to computer-use tasks — a PTT turn
@@ -573,7 +573,7 @@ Same loop, same guardrails, same audit — new LANES only; nothing here changes 
   writes through to it.
 
 **Demo:** "grab the latest invoice from the billing portal and file it in ~/Documents/Bills" —
-the first run pauses at the login (handoff: the user types his password himself, the agent verifies
+the first run pauses at the login (handoff: the user types their password themselves, the agent verifies
 and resumes), downloads, files, and audits the URL trail; the second run replays the stored
 session with no pause. And the vision rung: "read me the output value from [AX-hostile app]" —
 answered via on-device OCR, no cloud screenshot in the event log.
@@ -585,9 +585,9 @@ recurring tasks are done, replays them cheaper/faster/more reliably each time, a
 its own scheduler. Intelligence moves from "figure it out every time" to "remember how we do
 this".
 
-- **Demonstration teaching ("watch me"):** the user performs the task once; the shell's listen-only
-  event tap (the kill-switch plumbing, reused) records his actions WITH their AX context — the
-  role/label/identifier of every element he touches, never coordinates (semantic recording
+- **Demonstration teaching ("watch me"):** The user performs the task once; the shell's listen-only
+  event tap (the kill-switch plumbing, reused) records their actions WITH their AX context — the
+  role/label/identifier of every element they touch, never coordinates (semantic recording
   survives layout drift; a pixel recording is stale by the next window resize). The sub-agent
   compiles the recording into a named procedure. Replay strictness = **adaptive** (research:
   strict / adaptive / goal-oriented — adaptive recommended: follow the demonstrated path, adapt
@@ -633,13 +633,13 @@ self-organization (archiving / reorganizing its home).
 ## M9–M17 — Personal-capability roadmap (specced 2026-07-19; amended 2026-07-21)
 
 M1–M8 built a voice agent that acts on the web, the Mac, and code. M9–M17 make that agent personal:
-it remembers the user, reads the sources he chooses, keeps explicit promises, explains and reverses
+it remembers the user, reads the sources they choose, keeps explicit promises, explains and reverses
 effects where possible, uses a local worker when that buys measured value, prefers typed app actions,
 and can inspect a bounded physical scene when the user asks.
 
 Four decisions bind the roadmap:
 
-- **the user-moments set scope.** Research explains a mechanism; it never creates a milestone. Every
+- **The user-moments set scope.** Research explains a mechanism; it never creates a milestone. Every
   sub-item must name the concrete moment in the user's day it serves.
 - **The cloud model is a disclosure sink.** Cloud processing is accepted under §2's standing grant,
   but the daemon returns the smallest projection sufficient for the turn. Connector content,
@@ -714,7 +714,7 @@ the request needs — never a whole collection by default. Tainted egress defaul
 CONFIRM ("this draft contains text from nytimes.com — send?"), not a deny. Precedence: hard limits
 (secrets never egress unconfirmed; no payment authority; TCC untouched) sit above everything, and a
 standing rule may LOOSEN a default but never cross a hard limit or unlock what the shell can't do;
-between the hard limits and the defaults, the user's standing rules pre-approve his own recurring
+between the hard limits and the defaults, the user's standing rules pre-approve their own recurring
 flows (trusted recipients, known patterns), which is where the read-web→send tax goes to die.
 Source-sets reset per task; creep is structurally impossible.
 
@@ -725,7 +725,7 @@ the sources Gumbo named when it was armed, and stale promises surface before the
 Gumbo never claims it can catch cues from an unconnected or undeclared source. Coverage gaps are
 stated at arm time, not discovered at the miss.
 
-**The the user-moment test (the arc's build filter, binding like the rules above).** Before any
+**The user-moment test (the arc's build filter, binding like the rules above).** Before any
 sub-item is built, name the concrete moment in the user's day it serves — "what did my sister text me",
 "undo that", "what's this beeping", "stop asking about this". "A paper recommended it" / "the
 field converged here" is context, never a reason. A sub-item that can't name its moment is
@@ -803,7 +803,7 @@ it.
   AFTER-INSERT trigger alone — so M9's first DELETE/UPDATE path must add companion FTS triggers (or
   the recall index silently desyncs). Nightly reflection (above) is where decay and
   contradiction-resolution run — no new job.
-  **Build order (the the user-moment test applied):** the COLUMNS land with the phase
+  **Build order (the user-moment test applied):** the COLUMNS land with the phase
   (cheap now, painful to retrofit), and the deletion receipt stays — its function is personal, not
   compliance: it lets Gumbo say "you asked me to forget that" instead of gaslighting. The curation
   LOGIC — per-class decay policy, reconfirmation of stale high-impact claims,
@@ -856,13 +856,13 @@ they're just missing provenance.
   immutable line; personal-sensitivity content in a web-search query → sink policy, same pattern.
   Releasing tainted/secret content past a sink stays an explicit recorded event (FIDES' capacity
   idea: a verified boolean or
-  short enum releases where raw text does not), and the user's standing rules pre-approve his own
+  short enum releases where raw text does not), and the user's standing rules pre-approve their own
   recurring flows between the maxima and the defaults. Cross cases a single bit misses are still
   caught — web-derived data flowing into a Gmail send, a personal memory leaking into a search
   query — but at the boundary, with zero plumbing through the orchestrator. This is not a
   CaMeL/NOVA interpreter. M11's connector-specific projections are part of each connector; a
   generalized content broker remains deferred until a sink check demonstrably leaks.
-- **the user's standing rules: user-authored rules compiled into the same policy table.** AgentSpec
+- **The user's standing rules: user-authored rules compiled into the same policy table.** AgentSpec
   (ICSE 2026) showed the shape and its load-bearing caveat. Repeated
   corrections ("never do that without asking") become durable, inspectable standing rules instead
   of memories the model may or may not recall: a deliberately tiny rule DSL (trigger + predicates +
@@ -937,7 +937,7 @@ are core personal-agent moments Gumbo cannot answer today. Connectors ship read-
 with the shell owning local grants and the daemon minimizing what crosses to the cloud orchestrator.
 
 - **Least disclosure is the architecture, not a footnote.** The cloud orchestrator is a disclosure
-  sink (Rule 4): every connector result it reasons about reaches OpenAI. the user's standing decision
+  sink (Rule 4): every connector result it reasons about reaches OpenAI. The user's standing decision
   (2026-07-21) is **cloud processing accepted** under a one-time per-connector/data-class grant — so
   the job is to send the SMALLEST projection sufficient for the turn, enforced by the daemon, not by
   trusting the model to be frugal. The connector layer is a minimizing projection over each source's
@@ -1045,13 +1045,13 @@ posture change first.
 ### M12 — Proactive presence (specced 2026-07-19)
 
 M12 makes Gumbo keep explicit promises without becoming a generic monitor: a brief the user configured,
-a watch he armed, and deterministic etiquette about when to speak. The scheduler already exists;
+a watch they armed, and deterministic etiquette about when to speak. The scheduler already exists;
 connector-backed watches depend on M11, personalization can use M9, and every ingested source carries
 M10 provenance.
 
 - **Morning brief (`kind: 'brief'`), opt-in and the user-configured.** One scheduled task fans out over
-  the sources THE USER chose — his calendar + mail via M11, and only the feeds he named. NO default
-  X/news fan-out: a broad web sweep he didn't ask for pulls untrusted content into the brief and
+  the sources the user chose — their calendar + mail via M11, and only the feeds they named. NO default
+  X/news fan-out: a broad web sweep they didn't ask for pulls untrusted content into the brief and
   serves no named moment. Synthesizes, delivers as a notch card + an optional spoken summary at the
   *first PTT of the day* — never an unprompted cold monologue.
 - **Watches are EXPLICIT, not a generic monitor (`kind: 'watch'`).** A watch starts only from an
@@ -1327,7 +1327,7 @@ App Intents/App Schemas keep growing
   surfaces, not a network listener, and "approve whatever is pending" stays structurally impossible
   (M14 permits). But most of the tempting set — "ask Gumbo," "start PTT," "show tasks" — merely
   duplicates the notch and hotkey, so the inbound Spotlight/widget suite is DEFERRED until the user
-  names a surface he actually wants (undo/cancel may eventually earn one). Remote approvals remain
+  names a surface they actually want (undo/cancel may eventually earn one). Remote approvals remain
   out of scope.
 - **Boundaries.** Shortcuts never become a second scheduler, memory store, or orchestrator; Apple's
   "Use Model" action is not allowed to grow into one either. Gumbo owns routines, timing, policy,

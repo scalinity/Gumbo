@@ -44,7 +44,7 @@ test('speakProactively with no shell connected spends nothing — no TTS call, n
     return new Response('should not be called', { status: 500 });
   }) as typeof fetch;
   const { frames, orchestrator } = harness(false);
-  await orchestrator.speakProactively('the user, reminder: test.', 'live instructions');
+  await orchestrator.speakProactively('Reminder: test.', 'live instructions');
   assert.equal(fetchCalls, 0, 'no synthesis when nobody would hear it');
   assert.equal(frames.length, 0);
 });
@@ -53,7 +53,7 @@ test('speakProactively with a shell and no session goes cold: 0x02-headed TTS fr
   const pcm = Buffer.from([1, 2, 3, 4, 5, 6]); // three pcm16 samples
   globalThis.fetch = (async () => new Response(pcm)) as typeof fetch;
   const { frames, orchestrator } = harness(true);
-  await orchestrator.speakProactively('the user, reminder: test.', 'live instructions');
+  await orchestrator.speakProactively('Reminder: test.', 'live instructions');
   assert.ok(frames.length >= 1, 'TTS audio reached the shell');
   assert.equal(frames[0][0], 0x02, 'cold speech uses the one-shot TTS header');
   assert.deepEqual([...Buffer.concat(frames.map((f) => f.subarray(1)))], [...pcm], 'payload is the synthesized pcm, sample-aligned');
@@ -234,11 +234,11 @@ test('continuityContext stitches VAD fragments into dialogue and lists in-flight
   // VAD chops one sentence across several transcript events — same role, consecutive.
   store.addEvent(null, 'transcript.user', { text: 'Cancel the current' });
   store.addEvent(null, 'transcript.user', { text: 'sub-agent while I fix things.' });
-  store.addEvent(null, 'transcript.assistant', { text: 'Okay the user, cancelling it now.' });
+  store.addEvent(null, 'transcript.assistant', { text: 'Okay, cancelling it now.' });
   store.createTask({ id: 'tt1', kind: 'claude', title: 'Harness spec', status: 'needs_input', workspace: '/tmp/x', created_at: Date.now(), updated_at: Date.now() });
   const context = (orchestrator as unknown as { continuityContext(): string }).continuityContext();
-  assert.match(context, /the user: Cancel the current sub-agent while I fix things\./, 'fragments stitched into one line');
-  assert.match(context, /You: Okay the user, cancelling it now\./);
+  assert.match(context, /User: Cancel the current sub-agent while I fix things\./, 'fragments stitched into one line');
+  assert.match(context, /You: Okay, cancelling it now\./);
   assert.match(context, /"Harness spec" — paused, needs the user \(coding session\)/);
   assert.match(context, /do not re-greet the user/i, 'the anti-amnesia instruction rides along');
 });

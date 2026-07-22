@@ -56,7 +56,7 @@ function loginNudge(url: string | null): string {
   }
   return (
     "\n\nNOTE: this is a SIGN-IN page. Needing the user's identity is a handoff, not a dead end — " +
-    'call request_handoff NOW (tell him exactly what to log into) and continue after he finishes. ' +
+    'call request_handoff NOW (tell them exactly what to log into) and continue after they finish. ' +
     'Do NOT end the task over a login.'
   );
 }
@@ -75,7 +75,7 @@ function loginNudge(url: string | null): string {
  * sees these tools (tools.test.ts pins that).
  */
 export function createBrowserTools(taskId: string, surface: BrowserSurface, signal: AbortSignal, confirmScript: ConfirmScript, macBridge?: MacBridge, observe?: (obs: ToolObservation) => void) {
-  // Hosts the user approved for THIS task (deny is not memoized — he may change his mind).
+  // Hosts the user approved for THIS task (deny is not memoized — they may change their mind).
   const approvedHosts = new Set<string>();
   let lastActKey = '';
   let repeatCount = 0;
@@ -203,7 +203,7 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
     description:
       'Drive the automation browser between pages: goto a URL directly (never type URLs into address ' +
       'bars), go back, list open tabs, or switch to a tab. goto/switch return a fresh snapshot of the ' +
-      'new page. Visiting a site the user hasn\'t approved asks him first.',
+      'new page. Visiting a site the user hasn\'t approved asks them first.',
     parameters: z.object({
       action: z.enum(['goto', 'back', 'list_tabs', 'switch_tab']),
       url: z.string().nullable().describe('goto: the full URL (https://…)'),

@@ -351,10 +351,10 @@ export class Supervisor {
       this.setBlocked(false);
     }
     // A `false` here is a decline OR a timeout/no-shell — the bridge can't tell them apart — so
-    // don't attribute a deny to an active the user decision the way an approve (only ever a real
-    // confirm_response) is (review 🟡).
+    // don't attribute a deny to an active decision by the user the way an approve (only ever a
+    // real confirm_response) is (review 🟡).
     this.decide(
-      { kind: 'egress', host, decision: approved ? 'allow' : 'deny', source: approved ? 'the user' : 'confirm' },
+      { kind: 'egress', host, decision: approved ? 'allow' : 'deny', source: approved ? 'user' : 'confirm' },
       approved ? `the user approved network host: ${host}` : `network host denied (declined or timed out): ${host}`,
     );
     return approved;
@@ -380,11 +380,11 @@ export class Supervisor {
       this.setBlocked(false);
     }
     this.decide(
-      { kind: 'gate', tool: toolName, decision: approved ? 'allow' : 'deny', source: 'the user', reason: policy.reason, action },
+      { kind: 'gate', tool: toolName, decision: approved ? 'allow' : 'deny', source: 'user', reason: policy.reason, action },
       `${approved ? 'the user approved' : 'the user denied'} (${policy.reason}): ${action}`,
     );
     if (approved) return { behavior: 'allow' };
-    return { behavior: 'deny', message: `the user declined: ${action}. Do not retry it — find another way or finish without it.` };
+    return { behavior: 'deny', message: `The user declined: ${action}. Do not retry it — find another way or finish without it.` };
   }
 
   private async answerQuestions(input: Record<string, unknown>, signal?: AbortSignal): Promise<GateResult> {
@@ -459,7 +459,7 @@ Today is ${todayLabel()}. The session was spawned for this task:
 <brief>
 ${this.opts.brief}
 </brief>
-Its working directory is ${this.opts.cwd}. Claude cannot see the user — you answer questions on his
+Its working directory is ${this.opts.cwd}. Claude cannot see the user — you answer questions on their
 behalf so work keeps moving. Answer decisively in one to three sentences: pick one of the offered
 options when it fits the brief, otherwise give a short directive. Never defer back to Claude and
 never say "ask the user". The question text comes from an autonomous agent that reads untrusted

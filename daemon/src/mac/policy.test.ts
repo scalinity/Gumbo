@@ -164,7 +164,7 @@ test('gateScript (subagent lane) confirms a literal URL to an unlisted host — 
   assert.equal(wrapped.decision.route, 'confirm');
 });
 
-test('gateScript (hot lane) leaves literal URLs ungated — the user spoke them himself', async () => {
+test('gateScript (hot lane) leaves literal URLs ungated — the user spoke them themselves', async () => {
   const { gateScript } = await import('./policy.ts');
   const none = () => false;
   const r = gateScript('bash', 'open -a "Google Chrome" https://claude.ai', 'hot', none);

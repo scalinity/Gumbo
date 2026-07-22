@@ -389,7 +389,7 @@ export interface ClaudeRunnerOpts {
   resumeSessionId?: string;
   /** Fresh sessions plan-then-execute; a resume is a direct instruction and skips planning. */
   planFirst?: boolean;
-  /** Surface Claude's plan to the user and resolve his approval (false → don't execute). */
+  /** Surface Claude's plan to the user and resolve their approval (false → don't execute). */
   onPlanReady?: (plan: string) => Promise<boolean>;
 }
 
@@ -419,7 +419,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   send(text: string): boolean {
     if (!this.input.push(text)) return false;
     this.turnsSent += 1;
-    // the user's follow-ups belong in the activity feed too — without them the transcript
+    // The user's follow-ups belong in the activity feed too — without them the transcript
     // shows Claude reacting to instructions nobody can see.
     this.opts.store.addEvent(this.opts.taskId, 'claude.prompt', { text: text.slice(0, PROMPT_LOG_MAX_CHARS) });
     return true;
@@ -639,7 +639,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   private park(report: string, reason: string): ClaudeRunResult {
     // A follow-up the user sent while the task was parked (e.g. during plan review) sits in
     // the queue; closing it here drops any unconsumed turn. Surface that instead of losing
-    // his words silently — he can resend after re-reading the park reason.
+    // their words silently — they can resend after re-reading the park reason.
     const dropped = this.turnsSent - this.turnsResolved;
     this.input.close();
     const parkedReason = dropped > 0 ? `${reason} (a follow-up you sent wasn't processed — please resend it)` : reason;
@@ -709,7 +709,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
     }
     // interrupt ends the run; the result handler sees planRejected and parks (resumable).
     this.planRejected = true;
-    return { behavior: 'deny', message: 'the user did not approve the plan. Stop; he will send revised instructions.', interrupt: true };
+    return { behavior: 'deny', message: 'The user did not approve the plan. Stop; they will send revised instructions.', interrupt: true };
   }
 
   /** Rewind the session's file edits to its pre-run state. Live session only (rewindFiles

@@ -172,8 +172,8 @@ export type OutboundMessage =
   // shell (M6): a computer-use task started/finished — arms/disarms the kill-switch
   // event tap and the ghost-cursor session (refcounted daemon-side; edge-triggered).
   | { type: 'mac_task'; active: boolean }
-  // shell (M7): cooperative handoff — the user is performing a step HIMSELF (login,
-  // permission dialog). The kill switch stands down (his input is the handoff, not an
+  // shell (M7): cooperative handoff — the user is performing a step THEMSELVES (login,
+  // permission dialog). The kill switch stands down (their input is the handoff, not an
   // abort) and the ghost cursor hides until the handoff ends.
   | { type: 'mac_handoff'; active: boolean }
   // shell (M8): teaching state, resync-broadcast on every hello like mac_task — a shell

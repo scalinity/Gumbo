@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 
 // The shell's notch/status-item click opens a WKWebView pointed at the Vite dev server.
 // If nobody started it, that window is a blank white screen. Rather than make the user run
-// `npm run dev:dashboard` in a terminal, the daemon starts it for him — so clicking the
+// `npm run dev:dashboard` in a terminal, the daemon starts it for them — so clicking the
 // notch always Just Works.
 const DASHBOARD_PORT = 5173;
 

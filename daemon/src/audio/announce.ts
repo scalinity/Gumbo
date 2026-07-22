@@ -13,17 +13,17 @@ const TTS_HEADER = Buffer.from([AUDIO_TTS]);
 
 // Deliberately announce-only (unlike the live path, which delivers the report's key
 // finding): with no session open, the user may be away or mid-something — reading a full
-// report aloud unprompted is worse than a one-line notice he can follow up on.
+// report aloud unprompted is worse than a one-line notice they can follow up on.
 export function announcementText(task: TaskRow): string {
   switch (task.status) {
     case 'done':
-      return `the user, your sub-agent finished the ${task.title} task.`;
+      return `The user, your sub-agent finished the ${task.title} task.`;
     case 'failed':
-      return `the user, heads up — the ${task.title} task failed.`;
+      return `The user, heads up — the ${task.title} task failed.`;
     case 'cancelled':
-      return `the user, the ${task.title} task was cancelled.`;
+      return `The user, the ${task.title} task was cancelled.`;
     default:
-      return `the user, the ${task.title} task is now ${task.status}.`;
+      return `The user, the ${task.title} task is now ${task.status}.`;
   }
 }
 
@@ -31,7 +31,7 @@ export function announcementText(task: TaskRow): string {
  *  <report>-neutralization precedent): these strings are quoted inside instruction
  *  prose, so quotes, angle brackets, backticks, and newlines are stripped — the echo
  *  stays data and can't read as new instruction structure. Everything echoed today is
- *  the user-authored (edit prompts, reminder text), so this guards self-injection and
+ *  user-authored (edit prompts, reminder text), so this guards self-injection and
  *  consistency, not an attacker. Cold TTS text is deliberately NOT run through this —
  *  it's spoken verbatim, not interpreted. */
 export function echoForInstructions(text: string, max = 90): string {
@@ -44,8 +44,8 @@ export function echoForInstructions(text: string, max = 90): string {
  *  string is instruction prose, so its echoes are defanged. No task id enters either. */
 export function needsInputAnnounce(title: string, reason: string): { cold: string; live: string } {
   return {
-    cold: `the user, the ${title} task is paused — ${reason}.`,
-    live: `The background task "${echoForInstructions(title, 80)}" just paused and needs the user: ${echoForInstructions(reason, 140)}. Tell him now, in one short sentence, and offer to read out the details (use get_task_status if he asks). Never mention task ids.`,
+    cold: `The user, the ${title} task is paused — ${reason}.`,
+    live: `The background task "${echoForInstructions(title, 80)}" just paused and needs the user: ${echoForInstructions(reason, 140)}. Tell them now, in one short sentence, and offer to read out the details (use get_task_status if they ask). Never mention task ids.`,
   };
 }
 

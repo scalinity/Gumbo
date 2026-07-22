@@ -41,7 +41,7 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 - **No git repo** yet — fixes are applied without commits (matches the user's "don't commit unless
   asked" rule). Initialize git when the user asks.
 - **Sandbox note:** automated/sandboxed dev runs can't write to `~/Gumbo`; use
-  `GUMBO_HOME=<scratchpad>` to run the daemon in those contexts. the user created the real `~/Gumbo`.
+  `GUMBO_HOME=<scratchpad>` to run the daemon in those contexts. The user created the real `~/Gumbo`.
 
 ---
 
@@ -109,7 +109,7 @@ Two Opus reviewers (debugger + auditor) reviewed the M1 codebase. **All findings
   replace) so Gumbo can retain durable knowledge across sessions. Verified live: asked it to save an
   editor preference → `notes/editor-preference.md` created. Deeper self-organization (archiving,
   reorganizing) is specced for later phases.
-- **Name:** the agent addresses the user as **the user** (not the user). Applied to orchestrator
+- **Name:** the agent addresses the user by name. Applied to orchestrator
   instructions + announcement template.
 - **Hotkey (spec only — Swift is M2):** mic activation is **Control + Option held together**. This is
   a modifier-only chord, so it must be detected with an `NSEvent` `.flagsChanged` global monitor
@@ -219,16 +219,19 @@ voice turn (spoken reply). Pasting the M5 prompt → `spawn_claude_session`. Fil
   fast-release ✅, VAD-pause release ✅, barge-in ✅ (`playback_flush` ~150 ms after speech onset
   mid-reply, second response clean), `debug_text` → spoken reply ✅. Zero `session.error`s.
 
-**Shell (`shell/` real app — builds + runs ad-hoc signed on the 27.0 beta):**
-- `project.yml`: LSUIElement, mic usage string, sandbox off, bundle id `ai.scalinity.Gumbo`,
-  DynamicNotchKit pinned `exactVersion: 1.1.0`. Signs with the real **Apple Development** cert
-  (Manual style + `DEVELOPMENT_TEAM: REDACTED-TEAM-ID` — signs straight from the keychain, no portal).
-- **GOTCHA (signing): a fresh Xcode-created cert can still be "0 valid identities".** the user's
-  cert (issued 2026-07-15, WWDR **G3** issuer) sat invalid in the keychain because the only WWDR
-  intermediate present was the **G1 that expired Feb 2023** — the chain couldn't build. Fix:
+**Shell (`shell/` real app — builds + runs signed on the 27.0 beta):**
+- `project.yml`: LSUIElement, mic usage string, sandbox off, bundle id `ai.Gumbo.app`,
+  DynamicNotchKit pinned `exactVersion: 1.1.0`. Signs with a **local self-signed cert**
+  ("Gumbo Local Signing", Manual style, no `DEVELOPMENT_TEAM` — no Apple Developer account
+  needed since this never ships to the App Store). A stable local identity + stable bundle id
+  is what makes TCC grants (mic, Accessibility, Reminders) survive rebuilds; ad-hoc (`-`)
+  does not — it re-prompts every rebuild because the signature hash changes each build.
+- **GOTCHA (dated — applied to an earlier Apple-Development-cert signing path, since replaced
+  by the self-signed cert above): a fresh Xcode-created Apple Development cert can still show
+  "0 valid identities" if the keychain is missing the WWDR **G3** intermediate (the default G1
+  expired Feb 2023, breaking the chain). Fix, if it recurs on any Apple-issued cert:
   `curl -sO https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer && security import
-  AppleWWDRCAG3.cer -k ~/Library/Keychains/login.keychain-db` → identity immediately valid;
-  app now signs with the full the user → WWDR G3 → Apple Root CA chain.
+  AppleWWDRCAG3.cer -k ~/Library/Keychains/login.keychain-db`.
 - **GOTCHA (macOS 27 beta, probed 4 orderings): VPIO enable order is load-bearing.** Enabling
   `setVoiceProcessingEnabled(true)` *before* touching the playback graph → engine start fails
   with **-10875** (output unit kAUInitialize). Working order: attach player + connect to
@@ -280,7 +283,7 @@ GPT-Live API availability has **not** been announced. The integration relies on
 `gpt-realtime-2.1`; keep the Realtime transport + event-handling layer modular — model ID
 stays a single `config.ts` constant, and session lifecycle / audio I/O / event wiring stay
 isolated in `realtime/` — so migrating to GPT-Live is a localized swap when it drops.
-(the user's note, 2026-07-14.)
+(The user's note, 2026-07-14.)
 
 ### Spike 1a — audio pipe (echo) ✅ pipeline proven
 Throwaway target at `shell/spike/` (its generated `.xcodeproj` + `DerivedData/` are
@@ -411,8 +414,8 @@ Risk #5 retired — clear to build the real notch UI on DynamicNotchKit 1.1.0.
 - **TIERED MODELS — the second live finding.** `grok-4.5` is a REASONING model; its agentic X
   search measured **28–45 s** on the hot path (26 tool calls at one point) — non-viable for voice.
   `max_tool_calls` does NOT help (cap=3 still ran 26 calls — it bounds calls, not the reasoning
-  between them), so it isn't sent; the per-call timeout is the real guard. the user's call: use a
-  fast NON-reasoning model for voice, keep `grok-4.5` for background. Catalog on his key (via
+  between them), so it isn't sent; the per-call timeout is the real guard. The user's call: use a
+  fast NON-reasoning model for voice, keep `grok-4.5` for background. Catalog on their key (via
   `GET /v1/language-models`) has no `grok-4.1-fast`; the versions run 4.3 → 4.5 → **4.20** (4.20 is
   newer than 4.5). `grok-4.20-non-reasoning` measured **2–11 s** (typ ~2–8 s) on live X queries with
   good answers + citations. So `config.grok = { hotModel:'grok-4.20-non-reasoning',
@@ -601,7 +604,7 @@ overlap realtime reply audio with the TTS tail in the shared player; barge-in's
 
 ### Follow-up — mic-free playback graph (2026-07-15, from the user's live report)
 
-the user saw the **orange mic indicator whenever the app ran**. Cause: the M2 engine was a
+The user saw the **orange mic indicator whenever the app ran**. Cause: the M2 engine was a
 single always-VPIO graph — macOS lights the indicator when the *input unit is open*, not
 when frames stream, so pure playback (replies, announcements) and the 75 s idle linger all
 kept it lit even though mic frames only ever flow while ⌃⌥ is held. Fix, per the user's ask:
@@ -627,7 +630,7 @@ live. To observe: no dot at idle / during cold announcements; dot appears on pre
 
 ### Fixes from the user's first real M3 run (2026-07-15, evening)
 
-the user ran a real "latest AI news today" task: cold announcement spoke ✅, **voice barge-in
+The user ran a real "latest AI news today" task: cold announcement spoke ✅, **voice barge-in
 verified live ✅** (M2 follow-up #2 closed). Three defects + one TCC finding, all fixed:
 
 - **Bubbles weren't clickable.** The panel is borderless + non-activating, so it never
@@ -653,13 +656,13 @@ verified live ✅** (M2 follow-up #2 closed). Three defects + one TCC finding, a
   **ad-hoc-era TCC row** was the culprit: ad-hoc requirements are cdhash-based (per-build),
   and re-toggling that old row in System Settings after the cert change kept the obsolete
   requirement → untrusted at every launch. Fixed with `tccutil reset Accessibility
-  ai.scalinity.Gumbo` + one fresh grant against the real-cert build. **The next rebuild is
+  ai.Gumbo.app` + one fresh grant against the real-cert build. **The next rebuild is
   the persistence proof.** (Mic never re-prompted — its row was created fresh post-cert,
   which corroborates the diagnosis.)
 
 ### M3.1 — playback-truthful state, read-along transcript, coal orbs + mini panel (2026-07-15, late)
 
-the user's second real run surfaced two bugs (dashboard flipped to *idle* mid-report-read;
+The user's second real run surfaced two bugs (dashboard flipped to *idle* mid-report-read;
 notch transcript froze at "Here are the highlights, the user.") and two design asks (bubble
 should expand **in place** into a mini observability panel, not open the dashboard; and
 become a breathing orb). Diagnosed from the **event store, not guesswork** — the sqlite log
@@ -701,7 +704,7 @@ had the whole turn (also confirmed there: the date fix works — the 7 PM sub-ag
 
 ### Orb v2 — Metal plasma redesign (2026-07-15, night)
 
-the user's verdict on the coal orbs: "orange balls that are slightly static." Fair — the
+The user's verdict on the coal orbs: "orange balls that are slightly static." Fair — the
 v1 motion was tuned too timid (9–17 s seam orbits, ±3.5 % breath) and the `.plusLighter`
 seams flattened in compositing. **v1 preserved at git tag `coal-orb-v1`** (restore:
 `git show coal-orb-v1:shell/Sources/Bubbles/BubbleController.swift`).
@@ -746,7 +749,7 @@ Transcript forensics (event store) found two failure modes, both fixed:
 
 ### Hard recency filter for time-scoped briefs (2026-07-15, late night)
 
-the user: "today's news" must mean *today*, not stale week-old sources. Recency was only a
+The user: "today's news" must mean *today*, not stale week-old sources. Recency was only a
 prompt hint ("prefer recent results") — nothing constrained the API. `web_search` now
 takes `max_age_days` (nullable; the model sets it per query) mapped to Exa's
 `startPublishedDate` — a **hard API-level cutoff**. Verified live before wiring: with a
@@ -836,7 +839,7 @@ trail `reply, reply, cap`. Policy table 8/8 pure checks.
 
 ### Design change from the user (2026-07-15, mid-build): sessions run in **auto mode**
 
-the user: "make the claude code sessions run in auto mode so that supervisor doesnt have to be
+The user: "make the claude code sessions run in auto mode so that supervisor doesnt have to be
 called every turn." Consequences, agreed as the M4 shape:
 - `permissionMode: 'acceptEdits'` + a **pure policy table** in `canUseTool` — reads, edits
   under cwd, and ordinary commands auto-allow with **zero model calls** (logged as
@@ -880,7 +883,7 @@ called every turn." Consequences, agreed as the M4 shape:
   answers are no-ops. Escalations flip the task `needs_input` around the await (Supervisor
   `setBlocked` → `task.status` events → bubbles/dashboard).
 - `cancel` on a cap-parked task (no live runner) closes it out as `cancelled` directly; the
-  persisted session id stays resumable if the user changes his mind.
+  persisted session id stays resumable if the user changes their mind.
 - **GOTCHA (bit us again despite the CLAUDE.md warning):** constructor parameter properties
   (`constructor(private opts: …)`) parse fine under tsx but fail `node --test` strip-only mode
   the moment a test imports the file. All M4 classes assign fields explicitly.
@@ -955,7 +958,7 @@ tests green, and TWO live daemon smokes pass (original auto flow + this hardenin
   the confirm shows a one-line summary). Approve → the run switches to execution. Resumes skip
   planning. Decline/timeout parks `needs_input` (resumable). Verified live: plan → approve → build
   `--loud` → verify → report → done.
-- **`'auto'` execution + PreToolUse hook (the user's call).** the user: the post-plan transition should
+- **`'auto'` execution + PreToolUse hook (the user's call).** The user: the post-plan transition should
   be `'auto'`, not `'acceptEdits'`. **Load-bearing discovery from the smoke:** `'auto'` hands the
   safety decision to the CLI classifier and **bypasses `canUseTool` entirely** — so git push ran
   with NO escalation and AskUserQuestion wouldn't reach the supervisor. Reconciled (the user chose
@@ -1136,7 +1139,7 @@ Grep, bash-unaffected, non-secret allowed).
 > holds — the OS sandbox now governs the file tools too.
 
 **Why the rebuild:** the review-address pass left file-tool filesystem containment to the supervisor
-policy (a *semantic* gate — escalate-outside-cwd → confirm → fail-closed-on-timeout). the user wanted
+policy (a *semantic* gate — escalate-outside-cwd → confirm → fail-closed-on-timeout). The user wanted
 it **OS-deterministic** — "so even the cloud process tools can't escape the sandbox." A research
 sub-agent (report in the transcript) confirmed the approach: the SDK `sandbox` option only jails
 spawned bash (Anthropic issue #26616 "isolate all tool execution, not just Bash" — closed
@@ -1196,7 +1199,7 @@ Tests: **102/102** (replaced the SDK-`sandboxSettings`/`SANDBOX_MARKER` tests wi
 
 **Open follow-up:** if the user later wants OS-level network default-deny back, the loopback filtering
 proxy is the way (proven in `m41-spike/proxy-verify.mjs`) — or adopt `@anthropic-ai/sandbox-runtime`
-which bundles it. Left out now by his capability-first choice.
+which bundles it. Left out now by their capability-first choice.
 
 #### Review-2 (2 Fable agents) + address — filesystem holes tightened (2026-07-16)
 
@@ -1237,12 +1240,12 @@ to bash too. So a prompt-injected session can still `cat ~/.claude/projects/**` 
 history) or `security find-generic-password …` (the OAuth token) and GET-exfil them. This can't be
 closed while keeping the session working *and* the network open in a single Seatbelt layer — it needs
 the loopback filtering proxy (network default-deny) from `m41-spike/proxy-verify.mjs`. Flagged for
-the user; left as his capability-first call. The *fixable* credential surfaces (repo `.env`, gh/npm/
+the user; left as their capability-first call. The *fixable* credential surfaces (repo `.env`, gh/npm/
 cloud tokens, ssh/aws/gnupg) ARE now closed.
 
 ### M4.1 — egress filtering proxy: network flipped OPEN → default-deny+allowlist+escalate (2026-07-16)
 
-the user's follow-up call after seeing the residual above: **close the GET-exfil channel** by routing
+The user's follow-up call after seeing the residual above: **close the GET-exfil channel** by routing
 ALL session egress through a loopback filtering proxy, without turning the sandbox back into a
 capability cage. So it's a *generous* allowlist + **escalate-on-unknown** (a notch confirm), not a
 hard 403 — the filesystem "safety net, not a cage" pattern applied to the network.
@@ -1441,7 +1444,7 @@ the literal `secretFilePaths[0]` (the worktree path). Copy the file into worktre
   the row (verified via `/api/schedule`); the image arrived in 49 s — real 1536×1024 PNG on
   disk (the model picked landscape for "wallpaper" on its own), `image.created` filename-only,
   live spoken completion; the poll loop fired the due row within one interval →
-  `reminder.fired` + gold `notch_pulse` + live spoken "the user, review the swamp wallpaper.";
+  `reminder.fired` + gold `notch_pulse` + live spoken "The user, review the swamp wallpaper.";
   a second reminder timed past the session idle-close exercised the **cold** branch (73 × 0x02
   TTS frames at the fake shell + the gold pulse). Bonus: the **past-time guard recovered live** —
   the model first passed a fire_at a few seconds in the past, got the tool's "in the past —
@@ -1454,9 +1457,9 @@ the literal `secretFilePaths[0]` (the worktree path). Copy the file into worktre
 
 ### M5.5 — image thumbnails + in-place editing (brush select, text + voice) — 2026-07-16
 
-the user's follow-up to M5, same session: incoming images should be *present* (thumbnail
+The user's follow-up to M5, same session: incoming images should be *present* (thumbnail
 bubbles with the task orbs) and *editable in place* (enlarged viewer, brush selection,
-typed or voiced edit requests). Brush shipped immediately per his call — no rect-marquee
+typed or voiced edit requests). Brush shipped immediately per their call — no rect-marquee
 interim.
 
 **Edits API — verified live before building:** `gpt-image-2` on `/v1/images/edits`,
@@ -1668,7 +1671,7 @@ runs the user deliberately spawns. M4 registration defaults recorded in CLAUDE.m
   design, not an oversight.
 
 ### Live-session failure sweep + fixes (2026-07-16, from the "Agent coding harness spec" run)
-the user's first real M4 voice-driven Claude session surfaced a cluster of failures; every root
+The user's first real M4 voice-driven Claude session surfaced a cluster of failures; every root
 cause was reconstructed from the events DB (`~/Gumbo/db/gumbo.db` — the transcripts persist,
 which is what made the forensics possible). Fixes, with the *why*:
 - **Plan approval showed `{}` (🔴).** Current CLIs call `ExitPlanMode` with EMPTY input and
@@ -1740,7 +1743,7 @@ which is what made the forensics possible). Fixes, with the *why*:
 
 - Design conversation with the user amplified SPEC §M6 in place; the SPEC section is now the
   source of truth. Recording the *why* here:
-- **Rejected: per-verb realtime tools** (`open_app`/`quit_app`/`app_status`/…). the user's call,
+- **Rejected: per-verb realtime tools** (`open_app`/`quit_app`/`app_status`/…). The user's call,
   and correct: the realtime registry is already 16 tools and the voice model's routing degrades
   as it grows. Generic primitives subsume the verbs. The whole Mac-control domain costs the
   realtime registry ≤2 tools: `mac_do(script)` + (at most) a widened `spawn_subagent`.
@@ -1883,7 +1886,7 @@ step). Full URLs in the two research reports (session transcript, 2026-07-16).
 
 ### M7 + M8 specced — computer-use v2 (coverage + cooperation) and v3 (routines) — 2026-07-16
 
-- the user asked for the v2/v3 milestones same-day; SPEC §M7/§M8 added, absorbing the old post-M6
+- The user asked for the v2/v3 milestones same-day; SPEC §M7/§M8 added, absorbing the old post-M6
   deferred items (browser lane, vision, polish → M7; App Intents watch → M8; the general deferred
   list is now post-M8). Sequencing logic: **v2 = close the two punted SURFACES** (in-page web via
   a dedicated Playwright/CDP profile; AX-hostile apps via OCR-first vision) **+ turn interruption
@@ -1893,7 +1896,7 @@ step). Full URLs in the two research reports (session transcript, 2026-07-16).
 - Non-obvious decisions a build session must not casually reverse:
   - Automation browser = DEDICATED profile + storage-state capture-once-replay, never the user's
     live profile (anti-bot flags CDP sessions; a burned live profile is unacceptable blast
-    radius). Trade-off accepted: no free ride on his existing logged-in sessions — one
+    radius). Trade-off accepted: no free ride on their existing logged-in sessions — one
     interactive login per site instead.
   - Browser send/submit/purchase ALWAYS notch-confirms, allowlist or not (site trust ≠ content
     trust; pages are the top injection vector).
@@ -1997,7 +2000,7 @@ gate is the *entire* security boundary for the unsandboxed lane, so every hole i
 
 ### M6 second review pass — /review-2 (Fable agents) on the fix delta itself (2026-07-16)
 
-the user caught that the address-pass fixes + demo polish were themselves un-reviewed; a second
+The user caught that the address-pass fixes + demo polish were themselves un-reviewed; a second
 /review-2 (both agents on Fable) over f59a87c..f81e793 found 1 🔴 + 8 🟡 + 6 🔵 — all addressed
 (daemon 213/213, shell builds). The big lesson is recorded here because it WILL recur:
 - **🔴 (corroborated, verified-by-execution twice): the address pass itself introduced the bypass.**
@@ -2082,9 +2085,9 @@ steering (0bcb21d), polish (e8b5c43). What is non-obvious and worth keeping:
   PTT chord IS a flagsChanged event — under M6's any-untagged-input rule, TALKING to a
   running task killed it. A modifier alone can neither type nor click, so exempting
   flagsChanged gives up no takeover coverage. Handoff mode is a second carve-out:
-  `handoffActive` suppresses the abort while the user performs his step; task-end clears
+  `handoffActive` suppresses the abort while the user performs their step; task-end clears
   it defensively (disarmSession), and MacBridge resync re-broadcasts an active handoff
-  so a shell relaunch mid-login doesn't abort on his in-progress typing.
+  so a shell relaunch mid-login doesn't abort on their in-progress typing.
 - **Steering rides tool results, not SDK surgery:** manager queues send_to_session text
   for RUNNING computer tasks; wrapSteering monkey-wraps every computer tool's `invoke`
   (the exact surface the SDK runner AND the unit tests call — the suite pins the patch
@@ -2202,7 +2205,7 @@ live smoke + shell build green):
 
 ## M9–M13 gap analysis — two research passes → SPEC completeness arc (2026-07-19)
 
-the user asked for a SOTA gap analysis to define post-M8 phases. Two Fable research agents ran in
+The user asked for a SOTA gap analysis to define post-M8 phases. Two Fable research agents ran in
 parallel — one on FRONTIER TECHNIQUES/papers, one on the OSS/PRODUCT landscape — each given a dense
 Gumbo capability inventory + the hard design constraints (local, single-user, macOS, privacy-first,
 no commercial infra) so they'd return real, buildable gaps rather than generic advice or things
@@ -2265,7 +2268,7 @@ bottleneck — accumulation is.
 ### M7 live-demo pass 2 — browser-lane demos with the user (2026-07-20)
 
 - **Confirm/kill-switch Catch-22 (live):** the host-approval confirm asks for the user's input while
-  the armed tap treats ALL his input as an abort — moving toward Approve killed the task. M6 never
+  the armed tap treats ALL their input as an abort — moving toward Approve killed the task. M6 never
   hit this (hot-path confirms run with no task armed); M7's browser lane is the first coexistence.
   Fix: `makeStandDown` (manager) — ONE counter-based bracket wrapping EVERY computer-task escalate
   (host approvals, risky scripts, submit gates, handoff alike). Counter, not boolean: the SDK can
@@ -2275,16 +2278,16 @@ bottleneck — accumulation is.
   `finishWithReport('done')` beat the rejection path. A task the user killed read as "successful".
   Fix: `cancelComputerTasks` now `finish(id,'cancelled')`s at abort time; `finish` is idempotent
   (first writer wins) so the runner's later settlement no-ops. Kill switch = hard stop, in the
-  store and audibly, the instant he touches the machine.
+  store and audibly, the instant they touch the machine.
 - **Login-wall handoff refusal (live, twice):** the agent saw GitHub's signed-out page / sign-in
-  redirect and ended the task with "the user must sign in" — the system-prompt handoff rule never
+  redirect and ended the task with "The user must sign in" — the system-prompt handoff rule never
   fired (its trigger pattern-matched a *login form*, and none was on screen; then even broadened
   prose failed). Lesson recorded: prompt rules fail at their TRIGGERS, and prose alone is too weak
   for must-fire behaviors — moved the trigger into the tool result (`loginNudge`: goto/back/
   switch_tab/snapshot append "call request_handoff NOW" when the LANDED url is a sign-in page;
   segment-exact matching so `/blog/why-sso-matters` can't false-positive). Third use of the
   next-attention-point pattern (steering, stall notes, now this).
-- **Persistent automation profile (the user's call — he wants uBlock):** running on his LIVE Chrome
+- **Persistent automation profile (the user's call — they want uBlock):** running on their LIVE Chrome
   was asked for and re-declined (anti-bot burn, permanently open debug port, profile singleton,
   whole-logged-in-life blast radius — recorded in SPEC §M7). Instead the dedicated profile is now
   persistent: `launchPersistentContext(~/Gumbo/browser/profile)` with `ignoreDefaultArgs:
@@ -2323,7 +2326,7 @@ bottleneck — accumulation is.
 
 ## M9–M17 external-research fold — two deep-research reports → SPEC amendments + 4 new phases (2026-07-20)
 
-the user ran `RESEARCH_BRIEF.md` through Claude Research and ChatGPT deep research and pasted both
+The user ran `RESEARCH_BRIEF.md` through Claude Research and ChatGPT deep research and pasted both
 reports; this pass folded them into SPEC §M9–M17. Method: amend-in-place where a report extended an
 existing phase, new milestones only where content didn't fold cleanly (the user pre-authorized),
 anti-recommendations never reversed, corroborations recorded here rather than restated in SPEC.
@@ -2369,7 +2372,7 @@ anti-recommendations never reversed, corroborations recorded here rather than re
 
 ### Friction-economy redesign — the user's limitation review → five binding rules (2026-07-20)
 
-the user read the folded arc and asked the question a review should: which of these are limitations
+The user read the folded arc and asked the question a review should: which of these are limitations
 dressed as improvements? Four held up (read-web→send label tax; abstention cold-start nag;
 per-tool effect-adapter tax + preview beats on a voice agent; gate-interaction bugs — the class
 the same day's live demos produced). His directive: don't note them, REDESIGN them away — and
@@ -2382,7 +2385,7 @@ The de-generalization table (what the internet shape assumes vs what Gumbo actua
   ONE principal and ~5 egress sinks → provenance became a per-task source-set checked at sinks +
   a secret-containment check on outbound payloads; nothing plumbs through model context; the set
   resets per task, so label creep is structurally impossible. Informed-confirm (with source
-  banner), not deny; the user's standing rules pre-approve his recurring flows.
+  banner), not deny; the user's standing rules pre-approve their recurring flows.
 - **Saga/2PC per-endpoint ceremony** assumes distributed services with lost-response ambiguity.
   Most Gumbo mutations are local and synchronous → effects attach to the FIVE CHANNELS
   (filesystem/browser/AX-script/provider-HTTP/connector-writes) with inherited
@@ -2392,7 +2395,7 @@ The de-generalization table (what the internet shape assumes vs what Gumbo actua
 - **Confidence-gates-actions** assumes fleet-scale caution is free. At n-of-1, cold-start
   pessimism = nagging → inverted to GRADUATION: day one equals today's gates exactly; track
   record can only loosen (inspect-first on no-track-record compensatables; "stop asking about
-  this" drafts a standing rule the user approves). Autonomy expansion is always the user-approved,
+  this" drafts a standing rule the user approves). Autonomy expansion is always user-approved,
   versioned, revocable. Track record never manufactures an ask.
 - **Each-safety-feature-owns-behavior** is how the confirm×kill-switch Catch-22 happened →
   Rule 1: layers emit facts, ONE pure decide() maps them (auto | announce | confirm | deny), at
@@ -2459,10 +2462,10 @@ non-obvious and worth keeping:
   ever consume it (steering must never drain into a result nobody reads).
 - **The park bracket is the adversarial review's best catch:** an hour-long stand-down
   (`setHandoff(true)` for the pause window) would suppress the kill switch while the user uses
-  his Mac normally, then the timeout-deny resumes driving under his hands. A parked routine
+  their Mac normally, then the timeout-deny resumes driving under their hands. A parked routine
   drops the mac_task refcount instead (tap disarmed — the task isn't driving), re-arms on
   answer, and `KillSwitch.arm()` now starts the 1.5 s grace (a fresh arm is always adjacent to
-  some interaction of the user's — sharpest case: re-arm the instant he clicks Approve).
+  some interaction of the user's — sharpest case: re-arm the instant they click Approve).
 - **ConfirmBridge.resync + waitForShell:** panel state dies with the shell; at 30 s windows a
   relaunch was a non-event, at pause scale a routine would park invisibly until auto-deny. The
   pending map now keeps the wire frame + deadline, re-presents with the REMAINING window on
@@ -2565,7 +2568,7 @@ reasoning + provenance recorded here, not in SPEC.
   framing) and re-derived by auditing the sink *categories*, not just their contents. Folded into
   Rule 4 (model ingress is a sink) and Rule 2 (disclosure, not HTTP method, is the irreversible
   axis).
-- **the user's decision (2026-07-21): cloud processing ACCEPTED**, under a one-time per-connector/
+- **The user's decision (2026-07-21): cloud processing ACCEPTED**, under a one-time per-connector/
   data-class standing grant, designed for **least disclosure** (OpenAI's own data-minimization
   guidance made structural). This collapses the hard branch: the local-private ORCHESTRATION lane is
   NOT built — it would be a second brain (local ASR + intent + reasoning + TTS), which §2 locks
@@ -2602,7 +2605,7 @@ reasoning + provenance recorded here, not in SPEC.
   personal-capability roadmap sequenced by vertical daily value (minimal M9 → first M11 connector →
   its one explicit M12 watch → M14 receipts/undo for the first mutating channel; provenance + effects
   added at each real sink/effect, not as broad read-only platform blocks). Research explains
-  mechanisms; the the user-moment test sets scope.
+  mechanisms; the user-moment test sets scope.
 - **The meta-lesson recorded:** three expert passes optimized the DESIGN of the local-private branch
   before anyone verified the NEED for it — the same failure the SOTA-completeness critique named, one
   level up. Asking the user the one collapsing question ("do you require never-cloud, or accept an
@@ -2648,7 +2651,7 @@ design; this log keeps the audit provenance and reasons.
 
 ## M11/M15 local-reducer bake-off — Ornith oQ4 chosen on measured evidence (2026-07-21)
 
-the user accepted cloud processing but directed the M11 bulk path through local reduce+redact first
+The user accepted cloud processing but directed the M11 bulk path through local reduce+redact first
 (OpenAI's own data-minimization posture), and asked which of the on-disk 35B-A3B variants should be
 the worker. Ran a task-shaped bake-off instead of trusting the existing coding gauntlets — that
 choice was load-bearing: the June coding gauntlet ranked oQ8 first (10/10, ★4.8/5), but on the
@@ -2703,7 +2706,7 @@ actual reducer job oQ8 is the *worst* deploy pick. Generic benchmarks inverted t
 
 The opposite pass to the trim: audited M9–M17 for under-built or missing capability against the
 completion goal. Verdict: the arc is structurally right-sized — the gaps were sequencing and
-implied-but-unscheduled items, not missing machinery. the user approved applying all of it.
+implied-but-unscheduled items, not missing machinery. The user approved applying all of it.
 
 - **Adopted build sequence (critical path bold):** **0** M8 live demos → merge → push origin (M7 is
   still local-only) → 1 routing-regression test set + 2 coding-session git-safety (both protect
@@ -2799,7 +2802,7 @@ implied-but-unscheduled items, not missing machinery. the user approved applying
   on resume (verification #7) and the transport-seam branches.
 ### M8 replay precondition resilience — auto-launch a closed target app (2026-07-21)
 
-the user's demo-prep question: a procedure shouldn't fail just because the world isn't in the exact
+The user's demo-prep question: a procedure shouldn't fail just because the world isn't in the exact
 state it was taught in (e.g. Notes was open at teach time, closed at replay time). The one broad
 DETERMINISTIC precondition gap was the target app not running: `ensureApp` only fronted a running
 app (focus_app → activate → Foreground.bringToFront is running-apps-only) and otherwise drifted the
@@ -2820,7 +2823,7 @@ closed-app self-launch stays deterministic, unknown app never launched → drift
 
 ### M8 procedure adaptation — run a learned procedure as a TEMPLATE for a variation (2026-07-21)
 
-the user's ask: "do the packing list, but for a picnic instead" should use the learned procedure as a
+The user's ask: "do the packing list, but for a picnic instead" should use the learned procedure as a
 guide and adapt it, not reproduce the original. The capability already existed (the drift-fallback
 runs the intelligent loop seeded with the procedure skeleton); what was missing was ROUTING — a
 faithful `run_procedure` runs the DETERMINISTIC replay first, and when the UI cooperates that
@@ -2842,7 +2845,7 @@ Daemon-only; 431/1-skip (+2 tests: adapt routing all-edges, templateBrief HOW-vs
 
 ### M8 live-demo failure sweep — app resolution, text fidelity, verification honesty, tenacity (2026-07-21)
 
-the user's demos surfaced five real gaps (logs referenced: mac-audit.jsonl, tasks 31307212/f1eee099):
+The user's demos surfaced five real gaps (logs referenced: mac-audit.jsonl, tasks 31307212/f1eee099):
 - **App-open brittleness.** "open ChatGPT" → the model opened chatgpt.com in Chrome, then
   `tell application "ChatGPT" to activate` → script_error (the app is "ChatGPT Classic"). Fix: fuzzy
   installed-app resolution — `Foreground.installedApp(named:)` (exact → prefix → shortest substring

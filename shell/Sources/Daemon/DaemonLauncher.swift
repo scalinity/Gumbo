@@ -11,7 +11,7 @@ final class DaemonLauncher {
     private let dashboardPort = 5173
 
     /// The repo checkout this app manages. Single machine, one standard location;
-    /// overridable via `defaults write ai.scalinity.Gumbo RepoPath <path>`.
+    /// overridable via `defaults write ai.Gumbo.app RepoPath <path>`.
     private var repoRoot: URL {
         if let override = UserDefaults.standard.string(forKey: "RepoPath"), !override.isEmpty {
             return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)

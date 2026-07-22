@@ -55,7 +55,7 @@ const manager = new TaskManager(
   (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal, req.timeoutMs, undefined, req.rememberHost, req.confirmLabel, req.denyLabel, req.waitForShell ? { waitForShell: true } : undefined),
   // Plan approval: a longer notch window. The one-line detail is a peek; the FULL plan
   // rides as `body`, which the shell renders behind a chevron as a scrollable view —
-  // the user approves what he can actually read (live gap 2026-07-16: the prompt showed
+  // the user approves what they can actually read (live gap 2026-07-16: the prompt showed
   // nothing but "{}"). Deny/timeout parks the task — nothing is lost.
   (taskId, taskTitle, plan, signal) =>
     confirms.request(
@@ -67,7 +67,7 @@ const manager = new TaskManager(
 );
 // M5: the Gumbo-owned scheduler. Its fire loop delivers through the M3 announce path —
 // live session injection when one is open, cold one-shot TTS otherwise (never opens a
-// session just to remind). Reminder text is the user's own words from his own request.
+// session just to remind). Reminder text is the user's own words from their own request.
 const scheduler = new Scheduler(store, hub);
 // M5.5: the shell image viewer's live state (open image + brush selection) — what voice
 // edits resolve "this image" and "the highlighted area" against.
@@ -91,15 +91,15 @@ scheduler.onFire = (row) => {
   return orchestrator.speakProactively(
     // Cold TTS speaks the raw text verbatim; the LIVE instruction echo is defanged
     // (review 🔵 — the M3 neutralization precedent applied to short echoes).
-    `the user, reminder: ${row.text}.`,
-    `A reminder the user set has just come due: "${echoForInstructions(row.text, 200)}". Deliver it to him now — brief and direct, one sentence. Do not mention ids or the scheduler.`,
+    `The user, reminder: ${row.text}.`,
+    `A reminder the user set has just come due: "${echoForInstructions(row.text, 200)}". Deliver it to them now — brief and direct, one sentence. Do not mention ids or the scheduler.`,
   );
 };
 // M8 Law 5 — a routine that can't run is a LOUD skip: spoken (or cold-TTS'd into the
 // room), pulsed, and already recorded as routine.skipped for the away-items catch-up.
 manager.onRoutineSkipped = (name, reason) => {
   orchestrator.speakProactively(
-    `the user, the scheduled routine "${name}" was skipped: ${reason}.`,
+    `The user, the scheduled routine "${name}" was skipped: ${reason}.`,
     `The scheduled routine "${echoForInstructions(name, 80)}" could not run (${echoForInstructions(reason, 160)}). Tell the user briefly.`,
   ).catch((err: unknown) => {
     store.addEvent(null, 'session.error', { message: `routine-skip announce: ${String(err)}` });
@@ -309,14 +309,14 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 scheduler.start();
 
 // …and tell the user about them once the shell has had time to reconnect (same grace idea
-// as the scheduler's delayed first sweep): the silent version of this failure cost him a
+// as the scheduler's delayed first sweep): the silent version of this failure cost them a
 // "did the picture regenerate?" round with no honest answer available.
 if (reapedImages.length) {
   setTimeout(() => {
     const single = reapedImages.length === 1;
     const what = single ? `an image ${reapedImages[0].kind}` : `${reapedImages.length} image jobs`;
     orchestrator.speakProactively(
-      `the user, heads up — ${what} ${single ? "was interrupted by a restart and didn't" : "were interrupted by a restart and didn't"} finish. Ask me again and I'll redo ${single ? 'it' : 'them'}.`,
+      `The user, heads up — ${what} ${single ? "was interrupted by a restart and didn't" : "were interrupted by a restart and didn't"} finish. Ask me again and I'll redo ${single ? 'it' : 'them'}.`,
       `A daemon restart interrupted ${what} before finishing (prompt: "${echoForInstructions(reapedImages[0].prompt)}"). Tell the user briefly and offer to run it again.`,
     ).catch((err: unknown) => {
       store.addEvent(null, 'session.error', { message: `image reap announce: ${String(err)}` });

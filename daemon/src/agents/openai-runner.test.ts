@@ -12,9 +12,9 @@ const { needsHandoffBounce } = await import('./openai-runner.ts');
 // signed-out homepage) to the same invalid ending.
 test('needsHandoffBounce fires on all three live login-shaped endings', () => {
   const live = [
-    'GitHub is not signed in in the current browser session. the user needs to sign in before I can read Notifications.',
-    'GitHub redirected to its sign-in page. the user must sign in manually before I can read notifications.',
-    'GitHub is signed out in the automation browser. the user needs to sign in manually in that browser session before I can check notifications.',
+    'GitHub is not signed in in the current browser session. The user needs to sign in before I can read Notifications.',
+    'GitHub redirected to its sign-in page. The user must sign in manually before I can read notifications.',
+    'GitHub is signed out in the automation browser. The user needs to sign in manually in that browser session before I can check notifications.',
   ];
   for (const report of live) assert.ok(needsHandoffBounce(report), report);
 });

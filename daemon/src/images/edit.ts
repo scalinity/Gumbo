@@ -97,7 +97,7 @@ export function acceptImageEditRequest(
  * edit_image tool): the requester already got an instant ack. On success:
  * image.created carrying the new FILENAME + edited_from lineage (the shell swaps the
  * open viewer to the new version off this event), then a brief spoken completion.
- * Failures are spoken too — the user is waiting on something he asked for.
+ * Failures are spoken too — the user is waiting on something they asked for.
  */
 export async function runImageEdit(opts: {
   file: string;
@@ -138,8 +138,8 @@ export async function runImageEdit(opts: {
     // to leave its busy state, and the dashboard feed shows what failed and why.
     store.addEvent(null, 'image.edit_failed', { file, prompt, error: String(err) });
     await speak(
-      'the user, heads up — that image edit failed.',
-      `The image edit the user asked for ("${short}") failed. Tell him briefly and offer to try again.`,
+      'The user, heads up — that image edit failed.',
+      `The image edit the user asked for ("${short}") failed. Tell them briefly and offer to try again.`,
     );
     return;
   }
@@ -150,7 +150,7 @@ export async function runImageEdit(opts: {
     ...(scoped ? { selection: true } : {}),
   });
   await speak(
-    'the user, your image edit is done — the new version is up.',
-    `The image edit the user asked for ("${short}") just finished${scoped ? ' on the area he highlighted' : ''}; the new version is on screen and in his gallery. Tell him briefly — one sentence, no file names.`,
+    'The user, your image edit is done — the new version is up.',
+    `The image edit the user asked for ("${short}") just finished${scoped ? ' on the area they highlighted' : ''}; the new version is on screen and in their gallery. Tell them briefly — one sentence, no file names.`,
   );
 }

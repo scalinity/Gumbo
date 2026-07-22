@@ -22,8 +22,8 @@ export type ApprovePlanFn = (taskId: string, taskTitle: string, plan: string, si
 export type RunnerFactory = (opts: ClaudeRunnerOpts) => ClaudeSessionRunner;
 
 /** Stand the kill switch down while the user answers something. EVERY notch prompt during a
- *  computer task needs his cursor/keys, so reaching Approve must not itself abort the task
- *  (live demo: the browser host confirm died to the tap the moment he moved the mouse —
+ *  computer task needs their cursor/keys, so reaching Approve must not itself abort the task
+ *  (live demo: the browser host confirm died to the tap the moment they moved the mouse —
  *  only the handoff path had the bracket). Counter, not boolean: the model can issue
  *  parallel tool calls whose confirms overlap, and the first to resolve must not re-arm
  *  the tap under the one still pending. Re-arms on throw; one task drives at a time, so a
@@ -115,9 +115,9 @@ export class TaskManager {
     // M8 unattended PARK bracket: while a routine waits on the user, the task is NOT
     // driving — the tap DISARMS (mac_task refcount) instead of standing down. Holding
     // setHandoff(true) for an hour-scale window would suppress the kill switch while
-    // the user uses his Mac normally, then resume driving under his hands on timeout-deny
+    // the user uses their Mac normally, then resume driving under their hands on timeout-deny
     // (the reviewed inversion). Re-arm happens on answer; the shell's arm-time grace
-    // covers his trailing input from clicking Approve.
+    // covers their trailing input from clicking Approve.
     const park = unattended
       ? async <T>(fn: () => Promise<T>): Promise<T> => {
           this.macBridge!.taskFinished();
@@ -144,7 +144,7 @@ export class TaskManager {
           }
         : undefined;
     // M7 cooperative handoff: pause (needs_input announces it aloud), stand the kill
-    // switch down so the user's own typing IS the handoff, wait for his notch "Done"
+    // switch down so the user's own typing IS the handoff, wait for their notch "Done"
     // (generous window, deny-on-timeout), then re-arm and resume. Status restore skips
     // a task that finished/cancelled while paused.
     const requestHandoff =
@@ -152,7 +152,7 @@ export class TaskManager {
         ? async (reason: string) => {
             this.setTaskStatus(id, 'needs_input', reason);
             if (unattended) this.store.addEvent(id, 'routine.paused', { reason });
-            // the user closing the automation browser mid-handoff IS his answer (live-demo
+            // The user closing the automation browser mid-handoff IS their answer (live-demo
             // polish): decline promptly (confirm_cancel dismisses the notch panel) instead
             // of letting the prompt linger to its multi-minute timeout. Local controller:
             // fires on task abort OR browser close, and never aborts the task itself.
@@ -308,7 +308,7 @@ export class TaskManager {
         this.spawnSubagent(
           row.name,
           `Scheduled routine: replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${procedure.goal}. ` +
-            'This run is UNATTENDED — the user may not be at the Mac. Anything that needs his answer pauses and waits; never improvise around a pause.',
+            'This run is UNATTENDED — the user may not be at the Mac. Anything that needs their answer pauses and waits; never improvise around a pause.',
           'mac',
           { procedure, notes: null, unattended: true },
         );
@@ -699,7 +699,7 @@ export class TaskManager {
     // no section (the compiler falls back to the step stream alone).
     let outcome: string | null = null;
     let outcomeNote = '';
-    // The demo's document lives in the app the user WORKED in — never the launcher he
+    // The demo's document lives in the app the user WORKED in — never the launcher they
     // opened it with (a paste-only demo's last typed text is the Spotlight query, which
     // pointed the capture at "Siri" and failed it). Prefer the last text step outside a
     // launcher; fall back to the last step of ANY kind outside one (a paste or click in
@@ -794,7 +794,7 @@ export class TaskManager {
       return true;
     }
     // A cap-parked Claude task has no live runner to abort — cancelling closes it out
-    // (the persisted session id stays resumable if the user changes his mind).
+    // (the persisted session id stays resumable if the user changes their mind).
     const task = this.store.getTask(id);
     if (task?.status === 'needs_input') {
       this.finish(id, 'cancelled', { reason: 'cancelled while paused' });

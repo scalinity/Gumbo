@@ -97,7 +97,7 @@ test('runImageGeneration lifecycle: image.generating FIRST, then image.created w
   assert.equal(announced.length, 1);
   assert.match(announced[0].cold, /up on your screen/);
   assert.match(announced[0].live, /swamp at dusk/);
-  assert.match(announced[0].live, /on his screen/, 'completion presents on screen, not "go check the gallery"');
+  assert.match(announced[0].live, /on their screen/, 'completion presents on screen, not "go check the gallery"');
 });
 
 test('an API failure terminates the lifecycle: image.generate_failed with the gen_id, spoken (after one retry)', async () => {

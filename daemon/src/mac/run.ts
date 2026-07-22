@@ -98,7 +98,7 @@ export async function executeMacDo(
     const approved = await deps.confirm(`${decision.reason}: ${describeMacDo(trimmed)}`);
     if (!approved) {
       auditMacAction({ tier: 'hot', kind: 'script', action: trimmed, gate: 'declined', ok: false, error: decision.reason });
-      return `the user didn't approve that command (${decision.reason}), so I didn't run it.`;
+      return `The user didn't approve that command (${decision.reason}), so I didn't run it.`;
     }
   }
 

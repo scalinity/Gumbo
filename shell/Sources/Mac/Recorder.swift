@@ -31,7 +31,7 @@ struct RecordedHID {
 }
 
 /// M8 watch-me recorder: turns the user's raw demonstration input into SEMANTIC steps —
-/// the AX role/label/identifier of every element he touches, never coordinates (a pixel
+/// the AX role/label/identifier of every element they touch, never coordinates (a pixel
 /// recording is stale by the next window resize). Steps stream to the daemon one
 /// teach_event at a time, at event time (the UI changes right after a click, so the
 /// element must be resolved immediately).
@@ -49,7 +49,7 @@ final class Recorder {
     // All state lives on this queue. AX hit-testing happens here too — synchronously
     // into the executor's own serial queue (a chain, never a cycle: the executor never
     // calls back into the recorder or the main thread).
-    private let queue = DispatchQueue(label: "ai.scalinity.gumbo.recorder")
+    private let queue = DispatchQueue(label: "ai.Gumbo.app.recorder")
     private var active = false
 
     /// A typing burst: consecutive keystrokes into one focused field. The field is

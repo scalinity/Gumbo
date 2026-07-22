@@ -68,7 +68,7 @@ final class BubbleController {
     func remove(taskId: String) {
         guard let bubble = bubbles[taskId] else { return }
         if bubble.model.expanded {
-            // the user is reading this panel — removal waits until he collapses it.
+            // The user is reading this panel — removal waits until they collapse it.
             bubbles[taskId]?.pendingRemove = true
             return
         }
@@ -273,7 +273,7 @@ final class BubbleModel: ObservableObject {
     var state: OrbState { OrbState(wire: status) }
     /// M8: set the instant the user clicks the teaching orb to finish — renders the orb warm gold
     /// ("registered, processing") until the task settles, so the click has immediate feedback and
-    /// he doesn't click again. Only overrides while still alive; a settled orb shows its real color.
+    /// they don't click again. Only overrides while still alive; a settled orb shows its real color.
     @Published var finishing = false
     var displayState: OrbState { finishing && state.isAlive ? .needsInput : state }
     @Published var expanded = false
@@ -368,7 +368,7 @@ struct BubbleEvent: Identifiable {
             default:
                 let decision = payload["decision"] as? String ?? "?"
                 let source = payload["source"] as? String ?? "policy"
-                body = "\(source == "the user" ? "the user" : "Policy") \(decision): \(payload["action"] as? String ?? "")"
+                body = "\(source == "user" ? "The user" : "Policy") \(decision): \(payload["action"] as? String ?? "")"
             }
         case "task.status": // M4: needs_input ⇄ running flips
             kind = .lifecycle

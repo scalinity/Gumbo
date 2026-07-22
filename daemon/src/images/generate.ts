@@ -118,14 +118,14 @@ export async function runImageGeneration(opts: {
     const file = await generateImage(prompt, shape, quality);
     store.addEvent(null, 'image.created', { file, prompt, gen_id: genId });
     await announce(
-      "the user, your image is ready — it's up on your screen.",
-      `The image the user asked for ("${short}") just finished and is now on his screen — the generating orb became the thumbnail, top right; clicking it opens the editor. Tell him it's up in ONE short sentence. Do not tell him to check the gallery or open anything.`,
+      "The user, your image is ready — it's up on your screen.",
+      `The image the user asked for ("${short}") just finished and is now on their screen — the generating orb became the thumbnail, top right; clicking it opens the editor. Tell them it's up in ONE short sentence. Do not tell them to check the gallery or open anything.`,
     );
   } catch (err) {
     store.addEvent(null, 'image.generate_failed', { gen_id: genId, prompt: prompt.slice(0, 400), error: String(err) });
     await announce(
-      'the user, heads up — the image generation failed.',
-      `The image the user asked for ("${short}") failed to generate. Tell him briefly and offer to try again.`,
+      'The user, heads up — the image generation failed.',
+      `The image the user asked for ("${short}") failed to generate. Tell them briefly and offer to try again.`,
     );
   }
 }

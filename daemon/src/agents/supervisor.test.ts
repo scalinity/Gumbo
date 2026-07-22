@@ -183,7 +183,7 @@ test('escalateHost: a throwing bridge emits an error audit line and rejects (re-
   assert.equal(egress?.payload.decision, 'deny');
 });
 
-test('escalateHost: a denied host is not attributed to an active the user decision', async () => {
+test('escalateHost: a denied host is not attributed to an active decision by the user', async () => {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
   const sup = new Supervisor({
     taskId: 't1',
@@ -196,7 +196,7 @@ test('escalateHost: a denied host is not attributed to an active the user decisi
   });
   assert.equal(await sup.escalateHost('x.example'), false);
   const egress = events.find((e) => e.payload.kind === 'egress');
-  assert.equal(egress?.payload.source, 'confirm', 'a deny is not claimed as an active the user decision');
+  assert.equal(egress?.payload.source, 'confirm', 'a deny is not claimed as an active decision by the user');
 });
 
 test('escalateHost: overlapping confirms flip blocked only on the 0<->1 edges', async () => {

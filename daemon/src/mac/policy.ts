@@ -297,14 +297,14 @@ export function unresolvableNavTarget(script: string): boolean {
  *  first, then decide on the SAME string the executor will run (review 🟡: the two lanes
  *  each did this independently and had already drifted). Shortcuts are opaque to the
  *  pattern table, so the LANE decides: the hot lane auto-runs them (the user spoke the
- *  shortcut's name himself); the sub-agent lane confirms them (it acts on untrusted
+ *  shortcut's name themselves); the sub-agent lane confirms them (it acts on untrusted
  *  on-screen text, and a named Shortcut can be arbitrarily destructive).
  *
  *  M7: the sub-agent lane additionally runs literal fetch/open URLs through the host
  *  allowlist — an unlisted host confirms, closing the recorded literal-URL exfil
  *  residual — AND confirms any URL navigation whose target is built by concatenation or a
  *  variable (unresolvableNavTarget), which the literal-only check would otherwise miss.
- *  The hot lane is exempt (the user spoke the URL himself; no screen-read context exists
+ *  The hot lane is exempt (the user spoke the URL themselves; no screen-read context exists
  *  there to exfiltrate). `isHostAllowed` is injectable for offline tests and defaults to
  *  the real allowlist. */
 export function gateScript(

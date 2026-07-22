@@ -20,14 +20,14 @@ If either source disagrees with the pinned CLI's generated schema, the generated
 probe against that exact binary win for this repository. Record the discrepancy and why in
 `IMPLEMENTATION_NOTES.md`.
 
-## the user moment
+## The user moment
 
-the user asks Gumbo to research something in the background. The task uses the Codex allowance in his
-ChatGPT subscription instead of billing the research model through the OpenAI API. He can watch
-readable thought summaries and output arrive live, redirect the task while it is working, answer a
-question if it genuinely needs him, interrupt it immediately, resume it later, or undo the last
-follow-up without losing the original thread. Gumbo retains its Exa, Grok, and Firecrawl routing,
-audit trail, memory persistence, report, cancellation, and completion announcement.
+The user asks Gumbo to research something in the background. The task uses the Codex allowance in
+their ChatGPT subscription instead of billing the research model through the OpenAI API. They can
+watch readable thought summaries and output arrive live, redirect the task while it is working,
+answer a question if it genuinely needs them, interrupt it immediately, resume it later, or undo
+the last follow-up without losing the original thread. Gumbo retains its Exa, Grok, and Firecrawl
+routing, audit trail, memory persistence, report, cancellation, and completion announcement.
 
 ## Decision
 
@@ -80,7 +80,7 @@ The implementation is incomplete unless it uses all of these relevant App Server
 
 Do not interpret “all advantages” as permission to integrate unrelated App Server administration,
 plugins, marketplace, remote WebSockets, filesystem APIs, feedback upload, credit redemption, or
-enterprise controls. Those do not serve the the user moment.
+enterprise controls. Those do not serve the user moment.
 
 ## Target architecture
 

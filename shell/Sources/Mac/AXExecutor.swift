@@ -53,7 +53,7 @@ struct AXHitInfo {
 /// SPEC §M6: the FULL tree never enters LLM context. The shell holds it here; the daemon
 /// gets a flat, compacted sample + a query RPC for more.
 final class AXExecutor {
-    private let queue = DispatchQueue(label: "ai.scalinity.gumbo.ax")
+    private let queue = DispatchQueue(label: "ai.Gumbo.app.ax")
 
     /// Current snapshot generation: ref string → live element. Rebuilt every snapshot;
     /// a ref from a prior generation is a typed `stale_ref`, never a nearest-match guess.

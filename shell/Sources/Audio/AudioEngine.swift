@@ -50,7 +50,7 @@ final class AudioEngine {
     // completion handlers (audio thread) both used to run the pump concurrently, which
     // could schedule chunks out of order, schedule a stale buffer after a barge-in
     // flush, or schedule onto a dead player mid graph-switch (wedging inFlight forever).
-    private let pumpQueue = DispatchQueue(label: "ai.scalinity.gumbo.audio.pump")
+    private let pumpQueue = DispatchQueue(label: "ai.Gumbo.app.audio.pump")
     private var armed = false
     private var inFlight = 0 // buffers scheduled on the player, not yet played back
     private var generation = 0 // invalidates completion handlers of flushed buffers
