@@ -734,7 +734,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
           `Replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${procedure.goal}.` +
           (notes?.trim() ? ` Run-specific notes from the user: ${notes.trim()}` : '');
         const task = manager.spawnSubagent(row.name, brief, 'mac', { procedure, notes: notes?.trim() || null });
-        return `Running "${row.name}" now (internal task_id ${task.id} — never say it aloud). Give the user ONE short line that you're on it (e.g. "Running your packing list") — do NOT promise a detailed report or describe what you'll check afterward; the result arrives on its own the moment it finishes.`;
+        return `Running "${row.name}" now (internal task_id ${task.id} — never say it aloud). Say EXACTLY ONE short line that you're on it — just "Running your packing list" or "On it" — and STOP. Do NOT add a second sentence, do NOT promise to report back or "tell you what happened", do NOT explain that it might ask for approval or will finish on its own. The result is delivered on its own the moment it finishes.`;
       } catch (err) {
         return `Could not start that: ${err instanceof Error ? err.message : String(err)}`;
       }

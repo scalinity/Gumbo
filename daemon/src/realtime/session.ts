@@ -717,12 +717,12 @@ export class Orchestrator {
       this.pendingAnnounce = instructions;
       return;
     }
+    // Send response.create DIRECTLY, not transport.requestResponse({instructions}): the latter was
+    // NOT applying the per-response instructions, so the model regenerated a stale line from recent
+    // context (a "still watching"/"it's running" echo) instead of delivering the outcome. The queue
+    // above guarantees no response is in flight here, so a raw response.create can't collide.
     const transport = session.transport as TransportLike;
-    if (typeof transport.requestResponse === 'function') {
-      transport.requestResponse({ instructions });
-    } else {
-      transport.sendEvent({ type: 'response.create', response: { instructions } });
-    }
+    transport.sendEvent({ type: 'response.create', response: { instructions } });
   }
 
   /**
