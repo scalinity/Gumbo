@@ -540,7 +540,7 @@ export function createSubagentTools(
     parameters: z.object({ query: z.string() }),
     async execute({ query }) {
       try {
-        const { answer, sources } = await grokLiveSearch(query, {
+        const { answer, sources, trace } = await grokLiveSearch(query, {
           model: config.grok.backgroundModel, // deeper reasoning tier — latency is fine off the voice turn
           style: 'detailed',
           timeoutMs: config.grok.backgroundTimeoutMs,
@@ -548,6 +548,10 @@ export function createSubagentTools(
           signal,
         });
         const sourceList = sources.length ? '\n\nSources:\n' + sources.map((s) => `- ${s.url}`).join('\n') : '';
+        // Grok's own sub-searches (measured live: custom_tool_call output items) — in the
+        // result they land in the task transcript, so the Grok channel shows WHAT it
+        // searched, not just its synthesis.
+        const traceBlock = trace?.length ? `\n\n(Grok's server-side searches: ${trace.join(' · ')})` : '';
         // One memory row: citations are URL-only (no page bodies to index), so the answer +
         // source list IS the record. A synthetic marker url when Grok cited nothing keeps the
         // row well-formed and searchable by query text.
@@ -558,7 +562,7 @@ export function createSubagentTools(
           [{ url: sources[0]?.url ?? 'grok:x-search', title: query, text: answer + sourceList }],
           'grok',
         );
-        return answer + sourceList;
+        return answer + sourceList + traceBlock;
       } catch (err) {
         return describeToolFailure('x_search', err);
       }

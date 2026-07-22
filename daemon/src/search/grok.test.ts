@@ -34,7 +34,9 @@ const OK_BODY = {
   error: null,
   output: [
     { type: 'reasoning', summary: [], status: 'completed' },
-    { type: 'x_search_call', status: 'completed' },
+    // The measured live shape (2026-07-22): Grok's own sub-searches are custom_tool_call
+    // items carrying name + input JSON.
+    { type: 'custom_tool_call', name: 'x_keyword_search', input: '{"query":"from:xai since:2026-07-21","limit":"10"}', status: 'completed' },
     {
       type: 'message',
       role: 'assistant',
@@ -90,6 +92,8 @@ test('parses the trailing message answer + url_citations, deriving spoken-ready 
     { title: 'X post', url: 'https://x.com/xai/status/123' },
     { title: 'example.com', url: 'https://example.com/blog' },
   ]);
+  // Grok's own sub-searches surface as a transcript trace (query extracted from input JSON).
+  assert.deepEqual(lookup.trace, ['x_keyword_search: from:xai since:2026-07-21']);
 });
 
 test('strips inline [[n]](url) citation markers mid-sentence and tidies whitespace', async () => {
