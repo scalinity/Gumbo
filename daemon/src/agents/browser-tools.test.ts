@@ -191,6 +191,47 @@ test('switch_tab audits with the landed URL (review 🔵 — it was the one sile
   assert.equal(last.url, 'https://ok.test/tab2');
 });
 
+// ——— scan MEDIUM (2026-07-22): the landed page is gated too, not just the requested one ———
+
+test('goto that REDIRECTS to an unlisted host gates the landed page; declined = content withheld', async () => {
+  const surface = fakeSurface({
+    navigate: async () => ({ ok: true, output: 'url: https://evil.example/landing\ntitle: Evil\n---\n- secret page content' }),
+    currentUrl: () => 'https://evil.example/landing',
+  });
+  const asked: string[] = [];
+  const out = await byName(
+    tools(surface, async (detail) => {
+      asked.push(detail);
+      return false;
+    }),
+    'browser_navigate',
+  ).invoke({}, JSON.stringify({ action: 'goto', url: 'https://ok.test/page', tab: null }));
+  assert.equal(asked.length, 1, 'the landed host asked (the requested one was already approved)');
+  assert.match(asked[0], /evil\.example/);
+  assert.match(out, /didn't approve using evil\.example/);
+  assert.doesNotMatch(out, /secret page content/, 'unapproved page content never reaches the model');
+});
+
+test('an act that lands on an unlisted host withholds the diff until approved', async () => {
+  let navigated = false;
+  const surface = fakeSurface({
+    act: async () => {
+      navigated = true;
+      return { ok: true, output: '+ leaked diff content' };
+    },
+    currentUrl: () => (navigated ? 'https://drive-by.example/exfil' : 'https://ok.test/page'),
+  });
+  const out = await byName(tools(surface, async () => false), 'browser_act').invoke({}, actArgs());
+  assert.match(out, /didn't approve using drive-by\.example/);
+  assert.doesNotMatch(out, /leaked diff content/);
+});
+
+test('browser_snapshot gates the current page host before reading it', async () => {
+  const surface = fakeSurface({ currentUrl: () => 'https://sneaky.example/tab' });
+  const out = await byName(tools(surface, async () => false), 'browser_snapshot').invoke({}, '{}');
+  assert.match(out, /didn't approve using sneaky\.example/);
+});
+
 test('type refuses newlines (submit would dodge the gate); fill is the multiline path', async () => {
   const surface = fakeSurface();
   const out = await byName(tools(surface), 'browser_act').invoke({}, actArgs({ verb: 'type', value: 'line1\nline2' }));

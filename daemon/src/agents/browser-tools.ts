@@ -69,8 +69,10 @@ function loginNudge(url: string | null): string {
  * snapshot→act→verify-by-diff, one-generation refs, typed errors, the same repetition +
  * no-change stall guards — over Gumbo's dedicated automation browser. Gates, all
  * confirm-through-the-notch, deny-safe:
- *   1. HOST: navigating to (or acting on a page of) a host outside the allowlist asks
- *      the user once per task (M4.1 egress posture, memoized).
+ *   1. HOST: navigating to (or acting on / reading a page of) a host outside the
+ *      allowlist asks the user once per task (M4.1 egress posture, memoized) — checked on
+ *      the REQUESTED url before the op AND on the LANDED url after it, so redirects,
+ *      popups, back, and tab switches can't return unapproved-page content.
  *   2. SUBMIT: send/submit/purchase-class acts ALWAYS confirm, allowlisted or not — site
  *      trust ≠ content trust (pages are the top injection vector).
  * Every act/navigation writes one mac-audit line carrying the page URL; observations
@@ -111,6 +113,10 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
     parameters: z.object({}),
     async execute() {
       if (signal.aborted) return 'Task was cancelled.';
+      // Reading a page IS using its site: a popup/redirect can leave the active tab on a
+      // host the user never approved — gate before the content comes back (scan MEDIUM).
+      const refusal = await ensureHostApproved(surface.currentUrl(), 'The task wants to read a page on');
+      if (refusal) return refusal;
       const result = await surface.snapshot();
       observe?.({ tool: 'browser_snapshot', ok: result.ok, errorKind: result.error_kind });
       return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);
@@ -190,6 +196,10 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
       const result = await surface.act({ verb, ref, value, role, name, timeout_ms });
       auditMacAction({ tier: 'subagent', kind: 'browser', action: `${verb} ${info?.name ?? ref ?? role ?? ''}`.trim(), gate, ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url });
       observe?.({ tool: 'browser_act', ok: result.ok, errorKind: result.error_kind, noChange: result.no_change === true });
+      // The act may have navigated (a link click lands anywhere; a popup becomes the
+      // active tab): gate the LANDED host before its content is returned (scan MEDIUM).
+      const landedRefusal = await ensureHostApproved(surface.currentUrl(), 'The action landed on');
+      if (landedRefusal) return landedRefusal;
       const stalled = result.ok && result.no_change === true;
       noChangeStreak = stalled ? noChangeStreak + 1 : 0;
       if (noChangeStreak >= 3) {
@@ -226,6 +236,10 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
           const result = await surface.navigate(url);
           auditMacAction({ tier: 'subagent', kind: 'browser', action: `goto ${url}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url });
           observe?.({ tool: 'browser_navigate', ok: result.ok, errorKind: result.error_kind });
+          // Redirects can land on a different host than the approved target — gate the
+          // LANDED page before returning its snapshot (scan MEDIUM).
+          const landed = await ensureHostApproved(surface.currentUrl(), 'The page redirected to');
+          if (landed) return landed;
           // Nudge on the LANDED url (currentUrl), not the requested one — the login case
           // is usually a redirect away from what the model asked for.
           return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);
@@ -233,6 +247,8 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
         case 'back': {
           const result = await surface.back();
           auditMacAction({ tier: 'subagent', kind: 'browser', action: 'back', gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url: surface.currentUrl() ?? undefined });
+          const landed = await ensureHostApproved(surface.currentUrl(), 'Going back landed on');
+          if (landed) return landed;
           return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);
         }
         case 'list_tabs':
@@ -242,6 +258,8 @@ export function createBrowserTools(taskId: string, surface: BrowserSurface, sign
           // like goto/back (review 🔵: switch_tab was the one navigation that was silent).
           const result = await surface.switchTab(tab ?? 1);
           auditMacAction({ tier: 'subagent', kind: 'browser', action: `switch_tab ${tab ?? 1}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId, url: surface.currentUrl() ?? undefined });
+          const landed = await ensureHostApproved(surface.currentUrl(), 'That tab is on');
+          if (landed) return landed;
           return result.ok ? present(result) + loginNudge(surface.currentUrl()) : present(result);
         }
       }
