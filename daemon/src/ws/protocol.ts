@@ -57,7 +57,7 @@ export type MacAction =
  *  failures ride timeout/ax_unavailable). */
 export type MacErrorKind =
   | 'element_not_found' | 'stale_ref' | 'ax_unavailable' | 'timeout' | 'out_of_scope'
-  | 'secure_field' | 'script_error' | 'aborted' | 'capture_denied';
+  | 'secure_field' | 'script_error' | 'aborted' | 'capture_denied' | 'element_disabled';
 
 /** Permission health is a state machine, not a boolean: stale_cache = trusted-but-broken
  *  (relaunch fixes), ax_disabled = kAXErrorAPIDisabled, not_granted = never authorized. */

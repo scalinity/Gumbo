@@ -152,17 +152,17 @@ test('M7: setHandoff is edge-triggered and resync repeats an active handoff', ()
 test('M8: setTeaching is edge-triggered and resync always states teach state (both directions)', () => {
   const { hub, sent } = fakeHub(true);
   const bridge = new MacBridge(hub, 50);
-  bridge.setTeaching(true);
-  bridge.setTeaching(true); // duplicate — edge-triggered, no second frame
-  assert.deepEqual(sent.filter((m) => m.type === 'mac_teach'), [{ type: 'mac_teach', active: true }]);
+  bridge.setTeaching(true, 't1');
+  bridge.setTeaching(true, 't1'); // duplicate — edge-triggered, no second frame
+  assert.deepEqual(sent.filter((m) => m.type === 'mac_teach'), [{ type: 'mac_teach', active: true, task_id: 't1' }]);
 
   // A shell hello mid-teach re-arms its recorder…
   bridge.resync();
-  assert.deepEqual(sent.filter((m) => m.type === 'mac_teach').at(-1), { type: 'mac_teach', active: true });
+  assert.deepEqual(sent.filter((m) => m.type === 'mac_teach').at(-1), { type: 'mac_teach', active: true, task_id: 't1' });
 
   // …and a hello with NO teach session must say so (a shell still recording for a
   // restarted daemon has to be told to stop — unconditional, like mac_task).
   bridge.setTeaching(false);
   bridge.resync();
-  assert.deepEqual(sent.filter((m) => m.type === 'mac_teach').at(-1), { type: 'mac_teach', active: false });
+  assert.deepEqual(sent.filter((m) => m.type === 'mac_teach').at(-1), { type: 'mac_teach', active: false, task_id: null });
 });

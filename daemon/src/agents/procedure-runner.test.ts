@@ -135,6 +135,41 @@ test('adaptive retry: a first resolve miss re-snapshots once, then succeeds', as
   assert.equal(h.calls.filter((c) => c.kind === 'snapshot').length, 2, 'retry takes a FRESH snapshot');
 });
 
+test('cold-launch slack: a snapshot that lands before the app is AX-visible retries instead of drifting at step 0', async () => {
+  let snapshots = 0;
+  const h = harness({
+    bridge: (a) => {
+      if (a.kind === 'snapshot') {
+        snapshots += 1;
+        return snapshots === 1
+          ? { ok: false, output: 'No running app matches "Notes".', error_kind: 'element_not_found' }
+          : { ok: true, output: '[g1e1] Button "New Note"' };
+      }
+      if (a.kind === 'resolve') return { ok: true, output: 'g1e1' };
+      return { ok: true, output: '+ changed' };
+    },
+  });
+  const result = await h.run({ ...AX_PROC, steps: [AX_PROC.steps[0]] });
+  assert.equal(result.outcome, 'completed');
+  assert.ok(snapshots >= 2, 'the failed snapshot was retried within the launch budget');
+});
+
+test('an "activate" step is satisfied by ensureApp alone — app-only targets never reach resolve', async () => {
+  const h = harness({
+    bridge: (a) => (a.kind === 'resolve' ? { ok: true, output: 'g1e7' } : { ok: true, output: '+ changed' }),
+  });
+  const result = await h.run({
+    ...AX_PROC,
+    steps: [
+      { lane: 'ax', desc: 'Open Notes', target: { app: 'Notes' }, verb: 'activate', verify: 'Notes is open' },
+      ...AX_PROC.steps,
+    ],
+  });
+  assert.equal(result.outcome, 'completed');
+  assert.match((result as { report: string }).report, /3 steps completed/);
+  assert.equal(h.calls.filter((c) => c.kind === 'resolve').length, 2, 'only the two element steps resolve');
+});
+
 test('drift after the retry bails to fallback with step + reason + verified progress', async () => {
   const h = harness({
     bridge: (a) => (a.kind === 'resolve'

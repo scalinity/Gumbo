@@ -118,6 +118,20 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     return { kind: 'drift', reason: `could not launch/focus ${app}` };
   };
 
+  // focus_app answers ok while a cold launch is still coming up, so a snapshot taken
+  // right after can land before the app is AX-visible ("No running app matches") — wait
+  // that out within the launch budget instead of dropping the whole replay into the
+  // fallback loop at step 0.
+  const snapshotWithLaunchSlack = async (app: string | null | undefined): Promise<ToolObservation | null> => {
+    let snap = await invoke('ax_snapshot', { app: app ?? null, max_elements: config.mac.snapshotMaxElements });
+    for (let wait = 0; !snap?.ok && snap?.errorKind === 'element_not_found' && wait < config.procedures.appLaunchAttempts; wait += 1) {
+      await sleep(config.procedures.appLaunchWaitMs, deps.signal);
+      if (deps.signal.aborted) throw new Error('cancelled');
+      snap = await invoke('ax_snapshot', { app: app ?? null, max_elements: config.mac.snapshotMaxElements });
+    }
+    return snap;
+  };
+
   const AX_VERBS: Record<string, { verb: string; carriesValue: boolean }> = {
     click: { verb: 'press', carriesValue: false },
     double_click: { verb: 'press', carriesValue: false },
@@ -134,9 +148,13 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
   const runAxStep = async (step: ProcedureStep): Promise<StepOutcome> => {
     const focused = await ensureApp(step.target?.app);
     if (focused !== 'ok') return focused;
+    // "Open the app" IS the whole step: ensureApp above focused/launched it, and an
+    // app-only target has nothing for resolve to match (compilers emit these as the
+    // first step of app-based procedures — resolving one would drift every replay).
+    if (step.verb === 'activate' || (!step.target?.identifier && !step.target?.name && !step.target?.role)) return 'ok';
     const mapped = AX_VERBS[step.verb ?? 'click'] ?? AX_VERBS.click;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const snap = await invoke('ax_snapshot', { app: step.target?.app ?? null, max_elements: config.mac.snapshotMaxElements });
+      const snap = await snapshotWithLaunchSlack(step.target?.app);
       if (!snap?.ok) return { kind: 'drift', reason: `snapshot failed (${snap?.errorKind ?? 'no result'})` };
       const resolved = await deps.macBridge.request(
         { kind: 'resolve', role: step.target?.role ?? null, name: step.target?.name ?? null, identifier: step.target?.identifier ?? null },
@@ -289,12 +307,19 @@ async function checkpointPass(
   const toolObj = deps.tools.find((x) => x.name === snapTool);
   let state = '';
   if (toolObj) {
-    const argsJson = JSON.stringify(t);
-    deps.store.addEvent(deps.taskId, 'tool.call', { name: snapTool, args: argsJson.slice(0, config.activityLogMaxChars) });
-    const out = await toolObj.invoke({}, argsJson);
-    deps.store.addEvent(deps.taskId, 'tool.result', { output: String(out ?? '').slice(0, config.activityLogMaxChars) });
-    deps.takeObservation(); // consume — checkpoints must not leave a stale observation behind
-    state = typeof out === 'string' ? out.slice(0, 6000) : '';
+    // Same cold-launch slack as the step snapshots: an "Open the app" checkpoint fires
+    // right after focus_app answers, which can be before the app is AX-visible.
+    for (let wait = 0; ; wait += 1) {
+      const argsJson = JSON.stringify(t);
+      deps.store.addEvent(deps.taskId, 'tool.call', { name: snapTool, args: argsJson.slice(0, config.activityLogMaxChars) });
+      const out = await toolObj.invoke({}, argsJson);
+      deps.store.addEvent(deps.taskId, 'tool.result', { output: String(out ?? '').slice(0, config.activityLogMaxChars) });
+      const obs = deps.takeObservation(); // consume — checkpoints must not leave a stale observation behind
+      state = typeof out === 'string' ? out.slice(0, 6000) : '';
+      if (obs?.ok || obs?.errorKind !== 'element_not_found' || wait >= config.procedures.appLaunchAttempts) break;
+      await sleep(config.procedures.appLaunchWaitMs, deps.signal);
+      if (deps.signal.aborted) return false;
+    }
   }
   try {
     const answer = await complete(

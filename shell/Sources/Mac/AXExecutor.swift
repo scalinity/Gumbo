@@ -235,6 +235,12 @@ final class AXExecutor {
 
     // MARK: act — dispatch ladder + settle + before/after diff
 
+    /// Set by a successful select_text, cleared by every other act (and key): the ONE case
+    /// where an active selection is the intended operand of the next type (select-then-type
+    /// = replace). Anything else typing over a leftover selection would silently destroy it
+    /// (the deleted-entry replay bug) — performType collapses the selection first instead.
+    private var lastSelectedElement: AXUIElement?
+
     private func act(_ action: [String: Any]) -> AXResult {
         let verb = action["verb"] as? String ?? ""
         let timeoutMs = action["timeout_ms"] as? Int ?? 5000
@@ -248,6 +254,7 @@ final class AXExecutor {
         // key is a keyboard shortcut to the focused app — it has no element target (the tool
         // contract says ref is null for key), so it must be handled BEFORE the ref guard.
         if verb == "key" {
+            lastSelectedElement = nil // a real key interacts with the selection natively
             return performKey(action["value"] as? String ?? "", timeoutMs: timeoutMs)
         }
 
@@ -262,18 +269,35 @@ final class AXExecutor {
         if isSecureField(element) {
             return AXResult.failure("secure_field", "That is a secure (password) field — Gumbo will not read or type into it. Ask the user to enter it.")
         }
+        // A disabled control never receives its action, and AXPress false-passes on one —
+        // the diff would read "(no observable change)" and mislead the loop into blind
+        // retries (the pink-highlight replay bug). Say WHY it is inert, with the one
+        // recovery that fixes the common case: formatting popovers capture their enabled
+        // state when they OPEN, so select first, then reopen the popover.
+        if verb == "press" || verb == "show_menu", boolAttr(element, kAXEnabledAttribute) == false {
+            return AXResult.failure(
+                "element_disabled",
+                "That control is disabled right now. If it lives in a Format/Aa popover or menu, the controls captured their enabled state when it OPENED — make the text selection (select_text) first, then CLOSE and REOPEN the popover, then press it.")
+        }
 
         let pid = pidOf(element)
         let before = describe(element)
+
+        let selectFlowElement = lastSelectedElement
+        lastSelectedElement = nil
 
         var actErr: String?
         switch verb {
         case "press": actErr = performPress(element, pid: pid)
         case "focus": actErr = performFocus(element)
         case "set_value": actErr = performSetValue(element, value: action["value"] as? String ?? "")
-        case "type": actErr = performType(element, text: action["value"] as? String ?? "", pid: pid)
+        case "type":
+            let replacing = selectFlowElement.map { CFEqual($0, element) } ?? false
+            actErr = performType(element, text: action["value"] as? String ?? "", pid: pid, replacingSelection: replacing)
         case "show_menu": actErr = performShowMenu(element, pid: pid)
-        case "select_text": actErr = performSelectText(element, text: action["value"] as? String ?? "", occurrence: action["occurrence"] as? Int ?? 0)
+        case "select_text":
+            actErr = performSelectText(element, text: action["value"] as? String ?? "", occurrence: action["occurrence"] as? Int ?? 0)
+            if actErr == nil { lastSelectedElement = element }
         default: return AXResult.failure("out_of_scope", "Unknown verb \"\(verb)\".")
         }
         if let actErr {
@@ -413,9 +437,19 @@ final class AXExecutor {
     /// web/Electron field (inside an AXWebArea) drops pid-targeted per-character keys into its
     /// renderer subprocess, so THOSE still need a paste through the app's Edit▸Paste path. Empty
     /// text is a no-op.
-    private func performType(_ element: AXUIElement, text: String, pid: pid_t) -> String? {
+    private func performType(_ element: AXUIElement, text: String, pid: pid_t, replacingSelection: Bool = false) -> String? {
         _ = performFocus(element)
         guard !text.isEmpty else { return nil }
+        // A live selection is silently REPLACED by the first keystroke (and by paste). That
+        // is only ever intended straight after select_text (select-then-type = replace);
+        // any OTHER leftover selection — e.g. one a formatting step made and never consumed
+        // — gets collapsed to its end first, so typing inserts instead of destroying it.
+        if !replacingSelection, let sel = selectedRange(element), sel.length > 0 {
+            var caret = CFRange(location: sel.location + sel.length, length: 0)
+            if let axCaret = AXValueCreate(.cfRange, &caret) {
+                AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axCaret)
+            }
+        }
         if isWebHosted(element) {
             SyntheticInput.paste(text, pid: pid)
         } else {
@@ -610,10 +644,10 @@ final class AXExecutor {
     // MARK: M8 replay resolution — taught target → live ref (read-only)
 
     /// Match a recorded target against the LAST snapshot's nodes: identifier exact →
-    /// role+name exact → role+name contains. Returns ONLY the ref string (no ambient
-    /// screen text — the daemon-side engine makes deterministic decisions on it), a
-    /// typed element_not_found otherwise. Ambiguity IS not-found: replay never guesses
-    /// between two matches (adapt-or-bail, never act on the wrong element).
+    /// role+name exact → role+name contains → role-unique. Returns ONLY the ref string
+    /// (no ambient screen text — the daemon-side engine makes deterministic decisions on
+    /// it), a typed element_not_found otherwise. Ambiguity IS not-found: replay never
+    /// guesses between two matches (adapt-or-bail, never act on the wrong element).
     private func resolve(role: String?, name: String?, identifier: String?) -> AXResult {
         guard !lastNodes.isEmpty else {
             return AXResult.failure("stale_ref", "No snapshot to resolve against — take ax_snapshot first.")
@@ -626,8 +660,8 @@ final class AXExecutor {
         let wantRole = norm(role)
         let wantName = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let wantId = (identifier ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !wantId.isEmpty || !wantName.isEmpty else {
-            return AXResult.failure("element_not_found", "resolve needs an identifier or a name.")
+        guard !wantId.isEmpty || !wantName.isEmpty || !wantRole.isEmpty else {
+            return AXResult.failure("element_not_found", "resolve needs an identifier, a name, or a role.")
         }
         let pool = lastNodes.filter { wantRole.isEmpty || norm($0.role) == wantRole }
         // Rung 1: identifier exact — the only selector stable across runs when apps set it.
@@ -645,6 +679,13 @@ final class AXExecutor {
             let contains = pool.filter { $0.name.lowercased().contains(wantName) }
             if contains.count == 1 { return AXResult(ok: true, output: contains[0].ref, errorKind: nil, health: nil) }
             if contains.count > 1 { return AXResult.failure("element_not_found", "ambiguous: \(contains.count) partial matches.") }
+        }
+        // Rung 4: role-unique. Recorded identifiers often embed per-document instance ids
+        // (Notes: "Note[id=<uuid>]") that can NEVER match a fresh document, and unlabeled
+        // text areas record no name — but when the role narrows the pool to EXACTLY one
+        // live element, that is an unambiguous match. Two-plus stays not-found (never guess).
+        if !wantRole.isEmpty && pool.count == 1 {
+            return AXResult(ok: true, output: pool[0].ref, errorKind: nil, health: nil)
         }
         return AXResult.failure("element_not_found", "no element matches the recorded target in the current snapshot.")
     }
