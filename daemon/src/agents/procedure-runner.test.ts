@@ -487,6 +487,47 @@ test('app-launch resilience: an app NOT in the procedure is never launched — i
   assert.equal(launches.length, 0, 'never launch an app outside the procedure set');
 });
 
+// Scan HIGH (2026-07-22): a replayed native press on a "Send"/"Delete" control, or a
+// sending key chord, must re-fire the notch confirm — not run silently.
+test('replay re-fires the confirm for a native Send press and a delete chord', async () => {
+  const asked: string[] = [];
+  const h = harness({ confirm: async (detail) => { asked.push(detail); return true; } });
+  const proc: Procedure = {
+    name: 'send it', goal: 'send the mail', preconditions: [], apps: ['Mail'],
+    steps: [
+      { lane: 'ax', desc: 'Click Send', target: { app: 'Mail', role: 'AXButton', name: 'Send' }, verb: 'press' },
+      { lane: 'key', desc: 'Delete the draft', target: { app: 'Mail' }, verb: 'key', value: 'cmd+delete' },
+    ],
+  };
+  const result = await h.run(proc);
+  assert.equal(result.outcome, 'completed', 'approved → the replay finished');
+  assert.equal(asked.length, 2, 'both the Send press and the delete chord asked');
+  assert.match(asked[0], /Send/);
+  assert.match(asked[1], /cmd\+delete/);
+});
+
+test('a DECLINED native Send press stops the replay (never runs the send)', async () => {
+  const h = harness({ confirm: async () => false });
+  const proc: Procedure = {
+    name: 'send it', goal: 'send the mail', preconditions: [], apps: ['Mail'],
+    steps: [{ lane: 'ax', desc: 'Click Send', target: { app: 'Mail', role: 'AXButton', name: 'Send' }, verb: 'press' }],
+  };
+  const result = await h.run(proc);
+  assert.equal(result.outcome, 'stopped', 'a declined gate stops, same as any mode');
+});
+
+test('an ordinary replayed press (non-consequential label) does not confirm', async () => {
+  const asked: string[] = [];
+  const h = harness({ confirm: async (detail) => { asked.push(detail); return true; } });
+  const proc: Procedure = {
+    name: 'compose', goal: 'open a new message', preconditions: [], apps: ['Mail'],
+    steps: [{ lane: 'ax', desc: 'Click Compose', target: { app: 'Mail', role: 'AXButton', name: 'Compose' }, verb: 'press' }],
+  };
+  const result = await h.run(proc);
+  assert.equal(result.outcome, 'completed');
+  assert.equal(asked.length, 0, 'a benign label replays friction-free');
+});
+
 test('fallbackBrief carries the LITERAL typed values + a verbatim-reproduction instruction (no improvising)', () => {
   const proc: Procedure = {
     name: 'packing list', goal: 'a checklist-style packing list', preconditions: [], apps: ['Notes'],

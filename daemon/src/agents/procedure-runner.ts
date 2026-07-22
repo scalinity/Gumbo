@@ -226,6 +226,9 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
         role: null, name: null, timeout_ms: 8000,
         occurrence: step.verb === 'select_text' ? step.occurrence ?? 0 : null,
         rtf: step.verb === 'paste' ? step.rtf ?? null : null,
+        // The taught label rides along ONLY to feed the irreversible-action gate — a
+        // replayed press on a "Send"/"Delete" control re-fires the notch confirm (scan HIGH).
+        gate_name: step.target?.name ?? null,
       });
       if (obs?.declined) return { kind: 'stopped', reason: 'the user declined the action' };
       if (!obs?.ok) {

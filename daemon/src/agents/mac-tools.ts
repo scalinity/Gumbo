@@ -3,7 +3,7 @@ import { tool } from '@openai/agents';
 import { z } from 'zod';
 import { config } from '../config.ts';
 import { auditMacAction } from '../mac/audit.ts';
-import { gateScript, describeMacDo } from '../mac/policy.ts';
+import { gateScript, describeMacDo, nativeActDecision } from '../mac/policy.ts';
 import { visionQuery as realVisionQuery, type VisionQuery } from './vision.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import type { MacActionResult } from '../ws/protocol.ts';
@@ -145,8 +145,9 @@ export function createMacTools(
       timeout_ms: z.number().int().min(100).max(30_000).default(5000),
       occurrence: z.number().int().min(0).nullable().default(null).describe('select_text: which match of value to select when it appears more than once (0-based); null = first'),
       rtf: z.string().nullable().default(null).describe('paste: base64 RTF payload of the captured clipboard (the replay engine attaches this from the teaching record; leave null otherwise)'),
+      gate_name: z.string().nullable().default(null).describe('internal: the taught accessible name of a press/set_value target, used ONLY for the irreversible-action gate on replay — never sent to the shell'),
     }),
-    async execute({ verb, ref, value, role, name, timeout_ms, occurrence, rtf }) {
+    async execute({ verb, ref, value, role, name, timeout_ms, occurrence, rtf, gate_name }) {
       // Repetition guard: same verb on same ref ×3 in a row → stop and warn.
       const key = `${verb}:${ref ?? role ?? ''}:${value ?? name ?? ''}`;
       repeatCount = key === lastActKey ? repeatCount + 1 : 0;
@@ -154,6 +155,30 @@ export function createMacTools(
       if (repeatCount >= 2) {
         repeatCount = 0;
         return `You have repeated "${verb}" on the same target 3 times with no progress. Stop and take a fresh ax_snapshot, then try a different approach (a different element, a keyboard shortcut, or check for a dialog blocking the way).`;
+      }
+      // Irreversible-native gate (scan HIGH): a sending/deleting key chord (⌘⏎, ⌘⌫…), a
+      // send/delete/trash menu path, or a press/set_value on a taught send/delete-labeled
+      // control ALWAYS confirms. Chords and menu paths carry their own label, so they gate
+      // in BOTH the live loop and the replay engine (which drives this same tool). A
+      // ref-resolved press carries no local name in the live loop; the replay engine
+      // supplies the taught label via gate_name, so scheduled replay is covered. The live
+      // loop's untrusted-screen-text rule is the residual mitigation for a ref-press with
+      // no gate_name (documented in policy.nativeActDecision).
+      if (verb === 'key' || verb === 'menu_path' || ((verb === 'press' || verb === 'set_value' || verb === 'show_menu') && gate_name)) {
+        const decision = nativeActDecision({
+          verb,
+          chord: verb === 'key' ? value : null,
+          menuPath: verb === 'menu_path' ? value : null,
+          name: gate_name,
+        });
+        if (decision.route === 'confirm') {
+          const approved = await confirmScript(`${decision.reason}`, 'Allow this action?');
+          if (!approved) {
+            auditMacAction({ tier: 'subagent', kind: 'act', action: `${verb} ${gate_name ?? value ?? ''}`.trim(), gate: 'declined', ok: false, error: decision.reason, taskId });
+            deps.observe?.({ tool: 'ax_act', ok: false, declined: true });
+            return `the user didn't approve that (${decision.reason}) — try another approach or skip it.`;
+          }
+        }
       }
       const result = await macBridge.request(
         { kind: 'act', verb, ref, value, role, name, timeout_ms, ...(occurrence != null ? { occurrence } : {}), ...(rtf ? { rtf } : {}) },

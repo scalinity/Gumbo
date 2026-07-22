@@ -225,6 +225,27 @@ test('browserActDecision: an attribute-scripted control confirms even with an in
   assert.equal(browserActDecision({ verb: 'click', role: 'link', name: 'Continue', scripted: null }).route, 'auto', 'a plain control with the same name stays auto');
 });
 
+test('nativeActDecision: send/delete chords, menu paths, and labeled controls confirm (scan HIGH)', async () => {
+  const { nativeActDecision } = await import('./policy.ts');
+  // Dangerous key chords — the generalizable send/delete forms (a modifier + return or
+  // delete). App-specific sends like Mail's ⌘⇧D are caught by the button/menu label
+  // instead, never gated generically (⌘⇧D means "duplicate"/"go to Desktop" elsewhere).
+  assert.equal(nativeActDecision({ verb: 'key', chord: 'cmd+return' }).route, 'confirm', 'Send chord');
+  assert.equal(nativeActDecision({ verb: 'key', chord: 'cmd+delete' }).route, 'confirm', 'move to Trash');
+  assert.equal(nativeActDecision({ verb: 'key', chord: 'cmd+shift+delete' }).route, 'confirm', 'empty Trash');
+  assert.equal(nativeActDecision({ verb: 'key', chord: 'return' }).route, 'auto', 'a bare return is ordinary typing');
+  assert.equal(nativeActDecision({ verb: 'key', chord: 'cmd+c' }).route, 'auto', 'copy is reversible');
+  // Menu paths.
+  assert.equal(nativeActDecision({ verb: 'menu_path', menuPath: 'Message > Send' }).route, 'confirm');
+  assert.equal(nativeActDecision({ verb: 'menu_path', menuPath: 'File > Move to Trash' }).route, 'confirm');
+  assert.equal(nativeActDecision({ verb: 'menu_path', menuPath: 'Format > Font > Bold' }).route, 'auto');
+  // Labeled controls (the replay engine supplies gate_name → this name).
+  assert.equal(nativeActDecision({ verb: 'press', name: 'Send' }).route, 'confirm');
+  assert.equal(nativeActDecision({ verb: 'press', name: 'Delete' }).route, 'confirm');
+  assert.equal(nativeActDecision({ verb: 'press', name: 'Compose' }).route, 'auto');
+  assert.equal(nativeActDecision({ verb: 'press', name: null }).route, 'auto', 'no label → the loop residual, not a gate');
+});
+
 test('browserActDecision (review /address): normalized-name evasion + select-in-POST-form', async () => {
   const { browserActDecision } = await import('./policy.ts');
   // Zero-width padding and fullwidth forms no longer dodge the lexicon.

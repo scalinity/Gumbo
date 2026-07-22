@@ -412,3 +412,46 @@ export function browserActDecision(act: {
   }
   return { route: 'auto', reason: 'free navigation/typing' };
 }
+
+// A keyboard chord that sends or deletes in a native app: ⌘⏎ / ⌘⇧D send (Mail/Messages),
+// ⌘⌫ moves to Trash, ⌘⇧⌫ empties it. Normalized to lowercase `+`-joined tokens; both the
+// symbol (⌘) and word (cmd/command) forms and the return/enter/delete/backspace synonyms
+// are covered. A bare `return`/`enter` alone is NOT dangerous (it's ordinary typing) — the
+// send chords require a modifier, so only modified forms trip.
+const DANGEROUS_CHORD =
+  /(?:cmd|command|⌘)\+(?:shift\+|⇧\+)?(?:return|enter|⏎)$|(?:cmd|command|⌘)\+(?:shift\+|⇧\+)?(?:delete|backspace|⌫|del)$/i;
+
+/** Pure decision for one NATIVE (AX / key / menu) action — the counterpart of
+ *  browserActDecision for the mac lane (scan HIGH: native replay steps fired send/delete
+ *  controls with no notch confirm). Inputs are the deterministic labels the caller already
+ *  holds: the target control's accessible name (native press/set_value), the key chord
+ *  (key verb), and the menu-bar path (menu_path). Irreversible ones confirm; everything
+ *  else is free. Reuses the SUBMIT lexicon so the browser and native lanes agree on what
+ *  "consequential" means. */
+export function nativeActDecision(act: {
+  verb: string;
+  name?: string | null;
+  chord?: string | null;
+  menuPath?: string | null;
+}): MacPolicyResult {
+  if (act.verb === 'key') {
+    const chord = normalizeName(act.chord ?? '').toLowerCase().replace(/\s+/g, '');
+    if (DANGEROUS_CHORD.test(chord)) return { route: 'confirm', reason: `pressing ${act.chord}` };
+    return { route: 'auto', reason: 'free key press' };
+  }
+  if (act.verb === 'menu_path') {
+    // Confirm if ANY segment of the menu path is a consequential verb (Message > Send,
+    // File > Move to Trash, Mailbox > Erase Deleted Items).
+    const path = normalizeName(act.menuPath ?? '');
+    if (SUBMIT_NAME.test(path) || /\b(trash|erase|archive)\b/i.test(path)) {
+      return { route: 'confirm', reason: `menu action "${act.menuPath}"` };
+    }
+    return { route: 'auto', reason: 'free menu navigation' };
+  }
+  // press / set_value / show_menu on a named control: the accessible name is the signal,
+  // same lexicon as the browser click gate.
+  if (act.name && SUBMIT_NAME.test(normalizeName(act.name))) {
+    return { route: 'confirm', reason: `activating "${act.name}"` };
+  }
+  return { route: 'auto', reason: 'free native action' };
+}
