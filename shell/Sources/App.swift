@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // LSUIElement apps show no menu bar, but ⌘Q still resolves through mainMenu key
     // equivalents — without this, quitting from the dashboard window is impossible.
+    // The Edit menu is equally load-bearing: without it, ⌘V/⌘C/⌘X/⌘A have no
+    // key-equivalent route in ANY window — paste was dead in the dashboard webview.
+    // The selectors dispatch down the responder chain, so the WKWebView (and any
+    // native field) receives them.
     private func setupMainMenu() {
         let mainMenu = NSMenu()
         let appItem = NSMenuItem()
@@ -32,6 +36,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(NSMenuItem(title: "Quit Gumbo", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        editMenu.addItem(NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z"))
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
         NSApp.mainMenu = mainMenu
     }
 
