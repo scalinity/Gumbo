@@ -604,7 +604,7 @@ export class TaskManager {
    *  stopTeaching distills the demonstration before the task finishes (ONE announce
    *  carries both); absent (tests), the raw step report lands alone. Returns the report
    *  tail; a rejection means "not saved" and is reported loudly, never swallowed. */
-  distillProcedure?: (name: string, steps: TeachStep[], taskId: string) => Promise<string>;
+  distillProcedure?: (name: string, steps: TeachStep[], taskId: string, outcome: string | null) => Promise<string>;
 
   /** Begin recording a demonstration. Resolves once the shell's recorder is ARMED —
    *  fail-closed: if the tap can't arm, the teach task fails and this throws (never a
@@ -680,12 +680,23 @@ export class TaskManager {
     if (this.teaching !== t) throw new Error('the recording was cancelled');
     this.teaching = null;
     this.macBridge?.setTeaching(false);
+    // Capture the demonstration's OUTCOME: the final document (full text + styled ranges)
+    // of the app the user typed into. The compiler builds content from this observed RESULT
+    // — corrections, undos, and caret wandering are already reflected in it, which the
+    // keystroke stream can never reliably reconstruct. Best-effort: no readable document,
+    // no section (the compiler falls back to the step stream alone).
+    let outcome: string | null = null;
+    const lastTextApp = [...t.steps].reverse().find((s) => s.kind === 'type' || s.kind === 'select_text')?.app;
+    if (lastTextApp && this.macBridge) {
+      const doc = await this.macBridge.request({ kind: 'document_state', app: lastTextApp });
+      if (doc.ok) outcome = doc.output;
+    }
     const base = teachingReport(t.name, t.steps, note);
     if (this.distillProcedure && t.steps.length > 0) {
       // The task stays 'running' for the few seconds of compile; ONE announce then
       // carries the step list AND the saved-procedure summary (or the loud not-saved
       // note — the demonstration itself is never lost to a compile failure).
-      this.distillProcedure(t.name, t.steps, t.taskId).then(
+      this.distillProcedure(t.name, t.steps, t.taskId, outcome).then(
         (summary) => this.finishWithReport(t.taskId, t.title, t.workspace, `${base}\n${summary}`),
         (err: unknown) => this.finishWithReport(
           t.taskId, t.title, t.workspace,

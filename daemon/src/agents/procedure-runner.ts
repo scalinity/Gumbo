@@ -146,7 +146,36 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
   };
   const BROWSER_VERBS = new Set(['click', 'fill', 'type', 'press', 'select', 'hover', 'focus', 'scroll']);
 
-  const runAxStep = async (step: ProcedureStep): Promise<StepOutcome> => {
+  // Container visibility is a RUNTIME precondition the engine owns. A popover or menu
+  // the app closed (a swatch pick, a toggle, a timeout) takes this step's target with
+  // it — and whether a recorded "open" click is needed again depends on state that
+  // differs between demonstration and replay, so it can never be predicted at compile
+  // time. When a target will not resolve, re-execute the nearest PRECEDING Button-click
+  // step — the gesture that revealed the target during the demonstration — and retry.
+  // Generic across disclosure UI (popovers, dropdown menus, accordions); no app-specific
+  // state model.
+  const reopenRevealer = async (stepIndex: number): Promise<boolean> => {
+    const CLICKS = new Set(['click', 'press', 'double_click']);
+    for (let j = stepIndex - 1; j >= 0; j -= 1) {
+      const prev = procedure.steps[j];
+      if (prev.lane !== 'ax' || !CLICKS.has(prev.verb ?? 'click')) continue;
+      const role = (prev.target?.role ?? '').replace(/^AX/, '');
+      if (role !== 'Button' || !prev.target?.name) continue;
+      const snap = await invoke('ax_snapshot', { app: prev.target?.app ?? null, max_elements: config.mac.snapshotMaxElements });
+      if (!snap?.ok) return false;
+      const resolved = await deps.macBridge.request(
+        { kind: 'resolve', role: prev.target?.role ?? null, name: prev.target?.name ?? null, identifier: prev.target?.identifier ?? null },
+        { signal: deps.signal },
+      );
+      if (!resolved.ok) return false;
+      const obs = await invoke('ax_act', { verb: 'press', ref: resolved.output, value: null, role: null, name: null, timeout_ms: 8000 });
+      await sleep(600, deps.signal);
+      return obs?.ok === true;
+    }
+    return false;
+  };
+
+  const runAxStep = async (step: ProcedureStep, index: number): Promise<StepOutcome> => {
     const focused = await ensureApp(step.target?.app);
     if (focused !== 'ok') return focused;
     // "Open the app" IS the whole step: ensureApp above focused/launched it, and an
@@ -164,7 +193,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     }
     if (selectorless) return 'ok';
     const mapped = AX_VERBS[step.verb ?? 'click'] ?? AX_VERBS.click;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       const snap = await snapshotWithLaunchSlack(step.target?.app);
       if (!snap?.ok) return { kind: 'drift', reason: `snapshot failed (${snap?.errorKind ?? 'no result'})` };
       const resolved = await deps.macBridge.request(
@@ -173,6 +202,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
       );
       if (!resolved.ok) {
         if (attempt === 0) { await sleep(800, deps.signal); continue; }
+        if (attempt === 1 && (await reopenRevealer(index))) continue;
         return { kind: 'drift', reason: `target not found: ${resolved.output}` };
       }
       const obs = await invoke('ax_act', {
@@ -231,7 +261,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     return { kind: 'drift', reason: 'unreachable' };
   };
 
-  const runStep = async (step: ProcedureStep): Promise<StepOutcome> => {
+  const runStep = async (step: ProcedureStep, index: number): Promise<StepOutcome> => {
     switch (step.lane) {
       case 'handoff': {
         const obs = await invoke('request_handoff', { reason: step.desc });
@@ -258,7 +288,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
         return runBrowserStep(step);
       case 'ax':
       default:
-        return runAxStep(step);
+        return runAxStep(step, index);
     }
   };
 
@@ -270,7 +300,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     const step: ProcedureStep = { ...procedure.steps[i] };
     if (step.param && paramValues[i] !== undefined) step.value = paramValues[i];
 
-    const outcome = await runStep(step);
+    const outcome = await runStep(step, i);
     if (outcome !== 'ok' && outcome.kind === 'stopped') {
       const report = [
         `Replay of "${procedure.name}" stopped at step ${i + 1} of ${procedure.steps.length}: ${outcome.reason}.`,

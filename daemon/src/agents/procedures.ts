@@ -111,37 +111,10 @@ export function validateProcedure(raw: unknown, name: string): Procedure | null 
     goal,
     preconditions: cappedList(r.preconditions, 10, 300),
     apps: cappedList(r.apps, 10, 100),
-    steps: dropToggledReopens(steps),
+    steps,
   };
   redactProcedure(procedure);
   return procedure;
-}
-
-/** During replay a formatting popover STAYS OPEN across programmatic selections — but a
- *  hand demonstration dismisses it by clicking into the note, so the recording contains
- *  dismiss+reopen pairs. Replaying the reopen click then TOGGLES the still-open popover
- *  CLOSED and the next control resolve fails (the Highlight-color drift). Deterministic
- *  post-pass, independent of the model: drop a click on the same-named Button when only
- *  selections and popover-control clicks happened since the last click on it. */
-function dropToggledReopens(steps: ProcedureStep[]): ProcedureStep[] {
-  const POPOVER_ROLES = new Set(['MenuButton', 'MenuItem', 'CheckBox', 'RadioButton']);
-  const CLICK_VERBS = new Set(['click', 'press', 'double_click']);
-  const norm = (s?: string) => (s ?? '').replace(/^AX/, '');
-  const out: ProcedureStep[] = [];
-  let openerName: string | null = null;
-  for (const step of steps) {
-    const role = norm(step.target?.role);
-    const isClick = step.lane === 'ax' && CLICK_VERBS.has(step.verb ?? 'click');
-    if (isClick && role === 'Button' && step.target?.name) {
-      if (openerName === step.target.name) continue; // toggle reopen — the popover never closed
-      openerName = step.target.name;
-      out.push(step);
-      continue;
-    }
-    if (!(step.verb === 'select_text' || (isClick && POPOVER_ROLES.has(role)))) openerName = null;
-    out.push(step);
-  }
-  return out;
 }
 
 /** Deterministic post-pass, independent of the model: any step aimed at a
@@ -250,7 +223,8 @@ Rules:
 - lane: "ax" for native-app UI steps; "browser" for steps on a web page inside a browser; "key" for a bare keyboard shortcut; "script" ONLY when a step clearly maps to one deterministic command; "handoff" for anything the user must do himself (logins, credentials, judgment calls).
 - Merge noise: a click that only focused a field before typing merges into the type step; scrolls that merely revealed content fold into the next step's desc; a bare "drag" that highlighted nothing is not replayable — fold it away or mark a handoff.
 - SELECTING/HIGHLIGHTING TEXT: a recorded "select_text" step means a text range was highlighted (to color, bold, etc.). Compile it to lane "ax", verb "select_text", target = the text field it happened in, value = the EXACT highlighted string (verbatim), and copy its "occurrence" number through UNCHANGED (which instance of that string was selected — do not renumber or drop it). A click/double-click IMMEDIATELY BEFORE a select_text on the same field is just the gesture that made the selection — drop it, keep only the select_text. CONSECUTIVE select_text steps on the same field with no formatting action between them are re-adjustments of one selection — keep ONLY the last.
-- FORMATTING (highlight, highlight color, bold, paragraph styles): compile the selection first (select_text as above), then the recorded format clicks FAITHFULLY as ordinary lane "ax" click steps with their recorded role+name targets — the Format button, the "Highlight color" MenuButton, the color MenuItem (Accent/Purple/Pink/Orange/Mint/Blue). The replay engine operates these controls with real clicks even when they read disabled. Order: select_text comes BEFORE the format clicks it feeds. Drop drags/scrolls inside the popover — gesture noise, only the clicks replay. THE POPOVER STAYS OPEN during replay across selections (a hand demonstration dismisses it by clicking into the note — do NOT reproduce those dismiss+reopen pairs): emit the Format-button click ONCE per formatting stretch, re-opening only after a step that really left the popover (clicking into the note text, typing content). Apply each recorded format action EXACTLY ONCE with EXACTLY the recorded color/style — never invent intermediate or repeated applications the recording does not contain. NEVER reorder formatting chords (cmd+b, cmd+u, cmd+i) relative to select_text steps — a chord acts on whatever is selected at that moment; keep the recorded order. EXCEPTION — a click on the "Highlight" CHECKBOX applies whatever color the app CURRENTLY has, which is machine state, not recorded intent: replace it with the two explicit clicks (MenuButton "Highlight color", then the color MenuItem). Use the color the demonstration shows for THAT highlight if any nearby swatch pick indicates it; otherwise "Accent" (the default).
+- FINAL DOCUMENT STATE (ground truth for content): when the input contains a "=== final document ===" section, that section is the AUTHORITATIVE result of the demonstration — the recorded keystrokes are evidence only for HOW (which app, which buttons, which controls). Compile content in TWO PASSES. Pass 1 — type the document's lines in order: verb "type" steps carrying EXACTLY the final text, with "key" return steps for the line breaks. Corrections, undos (cmd+z), deletes, and caret movement in the recording are ALREADY REFLECTED in the final text — never re-derive or replay them. Pass 2 — after ALL content is typed, one selection+format sequence per styled range listed (value = the exact substring; occurrence = which instance of that substring in the final text, 0-based). NEVER interleave typing with formatting.
+- FORMATTING (highlight colors, bold, italic, underline, styles): each styled range gets its OWN full sequence — select_text, then for a highlight color: click Button "Format", click MenuButton "Highlight color", click MenuItem "<Color>" (Accent/Purple/Pink/Orange/Mint/Blue); for bold/italic/underline: key cmd+b / cmd+i / cmd+u immediately after the select_text. Do not reason about whether the Format popover is already open — the replay engine establishes control visibility itself; emit the full click sequence every time. The engine operates popover controls with real clicks even when they read disabled. A recorded click on the "Highlight" CHECKBOX applies whatever color the app currently has (machine state, not intent) — compile the explicit color pair instead, using the color the demonstration or final document shows, else "Accent". Drop drags/scrolls inside the popover — gesture noise.
 - CORRECTIONS: a "pressed delete" key step erases whatever landed IMMEDIATELY before it — a typed character OR a pressed return. Cancel each delete against the preceding item: typed "d", delete, typed "TEST" → the "d" is gone, compile only "TEST". Typed "- Gumb", pressed return, pressed delete, typed "o" → the RETURN was undone, compile one step typing "- Gumbo" with NO line break. Never compile the delete presses themselves.
 - KEY-PRESS NOISE: arrow keys (left/right/up/down) are caret navigation — drop them; select_text and type steps carry position. NEVER compile a type step whose value is (or contains) control/invisible characters — those are mis-recorded key presses, not content; strip them, and drop the step if nothing printable remains.
 - OPENING AN APP: if the demonstration opened or switched to an app via Spotlight (⌘Space), Launchpad, the Dock, or ⌘Tab, compile it to ONE step that opens THAT app — lane "ax", verb "activate", target.app = the app being opened (e.g. "Notes"), NOT the launcher (never "Spotlight"/"Siri"). Do NOT reproduce the raw ⌘Space / type-into-search / return keystrokes; they are brittle.
@@ -291,7 +265,7 @@ async function compile(complete: CompleteFn, input: string, name: string): Promi
 export interface ProcedureService {
   /** Teaching stop → compile + save; returns the report tail (summary or the reason it
    *  wasn't saved is the CALLER's framing — this throws on failure). */
-  distillTeaching(name: string, steps: TeachStep[], taskId: string): Promise<string>;
+  distillTeaching(name: string, steps: TeachStep[], taskId: string, outcome?: string | null): Promise<string>;
   /** "Save that as a procedure": distill a finished computer task's action trace.
    *  provider 'healed' = the M8 self-heal path (a replay that drifted, fell back to the
    *  full loop, and succeeded — this run's trace becomes version+1). */
@@ -300,9 +274,9 @@ export interface ProcedureService {
 
 export function createProcedureService(store: Store, complete: CompleteFn = completeOnce): ProcedureService {
   return {
-    async distillTeaching(name, steps, taskId) {
+    async distillTeaching(name, steps, taskId, outcome = null) {
       const lines = steps.map((s, i) => describeTeachStep(s, i + 1));
-      const input = `Procedure name: ${name}\nSource: a demonstration the user performed himself (semantic recording).\nRecorded steps:\n${lines.join('\n')}`;
+      const input = `Procedure name: ${name}\nSource: a demonstration the user performed himself (semantic recording).\nRecorded steps:\n${lines.join('\n')}${outcome ? `\n\n${outcome}` : ''}`;
       const procedure = await compile(complete, input, name);
       const version = store.saveProcedure({
         taskId, name, title: `${name} — ${procedure.goal}`, body: JSON.stringify(procedure), provider: 'taught',

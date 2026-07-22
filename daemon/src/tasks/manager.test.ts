@@ -343,7 +343,9 @@ test('M8 teaching: start arms the recorder, steps land, stop finishes with a rep
   // finish() fires a defensive clipboard_restore on EVERY computer-task end (teaching rows are
   // kind:'computer' too) — a no-op ping when nothing was snapshotted. The choke point is finish()
   // so a kill-switch cancel mid-save still restores; the teaching no-op is the accepted cost.
-  assert.deepEqual(bridge.requests, ['record_start', 'record_stop', 'clipboard_restore']);
+  // document_state between stop and finish = the demonstration-outcome capture (the final
+  // document the compiler builds content from).
+  assert.deepEqual(bridge.requests, ['record_start', 'record_stop', 'document_state', 'clipboard_restore']);
   assert.deepEqual(bridge.teachStates, [true, false]);
   assert.equal(store.getTask(task.id)?.status, 'done');
   assert.deepEqual(finished, ['done'], 'stop rides the announce path');

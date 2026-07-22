@@ -88,6 +88,8 @@ final class AXExecutor {
                     name: action["name"] as? String,
                     identifier: action["identifier"] as? String
                 ).wire()
+            case "document_state":
+                return documentState(app: action["app"] as? String).wire()
             default: return AXResult.failure("out_of_scope", "Unknown action kind \"\(kind)\".").wire()
             }
         }
@@ -915,6 +917,77 @@ final class AXExecutor {
             return AXResult(ok: true, output: pool[0].ref, errorKind: nil, health: nil)
         }
         return AXResult.failure("element_not_found", "no element matches the recorded target in the current snapshot.")
+    }
+
+    // MARK: M8 teaching outcome — the document that resulted from a demonstration
+
+    /// The dominant text document of an app: full text plus styled ranges from the
+    /// attributed string (style names, underline, bold/italic font traits). Captured at
+    /// teach-stop so the compiler builds CONTENT from the observed RESULT — corrections,
+    /// undos, and caret wandering during the demonstration are already reflected in the
+    /// final text, which keystroke archaeology can never reliably reconstruct.
+    private func documentState(app requestedApp: String?) -> AXResult {
+        guard let target = resolveApp(requestedApp) else {
+            return AXResult.failure("element_not_found", requestedApp.map { "No running app matches \"\($0)\"." } ?? "No frontmost application.")
+        }
+        let appElement = AXUIElement.application(target.pid)
+        appElement.setMessagingTimeout(messagingTimeout)
+        let root = focusedWindow(of: appElement) ?? appElement
+        // Dominant document = the LARGEST text area by frame (sidebars/search fields are small).
+        var best: (el: AXUIElement, area: CGFloat)?
+        func scan(_ el: AXUIElement, depth: Int) {
+            if depth > 30 { return }
+            if stringAttr(el, kAXRoleAttribute) == "AXTextArea", !isSecureField(el) {
+                var pos = CGPoint.zero
+                var size = CGSize.zero
+                var pv: CFTypeRef?
+                var sv: CFTypeRef?
+                if AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pv) == .success, let p = pv,
+                   AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sv) == .success, let s = sv {
+                    AXValueGetValue(p as! AXValue, .cgPoint, &pos)
+                    AXValueGetValue(s as! AXValue, .cgSize, &size)
+                }
+                let area = size.width * size.height
+                if area > (best?.area ?? 0) { best = (el, area) }
+            }
+            for c in axChildren(el) { scan(c, depth: depth + 1) }
+        }
+        scan(root, depth: 0)
+        guard let doc = best?.el else {
+            return AXResult.failure("element_not_found", "no text document found in \(target.name).")
+        }
+        guard let full = stringAttr(doc, kAXValueAttribute), !full.isEmpty else {
+            return AXResult.failure("element_not_found", "the document is empty or exposes no text.")
+        }
+        let ns = full as NSString
+        let cappedLen = min(ns.length, 20_000)
+        var range = CFRange(location: 0, length: cappedLen)
+        guard let axRange = AXValueCreate(.cfRange, &range) else {
+            return AXResult.failure("ax_unavailable", "could not build the document range.")
+        }
+        var out: AnyObject?
+        var runs: [String] = []
+        if AXUIElementCopyParameterizedAttributeValue(doc, "AXAttributedStringForRange" as CFString, axRange, &out) == .success,
+           let astr = out as? NSAttributedString {
+            astr.enumerateAttributes(in: NSRange(location: 0, length: astr.length)) { attrs, r, _ in
+                var flags: [String] = []
+                if let style = attrs[NSAttributedString.Key("AXStyleName")] as? String { flags.append(style) }
+                if let u = attrs[NSAttributedString.Key("AXUnderline")] as? NSNumber, u.intValue != 0 { flags.append("underlined") }
+                if let font = attrs[NSAttributedString.Key("AXFont")] as? [String: Any],
+                   let fname = (font["AXFontName"] as? String)?.lowercased() {
+                    if fname.contains("bold") { flags.append("bold") }
+                    if fname.contains("italic") || fname.contains("oblique") { flags.append("italic") }
+                }
+                guard !flags.isEmpty else { return }
+                let snippet = (astr.string as NSString).substring(with: r).replacingOccurrences(of: "\n", with: "⏎")
+                runs.append("[\(r.location)-\(r.location + r.length)] \"\(truncate(snippet, 60))\": \(flags.joined(separator: ", "))")
+            }
+        }
+        var body = "=== final document (app \"\(target.name)\") ===\n\(ns.substring(to: cappedLen))"
+        if ns.length > cappedLen { body += "\n…(truncated)" }
+        body += "\n=== styled ranges (character offsets into the text above) ===\n"
+        body += runs.isEmpty ? "(no styling readable)" : runs.joined(separator: "\n")
+        return AXResult(ok: true, output: body, errorKind: nil, health: nil)
     }
 
     // MARK: M8 recorder support — element-at-point + focused element (read-only)

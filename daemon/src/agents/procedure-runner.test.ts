@@ -191,6 +191,35 @@ test('menu_path: an element-targeted step resolves then acts; a targetless step 
   assert.equal(h.calls.filter((c) => c.kind === 'resolve').length, 2, 'the menu-bar form never resolves');
 });
 
+test('ensure-visible: a target the app hid (closed popover/menu) is recovered by re-executing the preceding Button click', async () => {
+  let fmtPresses = 0;
+  const h = harness({
+    bridge: (a) => {
+      if (a.kind === 'resolve') {
+        if (a.name === 'Format') return { ok: true, output: 'fmt' };
+        // The swatch only exists while the popover is open — visible again only after the
+        // revealer press re-opens it (the first press was step 1's own click; the app then
+        // "closed" it before step 2 resolved).
+        return fmtPresses >= 2
+          ? { ok: true, output: 'pinkref' }
+          : { ok: false, output: 'no element matches the recorded target in the current snapshot.', error_kind: 'element_not_found' };
+      }
+      if (a.kind === 'act' && a.ref === 'fmt') fmtPresses += 1;
+      return { ok: true, output: '+ changed' };
+    },
+  });
+  const result = await h.run({
+    name: 'colorize', goal: 'apply a highlight color', preconditions: [], apps: ['Notes'],
+    steps: [
+      { lane: 'ax', desc: 'Open formatting controls', target: { app: 'Notes', role: 'Button', name: 'Format' }, verb: 'click' },
+      { lane: 'ax', desc: 'Pick pink', target: { app: 'Notes', role: 'MenuItem', name: 'Pink' }, verb: 'click' },
+    ],
+  });
+  assert.equal(result.outcome, 'completed');
+  assert.equal(fmtPresses, 2, 'the revealer Button was pressed again to re-establish the target');
+  assert.ok(h.calls.some((c) => c.kind === 'act' && c.ref === 'pinkref'), 'the recovered target was acted on');
+});
+
 test('drift after the retry bails to fallback with step + reason + verified progress', async () => {
   const h = harness({
     bridge: (a) => (a.kind === 'resolve'
