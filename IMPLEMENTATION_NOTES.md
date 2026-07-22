@@ -2673,3 +2673,29 @@ the hard way:
   a deleted "d" into the compile), compiler collapses consecutive re-selections and drops
   delete-corrected characters, and `MaxTurnsExceededError` ends as an honest partial report
   instead of a raw task failure.
+
+### M8 replay architecture — container state and content become engine-owned (2026-07-21, late)
+
+Four demo-debug rounds on the formatting exam kept producing new micro-rules that each fixed one
+run and broke the next (popover "stays open" → wrong; "closes on pick" → also wrong; both directions
+observed live). The convergent lesson, folded into the design as two GENERAL mechanisms:
+
+- **Container visibility is a runtime precondition, never a compile-time prediction.** Whether a
+  recorded "open" click is needed again at replay depends on state that structurally differs
+  between demonstration and replay (hand clicks into a note dismiss a popover; programmatic
+  selections don't; a swatch pick sometimes closes it). The engine's resolve ladder gained a
+  final rung: target won't resolve → re-execute the nearest preceding Button-click step (the
+  gesture that revealed the target in the demo) → retry. Works for any disclosure UI; also makes
+  the engine tolerant of BOTH compile shapes (redundant re-open clicks self-correct, missing
+  ones get re-established). The two speculative popover compile rules from earlier the same
+  night were removed as wrong-signed.
+- **Typed content compiles from the demonstration's OUTCOME, not from keystroke archaeology.**
+  At teach-stop the daemon captures the app's dominant text document (new `document_state` wire
+  read: full text + styled ranges via AXAttributedStringForRange — style names, underline, font
+  bold/italic traits) and the compiler treats it as ground truth: type all lines in order first,
+  then one position-independent select_text+format sequence per styled range. Corrections, undos,
+  and caret wandering are already reflected in the final text — the returns+cmd+z+arrow dance
+  that previously compiled into mid-line text insertions simply stops mattering. Gesture steps
+  stay authoritative for app-level actions only (open, New Note, button clicks).
+- Same session: teaching completions announce as one confident save confirmation (summarizing
+  the raw step report invited "this looks fiddly, the replay may fail" forecasts).
