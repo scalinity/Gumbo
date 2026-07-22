@@ -32,9 +32,20 @@ test('needsHandoffBounce never fires on success or unrelated-failure endings', (
 // The deep-research lane's core invariant: raw page bodies never enter the orchestrating
 // loop's context (full-text searches saturate it in a handful of turns — the measured
 // cause of shallow research runs). Searches skim; reads come back as compressed notes.
-const { formatSkim, extractNotes } = await import('./openai-runner.ts');
+const { formatSkim, extractNotes, firecrawlReserve } = await import('./openai-runner.ts');
 const { config } = await import('../config.ts');
 import type { ExaResult } from '../search/exa.ts';
+
+// Scan MEDIUM (2026-07-22): a per-task Firecrawl page budget bounds a prompt-injected
+// research agent that would otherwise loop expensive crawls.
+test('firecrawlReserve clamps to the remaining budget and refuses at zero (no silent truncation)', () => {
+  assert.deepEqual(firecrawlReserve(100, 0, 2000), { allow: 100, note: '' }, 'plenty of budget → full request, no note');
+  const near = firecrawlReserve(500, 1800, 2000);
+  assert.equal(near.allow, 200, 'clamped to what remains');
+  assert.match(near.note, /clamped to 200 pages/, 'the model is told, not silently cut');
+  assert.equal(firecrawlReserve(100, 2000, 2000).allow, 0, 'budget spent → refuse (caller returns the exhausted message)');
+  assert.equal(firecrawlReserve(100, 2500, 2000).allow, 0, 'over-spent stays refused (never negative)');
+});
 
 test('deep-mode search skim carries titles/URLs/highlights but NEVER page bodies', () => {
   const results = [

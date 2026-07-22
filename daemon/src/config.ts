@@ -372,6 +372,12 @@ export const config = {
     crawlDefaultMaxPages: 100,
     crawlDefaultMaxDepth: 3,
     extractJobBudgetMs: 300_000,
+    // Per-TASK cumulative page/URL budget across all map/crawl calls. Each Firecrawl page
+    // is a billed credit, so a prompt-injected research agent looping expensive crawls is a
+    // real cost. Generous for a genuine research task (a few crawls + maps), but a hard cap:
+    // beyond it, acquisition is clamped or refused loudly (never silently). One task's spend
+    // can't run away.
+    taskPageBudget: 2000,
   },
   // M5 images: generation runs in the background off the voice turn (the tool acks
   // instantly), so the budget is generous like other background calls.
