@@ -611,7 +611,10 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       'it ("never mind", "forget that"). Recording shows in the notch the whole time. action ' +
       '"save_last_run": when Gumbo itself just finished a multi-step computer task and the user says ' +
       '"save that as a procedure" / "remember how you did that" — distills that run instead of a ' +
-      'demonstration (name: infer from his words or the task). action "list": what procedures are ' +
+      'demonstration (name: infer from his words or the task). ACKNOWLEDGE FIRST: say one short ' +
+      'line ("Saving that run now") BEFORE calling — distillation takes ~20 silent seconds and an ' +
+      'unacknowledged request feels unheard; the tool result then carries the real confirmation ' +
+      'to speak (never a second acknowledgment). action "list": what procedures are ' +
       'saved ("what have I taught you", "what procedures do you have") — a QUICK lookup: call it ' +
       'SILENTLY, say NOTHING first (no "let me check", no restating the question), then speak exactly ' +
       'once — the answer. action "delete": remove a ' +
