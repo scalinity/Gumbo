@@ -2721,3 +2721,44 @@ represent, and only verifies what it re-reads.** Three additions complete the te
 - Also that session: the outcome had silently never reached the compiler (a 3-arg arrow on a
   4-arg seam — TS allows it); select_text now verifies by RANGE (AXSelectedText reads empty on
   unfocused fields → false "did not take" whenever a popover held focus) with an Escape rung.
+
+### M8 the AX channel can lie about itself — real-input selections + freshness discipline (2026-07-22, ~2 AM)
+
+Two replays failed under the previous fixes; the trace forensics found the causes OUTSIDE the
+places the fixes had looked, and both lessons generalize:
+
+- **A dev-loop process failure, not a code failure, sank run 1**: the value-matched paste
+  attach was correct on disk but the tsx-watch child had spawned the SAME SECOND as the final
+  save and loaded the pre-fix module — the 01:18 teach distilled under stale code, positional-
+  matched the styled paste to the earlier rtf-less recording, and the replay pasted plain text
+  (literal "- " dashes → every later select missed → drift). Rule going forward: after daemon
+  edits, verify child lstart vs newest RUNTIME source mtime (test files are not watched — tsx
+  restarts only on imported-graph changes), and when mtime==lstart to the second, prove content
+  identity instead (clean tree vs HEAD). The recording's clipboard payload is unrecoverable
+  (memory-only steps; pasteboard since overwritten) — that teach needs one re-demonstration.
+- **Run 2's mis-painted highlights survived every check because the anchor verification read
+  the same AX channel it wrote.** setCaretVerified wrote the caret and read it back — but an
+  app's AX layer can SHADOW range writes (reads reflect the write while the app's event-real
+  caret never moved), so shift+rights extended a wrong selection, and the final range read
+  still satisfied `tookRange`. Notes painted orange on one character ("C") and dropped mint
+  entirely. Fix: rung 1 of performSelectText is now a REAL click + shift+click at the range's
+  live character bounds (kAXBoundsForRange, read at act time — the no-recorded-coordinates
+  rule is about brittle recorded positions, not runtime-derived ones); the identity-gated
+  hit-test must climb back to the target element (same-pid is not enough — the app's OWN
+  popover over the text would swallow the click). The AX write is a LAST resort reported
+  structurally (`select_how` on the wire, the no_change idiom) and the engine drifts on it
+  unless the next step is replace_text/type (text edits ride the same AX channel; only
+  format actions target the event-real selection).
+- **diffOutcome's "text first, then styles" early-return hid the style deltas** — the fallback
+  was told about a dropped space and nothing else, "fixed" it, and the wrong highlights
+  shipped as done. Styles now compare per-character on every line whose text matches (each
+  side at its own offsets), and a diff-triggered fallback is RE-VERIFIED after it finishes
+  (verifyAgainstExpect appends the honest end state to the report — the fallback's word is
+  never the last word).
+- **The 88 s "hung" fallback was a stalled model call**: the Agents-SDK default client waits
+  ~10 min per request. setDefaultOpenAIClient now carries config.models.requestTimeoutMs
+  (120 s) + retries; get_task_status states the age of the newest event so "is it stuck?"
+  gets an honest answer (the voice model had read busy-LOOKING recent events as progress).
+- Tooling gotcha that cost a false alarm: Xcode debug builds are a 59 KB loader stub + the
+  real code in Contents/MacOS/Gumbo.debug.dylib, and BSD strings/grep miss Swift literals in
+  Mach-O sections — verify build freshness by byte-searching the debug dylib.
