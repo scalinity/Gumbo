@@ -687,7 +687,14 @@ export class TaskManager {
     // no section (the compiler falls back to the step stream alone).
     let outcome: string | null = null;
     let outcomeNote = '';
-    const lastText = [...t.steps].reverse().find((s) => s.kind === 'type' || s.kind === 'select_text');
+    // The demo's document lives in the app the user WORKED in — never the launcher he
+    // opened it with (a paste-only demo's last typed text is the Spotlight query, which
+    // pointed the capture at "Siri" and failed it). Prefer the last text step outside a
+    // launcher; fall back to the last step of ANY kind outside one (a paste or click in
+    // the real app still names it).
+    const LAUNCHERS = new Set(['Siri', 'Spotlight', 'Gumbo']); // Gumbo: the finish-teaching orb click records as a step
+    const lastText = [...t.steps].reverse().find((s) => (s.kind === 'type' || s.kind === 'select_text') && !LAUNCHERS.has(s.app))
+      ?? [...t.steps].reverse().find((s) => !LAUNCHERS.has(s.app));
     if (lastText?.app && this.macBridge && SECRET_FIELD_RE.test(lastText.name ?? '')) {
       // Never capture a credential-shaped field's document — the capture would persist
       // its content into the memory table and the compile input.
