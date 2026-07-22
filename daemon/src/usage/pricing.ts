@@ -116,11 +116,20 @@ export function priceRealtimeTurn(u: RealtimeUsage): PricedTokens {
   const outD = u.output_token_details ?? {};
   const textOut = outD.text_tokens ?? 0;
   const audioOut = outD.audio_tokens ?? 0;
+  // Degraded output: output_tokens present but NO modality split (input detail was there,
+  // so we don't take the early-return path). Pricing only textOut/audioOut here would bill
+  // the entire output side at $0. Price the total at the audio-out rate — the dominant and
+  // more-expensive realtime modality — so a real turn is never undercounted (accounting
+  // only, so conservative-high is the safe direction).
+  const outputDegraded = u.output_token_details === undefined && (u.output_tokens ?? 0) > 0;
+  const outputCost = outputDegraded
+    ? perM(u.output_tokens ?? 0, REALTIME.audioOut)
+    : perM(textOut, REALTIME.textOut) + perM(audioOut, REALTIME.audioOut);
   const costUsd =
     perM(textIn, REALTIME.textIn) + perM(cachedText, REALTIME.cachedTextIn) +
     perM(audioIn, REALTIME.audioIn) + perM(cachedAudio, REALTIME.cachedAudioIn) +
     perM(imageIn, REALTIME.imageIn) + perM(cachedImage, REALTIME.cachedImageIn) +
-    perM(textOut, REALTIME.textOut) + perM(audioOut, REALTIME.audioOut);
+    outputCost;
   return {
     costUsd,
     inputTokens: textIn + audioIn + imageIn,
@@ -129,6 +138,7 @@ export function priceRealtimeTurn(u: RealtimeUsage): PricedTokens {
     detail: {
       text_in: textIn, audio_in: audioIn, cached_text_in: cachedText,
       cached_audio_in: cachedAudio, text_out: textOut, audio_out: audioOut,
+      ...(outputDegraded ? { degraded_output: true } : {}),
     },
   };
 }

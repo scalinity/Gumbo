@@ -78,6 +78,21 @@ test('realtime degraded: missing input_token_details prices the total as uncache
   assert.equal(p.detail?.degraded, true);
 });
 
+// Scan BUG (2026-07-22): input_token_details present but output_token_details omitted while
+// output_tokens is positive — the output side used to price at $0.
+test('realtime degraded: output_tokens without output_token_details still costs (audio-out rate)', () => {
+  const p = priceRealtimeTurn({
+    input_tokens: 10_000,
+    output_tokens: 2000,
+    input_token_details: { text_tokens: 10_000 }, // present → not the input-degraded early return
+    // output_token_details deliberately omitted
+  });
+  // input: 10k text @ $4/1M; output: 2k priced at the audio-out rate ($64/1M), never $0.
+  close(p.costUsd, (10_000 * 4 + 2000 * 64) / 1e6);
+  assert.equal(p.outputTokens, 2000, 'output tokens are still recorded');
+  assert.equal(p.detail?.degraded_output, true);
+});
+
 test('terra: cached share priced at the cached rate', () => {
   const p = priceTerraTokens({ input: 100_000, cached: 60_000, output: 10_000 });
   close(p.costUsd, (40_000 * 2.5 + 60_000 * 0.25 + 10_000 * 15) / 1e6);
