@@ -1156,7 +1156,7 @@ shipped `buildSandboxProfile` (16+ probes, `m41-spike/`): the **Write/Edit/Read 
 the boundary and on secrets, bash is confined the same way, auth (Keychain) works, and
 undo/`rewindFiles` still works (checkpoints under `~/.claude`, which stays writable).
 
-**Design philosophy — a safety net, not a cage (the user).** The headless session should run like an
+**Design philosophy — a safety net, not a cage.** The headless session should run like an
 interactive one (any CLI, MCP, package install, research on any host) but be unable to escape its
 task. So the profile is `(allow default)` **minus** two subtractions:
 - **Writes** confined to the project cwd + task workspace + the runtime/cache dirs tools need

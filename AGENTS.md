@@ -1,7 +1,6 @@
 # Gumbo — repo guide for agent sessions
 
-Gumbo is a personal, always-alive macOS voice agent for a single user — the user — on this one
-machine. Talk to it; it orchestrates background sub-agents, supervises Claude Code sessions,
+Gumbo is a personal, always-alive macOS voice agent for a single user on one machine. Talk to it; it orchestrates background sub-agents, supervises Claude Code sessions,
 generates images, sets reminders, and drives the Mac itself, all from the notch. Capability,
 efficiency, and presence are the product. Its gating stack (policy table + Seatbelt + egress
 proxy + notch confirms) exists to make MORE autonomy safe to ship — safety machinery here buys

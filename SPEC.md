@@ -5,7 +5,7 @@
 > images, and drives the Mac itself. It lives in the MacBook notch, shows background work as
 > screen-corner bubbles, and surfaces everything in a clean "activity center" dashboard.
 >
-> **Personal use only. Local machine only. Single user (the user).** No auth, analytics, telemetry,
+> **Personal use only. Local machine only. Single user.** No auth, analytics, telemetry,
 > CI/CD, or deployment infra beyond what local development needs.
 
 This is the source-of-truth spec. It is organized by build phase (M1–M17; M1–M7 built and merged,
@@ -49,7 +49,7 @@ A voice-first personal agent that feels alive and present without a window open:
 | Computer-use guardrails | Free navigation/typing/drafting. **Gate irreversible acts** — sending (message/email/post), deleting, paying, or acting in an app not on the allowlist requires a notch confirmation. **Kill switch** = hotkey or moving the real mouse. |
 | Completions | When a sub-agent finishes: bubble flips to done + notch pulses + `report.md` written + dashboard entry + a **brief spoken announcement** ("your sub-agent finished the X task"). Inject into a live session if one is open, else one-shot TTS — **never open a realtime session just to announce**. |
 | Shell | Native **Swift/SwiftUI** app owns the notch, bubbles, agent cursor, audio, macOS automation, and all TCC permissions. Dashboard is a **React** app in a `WKWebView` window. Brain is a **Node/TypeScript** daemon. |
-| User's name | The agent addresses the user as **the user** (macOS username is `dev`). |
+| User's name | The agent addresses the user by name, via a configurable `USER_NAME` setting — never hardcoded. |
 | Agent home | `~/Gumbo/`, kept **organized into subdirectories** — never a flat dumping ground. The agent can **manage its own organization**. |
 
 ---
