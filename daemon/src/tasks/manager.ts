@@ -8,7 +8,7 @@ import { ClaudeRunner, type ClaudeRunnerOpts, type ClaudeSessionRunner } from '.
 import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import type { MacBridge } from '../ws/mac.ts';
-import { sanitizeTeachStep, teachingReport, type TeachStep } from './teach.ts';
+import { sanitizeTeachStep, teachingReport, SECRET_FIELD_RE, type TeachStep } from './teach.ts';
 import { validateProcedure, type Procedure } from '../agents/procedures.ts';
 
 /** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod).
@@ -604,7 +604,7 @@ export class TaskManager {
    *  stopTeaching distills the demonstration before the task finishes (ONE announce
    *  carries both); absent (tests), the raw step report lands alone. Returns the report
    *  tail; a rejection means "not saved" and is reported loudly, never swallowed. */
-  distillProcedure?: (name: string, steps: TeachStep[], taskId: string, outcome: string | null) => Promise<string>;
+  distillProcedure?: (name: string, steps: TeachStep[], taskId: string, outcome: string | null, signal?: AbortSignal) => Promise<string>;
 
   /** Begin recording a demonstration. Resolves once the shell's recorder is ARMED —
    *  fail-closed: if the tap can't arm, the teach task fails and this throws (never a
@@ -687,9 +687,19 @@ export class TaskManager {
     // no section (the compiler falls back to the step stream alone).
     let outcome: string | null = null;
     let outcomeNote = '';
-    const lastTextApp = [...t.steps].reverse().find((s) => s.kind === 'type' || s.kind === 'select_text')?.app;
-    if (lastTextApp && this.macBridge) {
-      const doc = await this.macBridge.request({ kind: 'document_state', app: lastTextApp });
+    const lastText = [...t.steps].reverse().find((s) => s.kind === 'type' || s.kind === 'select_text');
+    if (lastText?.app && this.macBridge && SECRET_FIELD_RE.test(lastText.name ?? '')) {
+      // Never capture a credential-shaped field's document — the capture would persist
+      // its content into the memory table and the compile input.
+      outcomeNote = '\n(final-document capture skipped: the demonstrated field is credential-shaped)\n';
+    } else if (lastText?.app && this.macBridge) {
+      // Capture the DEMONSTRATED field (identifier/role from the last text step), not
+      // whatever text area happens to be largest — the capture's scope should match what
+      // the user actually showed, never widen past it.
+      const doc = await this.macBridge.request({
+        kind: 'document_state', app: lastText.app,
+        identifier: lastText.identifier ?? null, role: lastText.role ?? null,
+      });
       if (doc.ok) {
         outcome = doc.output;
         outcomeNote = `\n${doc.output}\n`;
@@ -704,7 +714,7 @@ export class TaskManager {
       // The task stays 'running' for the few seconds of compile; ONE announce then
       // carries the step list AND the saved-procedure summary (or the loud not-saved
       // note — the demonstration itself is never lost to a compile failure).
-      this.distillProcedure(t.name, t.steps, t.taskId, outcome).then(
+      this.distillProcedure(t.name, t.steps, t.taskId, outcome, this.aborts.get(t.taskId)?.signal).then(
         (summary) => this.finishWithReport(t.taskId, t.title, t.workspace, `${base}\n${summary}`),
         (err: unknown) => this.finishWithReport(
           t.taskId, t.title, t.workspace,

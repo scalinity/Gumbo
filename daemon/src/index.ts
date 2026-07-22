@@ -75,7 +75,7 @@ const fileContext = new FileEditContext();
 // M8 procedure memory: teaching stops distill through here (ONE announce carries the
 // result), and "save that as a procedure" distills a finished run's trace.
 const procedures = createProcedureService(store);
-manager.distillProcedure = (name, steps, taskId, outcome) => procedures.distillTeaching(name, steps, taskId, outcome);
+manager.distillProcedure = (name, steps, taskId, outcome, signal) => procedures.distillTeaching(name, steps, taskId, outcome, signal);
 // Self-heal: a replay that drifted but whose fallback run succeeded becomes version+1.
 manager.healProcedure = (name, taskId) => procedures.saveFromTask(taskId, name, 'healed');
 const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, fileContext, macBridge, confirms, procedures);

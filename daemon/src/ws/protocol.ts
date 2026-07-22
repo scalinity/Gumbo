@@ -49,11 +49,14 @@ export type MacAction =
   // values choosing the acted-on element would be an injection surface). Resolution is an
   // observation; the subsequent act inherits every gate.
   | { kind: 'resolve'; role: string | null; name: string | null; identifier: string | null }
-  // M8 teaching outcome: read the dominant text document of an app — full text + styled
-  // ranges (AXAttributedString style names/underline/font traits). Captured at teach-stop
-  // so the compiler builds CONTENT from the observed RESULT instead of keystroke
-  // archaeology (corrections, undos, and caret wandering are already reflected in it).
-  | { kind: 'document_state'; app: string | null };
+  // M8 teaching outcome: read the DEMONSTRATED text document of an app — full text +
+  // styled ranges (AXAttributedString style names/list structure/underline/font traits).
+  // Captured at teach-stop so the compiler builds CONTENT from the observed RESULT
+  // instead of keystroke archaeology. identifier/role (when present) select the exact
+  // field the demonstration typed into; the largest text area is only the fallback —
+  // capture scope should match what the user actually demonstrated, not the biggest thing
+  // on screen.
+  | { kind: 'document_state'; app: string | null; identifier?: string | null; role?: string | null };
 
 /** SPEC §M6 typed errors (mirrors SearchError.kind — callers branch on kind, never message
  *  strings). The lane-level ones: secure_field is the executor's hard refusal,

@@ -188,6 +188,10 @@ export const config = {
     // app takes a beat) before giving up to the intelligent fallback.
     appLaunchAttempts: 4,
     appLaunchWaitMs: 1000,
+    // Demo-measured replay pacing (2026-07-21 forensics): the pause before a resolve/act
+    // retry, and the settle after re-pressing a revealer button re-opens its container.
+    retrySleepMs: 800,
+    revealerSettleMs: 600,
   },
   // M8 scheduled routines. The unattended policy is non-negotiable: a would-be-confirm
   // PAUSES the run (needs_input + pulse + parked notch confirm) until the user answers —
