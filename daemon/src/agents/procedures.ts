@@ -309,12 +309,18 @@ export function createProcedureService(store: Store, complete: CompleteFn = comp
       // (never via the model, which could mangle it).
       if (outcome) procedure.expect = outcome.slice(0, 30_000);
       // Paste payloads are likewise code-attached: the model compiles a paste step (plain
-      // preview only); the styled clipboard capture rides along here, matched in order.
+      // preview only); the styled clipboard capture rides along here. Match by VALUE, not
+      // position — a demonstration often contains corrected pastes (paste wrong thing,
+      // undo, paste right thing) that the compiler rightly collapses, and positional
+      // matching then glues the WRONG recording (a live replay pasted an earlier,
+      // style-less capture exactly this way). Latest matching recording wins.
       const recordedPastes = steps.filter((s) => s.kind === 'paste');
       let pasteIndex = 0;
       for (const st of procedure.steps) {
         if (st.verb !== 'paste') continue;
-        const rec = recordedPastes[pasteIndex];
+        const rec = [...recordedPastes].reverse().find((r) => r.value === st.value)
+          ?? [...recordedPastes].reverse().find((r) => r.value && st.value && (r.value.startsWith(st.value) || st.value.startsWith(r.value)))
+          ?? recordedPastes[pasteIndex];
         pasteIndex += 1;
         if (rec?.rtf) st.rtf = rec.rtf;
         if (rec?.value && !st.value) st.value = rec.value;

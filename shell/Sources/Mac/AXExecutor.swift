@@ -564,39 +564,49 @@ final class AXExecutor {
         if match.location == NSNotFound { match = ns.range(of: text) } // occurrence drifted → first match
         if match.location == NSNotFound { return "select_text: \"\(truncate(text))\" not found in the field" }
 
-        // Verification is by RANGE, not by AXSelectedText: the range read is
-        // focus-independent, while AXSelectedText reads EMPTY on an unfocused field even
-        // when the range took (a live replay failed exactly there — a popover held key
-        // focus and a correct selection "did not take"). Ladder:
-        //   1. focus + caret + real shift+right keystrokes (event-driven UI hears it)
-        //   2. pure AX range write (works without focus)
-        //   3. Escape to dismiss whatever transient UI is eating focus/keys, then 2 again
+        // Verification is by RANGE (focus-independent — AXSelectedText reads empty on an
+        // unfocused field even when the range took). The keyboard rung must be ANCHORED:
+        // firing shift+rights from an unverified caret extends a WRONG selection with
+        // real events, and the app's format actions then target THAT selection while the
+        // AX-written range reads back "correct" (a live replay painted every highlight
+        // one selection off exactly this way). Never press a key until the caret
+        // read-back confirms the anchor; if a stray keyboard selection was built, collapse
+        // it (a real left-arrow) so no event-real ghost selection survives the fallback.
         let want = NSRange(location: match.location, length: match.length)
         let tookRange = { [weak self] in self?.selectedRange(element) == want }
         let pid = pidOf(element)
-        _ = performFocus(element)
-        let charCount = ns.substring(with: match).count
-        if charCount <= keyboardSelectionMaxChars {
+        let setCaretVerified = { [weak self] () -> Bool in
             var caret = CFRange(location: match.location, length: 0)
-            if let axCaret = AXValueCreate(.cfRange, &caret),
-               AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axCaret) == .success {
-                for _ in 0..<charCount {
-                    guard SyntheticInput.pressKey("shift+right", pid: pid) else { break }
-                    usleep(20_000)
-                }
-                usleep(150_000)
-                if tookRange() { return nil }
+            guard let axCaret = AXValueCreate(.cfRange, &caret),
+                  AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axCaret) == .success else { return false }
+            usleep(60_000)
+            return self?.selectedRange(element) == NSRange(location: match.location, length: 0)
+        }
+        _ = performFocus(element)
+        var anchored = setCaretVerified()
+        if !anchored {
+            // Something (a popover, a menu) is holding focus and eating the write —
+            // dismiss it, refocus, one more try. Escape is safe in a text field.
+            _ = SyntheticInput.pressKey("escape", pid: pid)
+            usleep(250_000)
+            _ = performFocus(element)
+            anchored = setCaretVerified()
+        }
+        let charCount = ns.substring(with: match).count
+        if anchored && charCount <= keyboardSelectionMaxChars {
+            for _ in 0..<charCount {
+                guard SyntheticInput.pressKey("shift+right", pid: pid) else { break }
+                usleep(20_000)
             }
+            usleep(150_000)
+            if tookRange() { return nil }
+            // The keys built something OTHER than the target — collapse the event-real
+            // ghost before falling back, or a later format action would style it.
+            _ = SyntheticInput.pressKey("left", pid: pid)
+            usleep(60_000)
         }
         var range = CFRange(location: match.location, length: match.length)
         guard let axRange = AXValueCreate(.cfRange, &range) else { return "select_text: could not build range" }
-        AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
-        if tookRange() { return nil }
-        // Rung 3: a popover/menu may be holding focus and swallowing the write — dismiss
-        // it and retry once. Escape is safe in a text field (dismisses transient UI only).
-        _ = SyntheticInput.pressKey("escape", pid: pid)
-        usleep(250_000)
-        _ = performFocus(element)
         AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
         if tookRange() { return nil }
         return "select_text: the selection did not take (this field may not support programmatic selection)"
