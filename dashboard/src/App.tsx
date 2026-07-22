@@ -403,7 +403,20 @@ function StreamingLine() {
   const streamingText = useStore((s) => s.streamingText);
   if (!streamingText) return null;
   return (
-    <div className="say" data-who="gumbo">
+    <div
+      className="say"
+      data-who="gumbo"
+      // The Feed's stick sentinel only re-runs when Feed re-renders — this line grows on
+      // its OWN store slice, so while streaming it must keep itself in view (a growing
+      // reply was sliding half-hidden below the fold). Same near-bottom guard as the
+      // sentinel: never yank the view while history is being read.
+      ref={(el) => {
+        const feed = el?.closest('.feed');
+        if (!el || !feed) return;
+        const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 160;
+        if (nearBottom) el.scrollIntoView({ block: 'nearest' });
+      }}
+    >
       <span className="who">gumbo</span>
       <span className="text">
         {streamingText}
