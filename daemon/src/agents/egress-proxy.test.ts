@@ -2,7 +2,38 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createServer, type Socket } from 'node:net';
-import { hostAllowed, startEgressProxy, MAX_ESCALATIONS, type EgressProxy } from './egress-proxy.ts';
+import { hostAllowed, startEgressProxy, vetResolvedAddresses, MAX_ESCALATIONS, type EgressProxy } from './egress-proxy.ts';
+
+// Scan MEDIUM (2026-07-22): a hostname that resolves to a private/loopback address (DNS
+// rebinding / split-horizon) must be refused even after allowlisting or a confirm.
+test('vetResolvedAddresses: refuses any private/loopback resolution, accepts a public one', () => {
+  assert.equal(vetResolvedAddresses(['93.184.216.34']), '93.184.216.34', 'a public IP is dialed');
+  assert.equal(vetResolvedAddresses(['127.0.0.1']), null, 'loopback refused');
+  assert.equal(vetResolvedAddresses(['10.0.0.5']), null, 'RFC1918 refused');
+  assert.equal(vetResolvedAddresses(['169.254.169.254']), null, 'link-local (cloud metadata) refused');
+  assert.equal(vetResolvedAddresses(['93.184.216.34', '127.0.0.1']), null, 'reject-if-ANY-forbidden (rebinding returns both)');
+  assert.equal(vetResolvedAddresses(['::1']), null, 'IPv6 loopback refused');
+  assert.equal(vetResolvedAddresses([]), null, 'no addresses → refuse');
+});
+
+test('startEgressProxy: an APPROVED host that resolves to a private IP is still refused (SSRF)', async () => {
+  // onUnknown approves the host, but the injected resolver (standing in for DNS) points it
+  // at a private address → the proxy must refuse AFTER approval, before dialing.
+  const asked: string[] = [];
+  const proxy = await startEgressProxy(
+    [],
+    async (h) => { asked.push(h); return true; }, // approve everything
+    '127.0.0.1',
+    async () => vetResolvedAddresses(['10.0.0.5']), // "DNS" says this host is private → null
+  );
+  try {
+    const res = await doConnect(proxy.port, 'rebind.test:443');
+    assert.equal(res.status, 403, 'a private resolution is refused despite approval');
+    assert.ok(asked.includes('rebind.test'), 'the host WAS approved — the block is the resolution guard, downstream of the confirm');
+  } finally {
+    proxy.close();
+  }
+});
 
 test('hostAllowed: exact + subdomain match, case-insensitive, no partial-suffix match', () => {
   const allow = ['github.com', 'anthropic.com'];
@@ -37,7 +68,10 @@ test('startEgressProxy: tunnels an allowlisted host, 403s + escalates unknowns (
     asked.push(host);
     return host === 'approved.test'; // deny everything except this one
   };
-  const proxy: EgressProxy = await startEgressProxy(['localhost'], onUnknown);
+  // Inject a resolver mapping the test hostname to the loopback echo server — the default
+  // resolver would (correctly) refuse a host that resolves to loopback (SSRF guard), so a
+  // test exercising the TUNNEL mechanism points its fake host at the echo server directly.
+  const proxy: EgressProxy = await startEgressProxy(['localhost'], onUnknown, '127.0.0.1', async () => '127.0.0.1');
 
   try {
     // 1. Allowlisted host → tunnel established (200), and bytes echo back through it.
@@ -70,8 +104,9 @@ test('startEgressProxy: an APPROVED unknown host tunnels end-to-end (escalate→
   const echo = createServer((sock) => sock.pipe(sock));
   await new Promise<void>((r) => echo.listen(0, '127.0.0.1', () => r()));
   const echoPort = (echo.address() as { port: number }).port;
-  // Empty allowlist; onUnknown approves 'localhost' (a hostname → resolves to the echo server).
-  const proxy = await startEgressProxy([], async (host) => host === 'localhost');
+  // Empty allowlist; onUnknown approves 'localhost'. Injected resolver points it at the echo
+  // server (the default resolver would refuse a loopback resolution — see the SSRF tests).
+  const proxy = await startEgressProxy([], async (host) => host === 'localhost', '127.0.0.1', async () => '127.0.0.1');
   try {
     const ok = await doConnect(proxy.port, `localhost:${echoPort}`);
     assert.equal(ok.status, 200, 'approved unknown host establishes the tunnel');

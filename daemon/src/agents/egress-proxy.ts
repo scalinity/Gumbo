@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { connect, isIP, type Socket } from 'node:net';
+import { lookup } from 'node:dns/promises';
 
 // Cap on distinct non-allowlisted hosts a single session may escalate. Past this, further novel
 // hosts are refused without a confirm — bounds notch spam and the `decided` map from an attacker
@@ -87,6 +88,34 @@ function isForbiddenLiteral(host: string): boolean {
   return false; // not an IP literal → a hostname
 }
 
+/** From a host's RESOLVED addresses, the vetted IP to connect to, or null to refuse.
+ *  Reject-if-ANY-forbidden (a rebinding/split-horizon host often returns a public AND a
+ *  private record; either private one is disqualifying), then connect to the first — which,
+ *  having passed the check, is safe. Exported for unit tests. */
+export function vetResolvedAddresses(addresses: readonly string[]): string | null {
+  if (addresses.length === 0) return null;
+  if (addresses.some((a) => isForbiddenLiteral(a))) return null;
+  return addresses[0];
+}
+
+/** Resolve a CONNECT host to the IP the proxy will actually dial, refusing (null) any host
+ *  that resolves to a loopback/private/link-local address (scan MEDIUM: SSRF via DNS). DNS
+ *  runs in the UNSANDBOXED daemon, so an allowlisted-or-approved hostname could otherwise
+ *  resolve/rebind to 127.0.0.1 or RFC1918 and reach the daemon's own control plane or a LAN
+ *  service. Connecting to the VETTED IP (not re-resolving) also closes the check-then-connect
+ *  rebinding window. An IP literal was already vetted at the CONNECT gate, so it passes
+ *  through unchanged; a hostname is looked up and every address checked. */
+export type ResolveTarget = (host: string, port: number) => Promise<string | null>;
+const defaultResolveTarget: ResolveTarget = async (host) => {
+  if (isIP(host)) return isForbiddenLiteral(host) ? null : host; // literal — belt over the CONNECT-gate check
+  try {
+    const addrs = (await lookup(host, { all: true })).map((r) => r.address);
+    return vetResolvedAddresses(addrs);
+  } catch {
+    return null; // resolution failed → refuse rather than hand a bare host to net.connect
+  }
+};
+
 /**
  * Start the loopback CONNECT filtering proxy. `allowed` is the flow-freely allowlist;
  * `onUnknown(host)` is invoked once per non-allowlisted host (lowercased — the runner routes it to
@@ -100,6 +129,7 @@ export async function startEgressProxy(
   allowed: readonly string[],
   onUnknown: (host: string) => Promise<boolean>,
   bindHost = '127.0.0.1', // loopback in prod; a unit test passes an unbindable address to exercise fail-closed
+  resolveTarget: ResolveTarget = defaultResolveTarget, // injectable so tests can point a fake hostname at a loopback echo server
 ): Promise<EgressProxy> {
   // Only non-allowlisted hosts land here (allowlisted ones short-circuit). Stores the
   // in-flight promise so two concurrent connects can't spawn two notch confirms.
@@ -133,12 +163,22 @@ export async function startEgressProxy(
     if (!parsed || isForbiddenLiteral(parsed.host)) return refuse();
     const { host, port } = parsed;
 
-    const tunnel = () => {
+    const tunnel = async () => {
+      // Resolve the host to a VETTED IP first (SSRF guard): a hostname that resolves to
+      // loopback/private/link-local is refused, and we dial the checked IP so a rebind
+      // between check and connect can't redirect us. null → refuse.
+      let target: string | null;
+      try {
+        target = await resolveTarget(host, port);
+      } catch {
+        target = null;
+      }
+      if (!target) return refuse();
       // net.connect can throw synchronously (a bad host/port that slipped validation) — a throw
       // here escapes the 'connect' handler and, with no uncaughtException handler, crashes the
       // whole daemon. Guard it so a bad tunnel only drops that one connection (review 🔴).
       try {
-        const up = connect(port, host, () => {
+        const up = connect(port, target, () => {
           clientSock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
           up.write(head);
           up.pipe(clientSock);
@@ -156,7 +196,7 @@ export async function startEgressProxy(
     };
 
     if (hostAllowed(host, allowed)) {
-      tunnel();
+      void tunnel().catch(() => refuse());
       return;
     }
     // Unknown host → escalate (memoized per session by lowercased host, so at most one confirm).
