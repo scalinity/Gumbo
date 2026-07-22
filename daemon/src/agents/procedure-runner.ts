@@ -327,12 +327,108 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     log.push(`✓ ${i + 1}. ${step.desc}`);
   }
 
+  // Close the loop: the demonstration's captured document is the replay's ACCEPTANCE
+  // TEST. Re-capture and diff deterministically — a silently degraded copy (lost list
+  // structure, a missed bold, an auto-capitalized word) becomes a NAMED divergence the
+  // fallback fixes surgically, instead of shipping as "completed". The channel that
+  // captured the demonstration is the same channel that judges the replay.
+  if (procedure.expect) {
+    const app = [...procedure.steps].reverse().find((s) => s.lane === 'ax' && s.target?.app)?.target?.app;
+    if (app) {
+      const got = await deps.macBridge.request({ kind: 'document_state', app }, { signal: deps.signal });
+      const deltas = got.ok ? diffOutcome(procedure.expect, got.output) : [`could not re-read the document (${got.output})`];
+      if (deltas.length > 0) {
+        return {
+          outcome: 'fallback',
+          atStep: procedure.steps.length,
+          reason: 'all steps ran, but the result differs from the demonstration',
+          progress: [
+            log.join('\n'),
+            '',
+            'DOCUMENT DIVERGENCES — fix EXACTLY these and nothing else (the note is otherwise correct).',
+            'Text/case fixes: select_text the wrong text, then replace_text with the exact replacement (zero keystrokes — auto-capitalize cannot re-break it).',
+            'Structure/style fixes: select the range, then the Format popover or a targetless menu_path ("Format > Dashed List", "Format > Font > Bold", …).',
+            ...deltas.map((d) => `- ${d}`),
+          ].join('\n'),
+        };
+      }
+      log.push('✓ document verified against the demonstration capture');
+    }
+  }
+
   const report = [
     `Replayed saved procedure "${procedure.name}" — ${procedure.steps.length} steps completed.`,
     ...(deps.notes ? [`Run notes applied: ${deps.notes}`] : []),
     log.join('\n'),
   ].join('\n');
   return { outcome: 'completed', report };
+}
+
+/** Parse one document_state capture: the text section plus styled runs by char offset. */
+function parseOutcome(s: string): { text: string; runs: Array<{ start: number; end: number; flags: string }> } {
+  const parts = s.split(/=== styled ranges[^\n]*\n/);
+  const text = (parts[0] ?? '')
+    .replace(/^=== final document[^\n]*\n/, '')
+    .replace(/\n…\(truncated\)\s*$/, '')
+    .replace(/\s+$/, '');
+  const runs: Array<{ start: number; end: number; flags: string }> = [];
+  for (const line of (parts[1] ?? '').split('\n')) {
+    const m = line.match(/^\[(\d+)-(\d+)\] ".*": (.*)$/);
+    if (m) runs.push({ start: Number(m[1]), end: Number(m[2]), flags: normalizeFlags(m[3]) });
+  }
+  return { text, runs };
+}
+
+/** Window-state noise ("Contains paragraphs", "Expanded") is not formatting — drop it. */
+function normalizeFlags(flags: string): string {
+  return flags
+    .split(', ')
+    .filter((f) => f && f !== 'Contains paragraphs' && f !== 'Expanded')
+    .sort()
+    .join(', ');
+}
+
+/** Deterministic acceptance diff between the demonstration's capture and the replay's.
+ *  Text first (style offsets are meaningless until the text matches); styles compared
+ *  PER CHARACTER, so identical styling that merely fragments into different runs never
+ *  false-positives. Exported for tests. */
+export function diffOutcome(expect: string, got: string): string[] {
+  const e = parseOutcome(expect);
+  const g = parseOutcome(got);
+  const deltas: string[] = [];
+  if (e.text !== g.text) {
+    const eLines = e.text.split('\n');
+    const gLines = g.text.split('\n');
+    const max = Math.max(eLines.length, gLines.length);
+    for (let i = 0; i < max; i += 1) {
+      if ((eLines[i] ?? '') !== (gLines[i] ?? '')) {
+        deltas.push(`line ${i + 1} should be ${JSON.stringify(eLines[i] ?? '(no line)')} but is ${JSON.stringify(gLines[i] ?? '(no line)')}`);
+      }
+    }
+    if (deltas.length > 0) deltas.push('(styles not compared until the text matches)');
+    return deltas;
+  }
+  const charFlags = (runs: Array<{ start: number; end: number; flags: string }>, len: number): string[] => {
+    const per = new Array<string>(len).fill('');
+    for (const r of runs) {
+      for (let i = r.start; i < Math.min(r.end, len); i += 1) per[i] = r.flags;
+    }
+    return per;
+  };
+  const eFlags = charFlags(e.runs, e.text.length);
+  const gFlags = charFlags(g.runs, g.text.length);
+  let i = 0;
+  while (i < e.text.length) {
+    if (eFlags[i] === gFlags[i]) { i += 1; continue; }
+    const want = eFlags[i];
+    const have = gFlags[i];
+    let j = i;
+    while (j < e.text.length && eFlags[j] === want && gFlags[j] === have) j += 1;
+    const snippet = e.text.slice(i, Math.min(j, i + 60)).replaceAll('\n', '⏎');
+    deltas.push(`"${snippet}" should be [${want || 'plain'}] but is [${have || 'plain'}]`);
+    i = j;
+  }
+  return deltas;
 }
 
 async function checkpointPass(

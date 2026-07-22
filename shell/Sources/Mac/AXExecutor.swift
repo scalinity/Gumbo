@@ -332,6 +332,24 @@ final class AXExecutor {
         case "select_text":
             actErr = performSelectText(element, text: action["value"] as? String ?? "", occurrence: action["occurrence"] as? Int ?? 0)
             if actErr == nil { lastSelectedElement = element }
+        case "replace_text":
+            // Surgical text replacement: writes the CURRENT selection's text directly via
+            // AXSelectedText — zero keystrokes, so auto-capitalize/auto-format cannot alter
+            // it (typing "test" over a selection can land as "Test"; this cannot).
+            guard let sel = selectedRange(element), sel.length > 0 else {
+                return AXResult.failure("element_not_found", "replace_text needs an active selection — select_text the target first.")
+            }
+            var settable: DarwinBoolean = false
+            AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
+            guard settable.boolValue else {
+                return AXResult.failure("ax_unavailable", "this field does not support direct text replacement.")
+            }
+            let replacement = action["value"] as? String ?? ""
+            let err = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, replacement as CFString)
+            guard err == .success else {
+                return AXResult.failure("ax_unavailable", "replace_text failed (AX error \(err.rawValue)).")
+            }
+            return AXResult(ok: true, output: "Replaced the selection with \"\(truncate(replacement))\".", errorKind: nil, health: nil, noChange: false)
         default: return AXResult.failure("out_of_scope", "Unknown verb \"\(verb)\".")
         }
         if let actErr {
@@ -976,6 +994,18 @@ final class AXExecutor {
             astr.enumerateAttributes(in: NSRange(location: 0, length: astr.length)) { attrs, r, _ in
                 var flags: [String] = []
                 if let style = attrs[NSAttributedString.Key("AXStyleName")] as? String { flags.append(style) }
+                // Paragraph STRUCTURE — a list's dash/bullet is formatting, not characters:
+                // the plain text reads back WITHOUT it, so without these keys a replay
+                // silently produces unstructured lines (the dashed-list demo bug).
+                if let prefix = attrs[NSAttributedString.Key("AXListItemPrefix")] {
+                    let d = String(describing: prefix).lowercased()
+                    let kind = d.contains("dash") ? "dashed"
+                        : d.contains("bullet") ? "bulleted"
+                        : d.contains("number") || d.contains("decimal") ? "numbered"
+                        : d.contains("check") ? "checklist" : "list"
+                    let level = (attrs[NSAttributedString.Key("AXListItemLevel")] as? NSNumber)?.intValue ?? 0
+                    flags.append("\(kind) list item\(level > 0 ? " (level \(level))" : "")")
+                }
                 if let u = attrs[NSAttributedString.Key("AXUnderline")] as? NSNumber, u.intValue != 0 { flags.append("underlined") }
                 if let font = attrs[NSAttributedString.Key("AXFont")] as? [String: Any],
                    let fname = (font["AXFontName"] as? String)?.lowercased() {

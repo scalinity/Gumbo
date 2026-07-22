@@ -39,6 +39,11 @@ export type Procedure = {
   /** Every app the procedure touches — doubles as the unattended-run app allowlist. */
   apps: string[];
   steps: ProcedureStep[];
+  /** The demonstration's captured final document (text + styled/structured ranges),
+   *  attached CODE-SIDE from the teach-stop capture — never model output. The replay
+   *  engine re-captures after its last step and diffs against this, so a silently
+   *  degraded copy becomes a detected, named divergence. */
+  expect?: string;
 };
 
 const LANES: ReadonlySet<string> = new Set(['ax', 'browser', 'script', 'key', 'handoff'] satisfies ProcedureLane[]);
@@ -113,6 +118,10 @@ export function validateProcedure(raw: unknown, name: string): Procedure | null 
     apps: cappedList(r.apps, 10, 100),
     steps,
   };
+  // expect is CODE-attached at save time (distillTeaching) and round-trips through this
+  // guard when a stored body is re-validated at replay load — pass it through capped.
+  const expect = capped(r.expect, 30_000);
+  if (expect) procedure.expect = expect;
   redactProcedure(procedure);
   return procedure;
 }
@@ -224,6 +233,7 @@ Rules:
 - Merge noise: a click that only focused a field before typing merges into the type step; scrolls that merely revealed content fold into the next step's desc; a bare "drag" that highlighted nothing is not replayable — fold it away or mark a handoff.
 - SELECTING/HIGHLIGHTING TEXT: a recorded "select_text" step means a text range was highlighted (to color, bold, etc.). Compile it to lane "ax", verb "select_text", target = the text field it happened in, value = the EXACT highlighted string (verbatim), and copy its "occurrence" number through UNCHANGED (which instance of that string was selected — do not renumber or drop it). A click/double-click IMMEDIATELY BEFORE a select_text on the same field is just the gesture that made the selection — drop it, keep only the select_text. CONSECUTIVE select_text steps on the same field with no formatting action between them are re-adjustments of one selection — keep ONLY the last.
 - FINAL DOCUMENT STATE (ground truth for content): when the input contains a "=== final document ===" section, that section is the AUTHORITATIVE result of the demonstration — the recorded keystrokes are evidence only for HOW (which app, which buttons, which controls). Compile content in TWO PASSES. Pass 1 — type the document's lines in order: verb "type" steps carrying EXACTLY the final text, with "key" return steps for the line breaks. Corrections, undos (cmd+z), deletes, and caret movement in the recording are ALREADY REFLECTED in the final text — never re-derive or replay them. Pass 2 — after ALL content is typed, one selection+format sequence per styled range listed (value = the exact substring; occurrence = which instance of that substring in the final text, 0-based). NEVER interleave typing with formatting.
+- PARAGRAPH STRUCTURE (dashed/bulleted/numbered lists, checklists, block quotes, headings): ranges marked "dashed list item" / "bulleted list item" / a paragraph style name are STRUCTURE, not characters. Type those lines WITHOUT any dash/bullet prefix characters (the final-document text already omits them), then — in the formatting pass — select the exact text spanning the consecutive structured lines (select_text; the value may contain line breaks) and apply ONE targetless menu_path step (no target element — it drives the app's MENU BAR): value "Format > Dashed List" (or "Format > Bulleted List", "Format > Numbered List", "Format > Block Quote", "Format > Checklist", "Format > Heading" as the structure demands). NEVER rely on typing "- " or "1." to trigger the app's auto-format conversion — it is context-dependent and silently produces plain text when it does not fire.
 - FORMATTING (highlight colors, bold, italic, underline, styles): each styled range gets its OWN full sequence — select_text, then for a highlight color: click Button "Format", click MenuButton "Highlight color", click MenuItem "<Color>" (Accent/Purple/Pink/Orange/Mint/Blue); for bold/italic/underline: key cmd+b / cmd+i / cmd+u immediately after the select_text. Do not reason about whether the Format popover is already open — the replay engine establishes control visibility itself; emit the full click sequence every time. The engine operates popover controls with real clicks even when they read disabled. A recorded click on the "Highlight" CHECKBOX applies whatever color the app currently has (machine state, not intent) — compile the explicit color pair instead, using the color the demonstration or final document shows, else "Accent". Drop drags/scrolls inside the popover — gesture noise.
 - CORRECTIONS: a "pressed delete" key step erases whatever landed IMMEDIATELY before it — a typed character OR a pressed return. Cancel each delete against the preceding item: typed "d", delete, typed "TEST" → the "d" is gone, compile only "TEST". Typed "- Gumb", pressed return, pressed delete, typed "o" → the RETURN was undone, compile one step typing "- Gumbo" with NO line break. Never compile the delete presses themselves.
 - KEY-PRESS NOISE: arrow keys (left/right/up/down) are caret navigation — drop them; select_text and type steps carry position. NEVER compile a type step whose value is (or contains) control/invisible characters — those are mis-recorded key presses, not content; strip them, and drop the step if nothing printable remains.
@@ -278,6 +288,9 @@ export function createProcedureService(store: Store, complete: CompleteFn = comp
       const lines = steps.map((s, i) => describeTeachStep(s, i + 1));
       const input = `Procedure name: ${name}\nSource: a demonstration the user performed himself (semantic recording).\nRecorded steps:\n${lines.join('\n')}${outcome ? `\n\n${outcome}` : ''}`;
       const procedure = await compile(complete, input, name);
+      // The captured outcome IS the replay's acceptance test — attach it deterministically
+      // (never via the model, which could mangle it).
+      if (outcome) procedure.expect = outcome.slice(0, 30_000);
       const version = store.saveProcedure({
         taskId, name, title: `${name} — ${procedure.goal}`, body: JSON.stringify(procedure), provider: 'taught',
       });

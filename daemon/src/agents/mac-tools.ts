@@ -124,12 +124,15 @@ export function createMacTools(
       'NEVER guess keyboard shortcuts — a wrong chord just beeps. With a ref it walks that ' +
       'element\'s context menu instead, but some apps ignore programmatic picks there — prefer the ' +
       'menu bar or the app\'s own on-screen controls. A format control that reads (disabled) in a ' +
-      'popover is usually operable anyway — press it; the executor clicks it for real), wait_for (block ' +
+      'popover is usually operable anyway — press it; the executor clicks it for real), replace_text ' +
+      '(replace the CURRENT selection\'s text directly, ZERO keystrokes — auto-capitalize/auto-format ' +
+      'cannot alter it, unlike type. select_text the wrong text first, then replace_text with value = ' +
+      'the exact replacement. THE tool for fixing case/typo divergences), wait_for (block ' +
       'until an element with role+name appears; use role+name instead of ref). Returns a before/after ' +
       'DIFF of what changed — read it to verify the step worked; an empty diff means nothing changed, ' +
       'so DO NOT assume success. Secure (password) fields are refused.',
     parameters: z.object({
-      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for', 'select_text', 'menu_path']),
+      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for', 'select_text', 'menu_path', 'replace_text']),
       ref: z.string().nullable().describe('Element ref from ax_snapshot; null for key/wait_for'),
       value: z.string().nullable().describe('Text for type/set_value/select_text, the chord for key, or the " > " menu path for menu_path'),
       role: z.string().nullable().describe('wait_for: the role to wait for (e.g. "AXButton")'),

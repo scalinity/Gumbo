@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
-const { replayProcedure, fallbackBrief } = await import('./procedure-runner.ts');
+const { replayProcedure, fallbackBrief, diffOutcome } = await import('./procedure-runner.ts');
 const { createMacTools } = await import('./mac-tools.ts');
 const { createBrowserTools } = await import('./browser-tools.ts');
 const { rememberHost } = await import('../mac/hosts.ts');
@@ -218,6 +218,34 @@ test('ensure-visible: a target the app hid (closed popover/menu) is recovered by
   assert.equal(result.outcome, 'completed');
   assert.equal(fmtPresses, 2, 'the revealer Button was pressed again to re-establish the target');
   assert.ok(h.calls.some((c) => c.kind === 'act' && c.ref === 'pinkref'), 'the recovered target was acted on');
+});
+
+test('diffOutcome: identical captures pass; lost structure, missed styles, and case flips become named deltas', () => {
+  const cap = (text: string, runs: string[]) =>
+    `=== final document (app "Notes") ===\n${text}\n=== styled ranges (character offsets into the text above) ===\n${runs.join('\n')}`;
+  const taught = cap('List\nGumbo\ntest', [
+    '[0-4] "List": Title, Contains paragraphs, Expanded',
+    '[5-10] "Gumbo": Body, dashed list item',
+    '[11-15] "test": Body',
+  ]);
+  assert.deepEqual(diffOutcome(taught, taught), [], 'window-state noise never diffs');
+
+  // An auto-capitalized word is a TEXT delta (styles wait until the text matches).
+  const caseFlip = cap('List\nGumbo\nTest', ['[0-4] "List": Title', '[5-10] "Gumbo": Body, dashed list item', '[11-15] "Test": Body']);
+  assert.ok(diffOutcome(taught, caseFlip).some((d) => d.includes('line 3')));
+
+  // Same text, list structure silently lost — a named style delta.
+  const flat = cap('List\nGumbo\ntest', ['[0-4] "List": Title', '[5-10] "Gumbo": Body', '[11-15] "test": Body']);
+  assert.ok(diffOutcome(taught, flat).some((d) => d.includes('dashed list item')));
+
+  // Identical styling that merely FRAGMENTS into different runs never false-positives.
+  const fragmented = cap('List\nGumbo\ntest', [
+    '[0-2] "Li": Title',
+    '[2-4] "st": Title',
+    '[5-10] "Gumbo": Body, dashed list item',
+    '[11-15] "test": Body',
+  ]);
+  assert.deepEqual(diffOutcome(taught, fragmented), []);
 });
 
 test('drift after the retry bails to fallback with step + reason + verified progress', async () => {
