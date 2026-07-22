@@ -147,6 +147,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
     set_value: { verb: 'set_value', carriesValue: true },
     select_text: { verb: 'select_text', carriesValue: true }, // value = the text to highlight
     menu_path: { verb: 'menu_path', carriesValue: true }, // value = "Font > Highlight > Pink"
+    paste: { verb: 'paste', carriesValue: true }, // value = plain text; rtf rides along for styling
   };
   const BROWSER_VERBS = new Set(['click', 'fill', 'type', 'press', 'select', 'hover', 'focus', 'scroll']);
 
@@ -224,6 +225,7 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
         value: mapped.carriesValue ? step.value ?? '' : null,
         role: null, name: null, timeout_ms: 8000,
         occurrence: step.verb === 'select_text' ? step.occurrence ?? 0 : null,
+        rtf: step.verb === 'paste' ? step.rtf ?? null : null,
       });
       if (obs?.declined) return { kind: 'stopped', reason: 'the user declined the action' };
       if (!obs?.ok) {
@@ -305,6 +307,12 @@ export async function replayProcedure(deps: ReplayDeps): Promise<ReplayResult> {
         return runAxStep(step, index);
     }
   };
+
+  // A replay that pastes will clobber the clipboard with taught content — save the user's
+  // own clipboard first (manager.finish restores it on every computer-task end).
+  if (procedure.steps.some((s) => s.verb === 'paste')) {
+    await invoke('preserve_clipboard', { action: 'save' });
+  }
 
   for (let i = 0; i < procedure.steps.length; i += 1) {
     if (deps.signal.aborted) throw new Error('cancelled');
@@ -571,6 +579,8 @@ export function fallbackBrief(originalBrief: string, procedure: Procedure, repla
       if (s.value !== undefined && s.value !== '') {
         if (s.verb === 'select_text') {
           detail = ` — SELECT/highlight this exact text (do NOT type it): ${JSON.stringify(s.value)}${s.occurrence ? ` (the occurrence at index ${s.occurrence})` : ''}`;
+        } else if (s.verb === 'paste') {
+          detail = ` — this step pastes captured content. Only the deterministic engine carries its styled payload; from THIS loop reproduce the TEXT verbatim (type it) and restyle via the Format menu if styling is missing. Text: ${JSON.stringify((s.value ?? '').slice(0, 400))}`;
         } else if (s.verb === 'menu_path') {
           detail = ` — use ax_act verb "menu_path" with value ${JSON.stringify(s.value)} (context menu of the field when a target is named, else the menu bar — do NOT hunt for popover/toolbar buttons)`;
         } else if (s.lane === 'key') {

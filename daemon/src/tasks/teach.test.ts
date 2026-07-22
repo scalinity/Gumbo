@@ -113,3 +113,15 @@ test('sanitize: select_text keeps value and occurrence on an ordinary field', ()
   assert.equal(step?.value, 'CLAUDE');
   assert.equal(step?.occurrence, 2);
 });
+
+test('sanitize: a paste step keeps plain text + rtf; into a credential field it degrades content-free', () => {
+  const ok = sanitizeTeachStep({ kind: 'paste', app: 'Notes', role: 'AXTextArea', value: 'styled list', rtf: 'cnRmZGF0YQ==' });
+  assert.equal(ok?.kind, 'paste');
+  assert.equal(ok?.value, 'styled list');
+  assert.equal(ok?.rtf, 'cnRmZGF0YQ==');
+
+  const secure = sanitizeTeachStep({ kind: 'paste', app: 'Safari', role: 'AXTextField', name: 'Password', value: 'hunter2', rtf: 'cnRm' });
+  assert.equal(secure?.kind, 'secure_input');
+  assert.equal(secure?.value, undefined);
+  assert.equal(secure?.rtf, undefined, 'the styled payload never survives a credential field');
+});

@@ -14,7 +14,7 @@ export const AUDIO_TTS = 0x02;
 
 /** Verbs ax_act dispatches through the ladder (AXPress → CGEventPostToPid → global CGEvent).
  *  wait_for is a verb, not a tool — waits live in the executor, never as model-issued sleeps. */
-export type MacActVerb = 'press' | 'focus' | 'set_value' | 'type' | 'key' | 'show_menu' | 'wait_for' | 'select_text' | 'menu_path' | 'replace_text';
+export type MacActVerb = 'press' | 'focus' | 'set_value' | 'type' | 'key' | 'show_menu' | 'wait_for' | 'select_text' | 'menu_path' | 'replace_text' | 'paste';
 
 /** One shell-executed step. Nullable fields are per-verb: act needs ref (except wait_for,
  *  which matches on role+name); script carries its own hard timeout (Tahoe -1712 hangs).
@@ -28,7 +28,7 @@ export type MacAction =
   | { kind: 'health' } // LIVE permission probe — AXIsProcessTrusted() has a stale-cache failure mode
   | { kind: 'snapshot'; app: string | null; max_elements: number } // compacted AX tree; app null = frontmost
   | { kind: 'query'; query: string; max_results: number } // grep the shell-held FULL tree for more (it never enters LLM context)
-  | { kind: 'act'; verb: MacActVerb; ref: string | null; value: string | null; role: string | null; name: string | null; timeout_ms: number; occurrence?: number } // occurrence: select_text — which match of `value` to select (0-based)
+  | { kind: 'act'; verb: MacActVerb; ref: string | null; value: string | null; role: string | null; name: string | null; timeout_ms: number; occurrence?: number; rtf?: string } // occurrence: select_text match index (0-based); rtf: paste — base64 RTF of the captured clipboard so styling survives
   | { kind: 'script'; interpreter: 'osascript' | 'shortcuts'; script: string; timeout_ms: number }
   | { kind: 'ocr'; app: string | null; region: [number, number, number, number] | null } // on-device Vision OCR → text lines w/ global point centers
   | { kind: 'screenshot'; app: string | null; region: [number, number, number, number] | null; out_path: string } // PNG to a daemon-supplied workspace path

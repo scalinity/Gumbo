@@ -353,6 +353,8 @@ final class AXExecutor {
             if actErr == nil { lastSelectedElement = element }
         case "replace_text":
             return performReplaceText(element, replacement: action["value"] as? String ?? "")
+        case "paste":
+            actErr = performPaste(element, plain: action["value"] as? String ?? "", rtfB64: action["rtf"] as? String, pid: pid)
         default: return AXResult.failure("out_of_scope", "Unknown verb \"\(verb)\".")
         }
         if let actErr {
@@ -492,6 +494,25 @@ final class AXExecutor {
     private func performFocus(_ element: AXUIElement) -> String? {
         let err = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         return err == .success ? nil : "AXFocused set error \(err.rawValue)"
+    }
+
+    /// Replay a captured paste: restore the TAUGHT clipboard (RTF + plain, so styling
+    /// survives), then a real ⌘V to the app. The engine saved the user's own clipboard
+    /// before the run (preserve_clipboard) and finish() restores it after.
+    private func performPaste(_ element: AXUIElement, plain: String, rtfB64: String?, pid: pid_t) -> String? {
+        _ = performFocus(element)
+        let wrote = DispatchQueue.main.sync { () -> Bool in
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            var ok = false
+            if let b64 = rtfB64, let data = Data(base64Encoded: b64) { ok = pb.setData(data, forType: .rtf) || ok }
+            if !plain.isEmpty { ok = pb.setString(plain, forType: .string) || ok }
+            return ok
+        }
+        guard wrote else { return "paste: could not write the captured content to the clipboard" }
+        usleep(120_000)
+        guard SyntheticInput.pressKey("cmd+v", pid: pid) else { return "paste: could not send cmd+v" }
+        return nil
     }
 
     /// Surgical text replacement: writes the CURRENT selection's text directly via

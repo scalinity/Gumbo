@@ -124,7 +124,9 @@ export function createMacTools(
       'NEVER guess keyboard shortcuts — a wrong chord just beeps. With a ref it walks that ' +
       'element\'s context menu instead, but some apps ignore programmatic picks there — prefer the ' +
       'menu bar or the app\'s own on-screen controls. A format control that reads (disabled) in a ' +
-      'popover is usually operable anyway — press it; the executor clicks it for real), replace_text ' +
+      'popover is usually operable anyway — press it; the executor clicks it for real), paste (set the ' +
+'clipboard to value and ⌘V it into the field — replays captured pastes with their styling; mostly ' +
+'engine-driven), replace_text ' +
       '(replace the CURRENT selection\'s text directly, ZERO keystrokes — auto-capitalize/auto-format ' +
       'cannot alter it, unlike type. select_text the wrong text first, then replace_text with value = ' +
       'the exact replacement. THE tool for fixing case/typo divergences), wait_for (block ' +
@@ -132,15 +134,16 @@ export function createMacTools(
       'DIFF of what changed — read it to verify the step worked; an empty diff means nothing changed, ' +
       'so DO NOT assume success. Secure (password) fields are refused.',
     parameters: z.object({
-      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for', 'select_text', 'menu_path', 'replace_text']),
+      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for', 'select_text', 'menu_path', 'replace_text', 'paste']),
       ref: z.string().nullable().describe('Element ref from ax_snapshot; null for key/wait_for'),
       value: z.string().nullable().describe('Text for type/set_value/select_text, the chord for key, or the " > " menu path for menu_path'),
       role: z.string().nullable().describe('wait_for: the role to wait for (e.g. "AXButton")'),
       name: z.string().nullable().describe('wait_for: substring of the label to wait for'),
       timeout_ms: z.number().int().min(100).max(30_000).default(5000),
       occurrence: z.number().int().min(0).nullable().default(null).describe('select_text: which match of value to select when it appears more than once (0-based); null = first'),
+      rtf: z.string().nullable().default(null).describe('paste: base64 RTF payload of the captured clipboard (the replay engine attaches this from the teaching record; leave null otherwise)'),
     }),
-    async execute({ verb, ref, value, role, name, timeout_ms, occurrence }) {
+    async execute({ verb, ref, value, role, name, timeout_ms, occurrence, rtf }) {
       // Repetition guard: same verb on same ref ×3 in a row → stop and warn.
       const key = `${verb}:${ref ?? role ?? ''}:${value ?? name ?? ''}`;
       repeatCount = key === lastActKey ? repeatCount + 1 : 0;
@@ -150,7 +153,7 @@ export function createMacTools(
         return `You have repeated "${verb}" on the same target 3 times with no progress. Stop and take a fresh ax_snapshot, then try a different approach (a different element, a keyboard shortcut, or check for a dialog blocking the way).`;
       }
       const result = await macBridge.request(
-        { kind: 'act', verb, ref, value, role, name, timeout_ms, ...(occurrence != null ? { occurrence } : {}) },
+        { kind: 'act', verb, ref, value, role, name, timeout_ms, ...(occurrence != null ? { occurrence } : {}), ...(rtf ? { rtf } : {}) },
         { signal, timeoutMs: timeout_ms + 5000 },
       );
       const summary = `${verb} ${ref ?? role ?? ''}`.trim();

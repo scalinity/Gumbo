@@ -162,7 +162,15 @@ final class Recorder {
             // intervening mouse event to capture it — grab it here so the chord's operand
             // is recorded before the chord itself.
             captureSelectionIfAny()
-            emit(["kind": "key", "app": frontAppName(), "value": chordLabel(raw)])
+            let chord = chordLabel(raw)
+            // A paste's CONTENT is part of the demonstration: a bare cmd+v replayed later
+            // pastes whatever the clipboard happens to hold THEN. Capture the pasteboard
+            // with the step (⌘⇧V pastes match-style, so plain text only for it).
+            if chord == "cmd+v" || chord == "cmd+shift+v" {
+                emitPaste(chord)
+                return
+            }
+            emit(["kind": "key", "app": frontAppName(), "value": chord])
             return
         }
         // Structural keys end the burst and are recorded discretely (Enter submits, Tab
@@ -271,6 +279,34 @@ final class Recorder {
         fill(&step, from: sel.field)
         emit(step)
         return true
+    }
+
+    /// Capture a paste WITH its content: plain text always, RTF too for a plain ⌘V (so
+    /// styling survives replay); ⌘⇧V pastes match-style, so plain only. Content into a
+    /// secure/credential field is never captured — the step degrades to a bare chord,
+    /// which the daemon's sanitize belt then handles like any other secure input.
+    private func emitPaste(_ chord: String) {
+        let field = executor.focusedFieldInfo()
+        let app = field?.appName ?? frontAppName()
+        if field?.isSecure == true || Self.isSecretLabel(field?.name) {
+            emit(["kind": "key", "app": app, "value": chord])
+            return
+        }
+        var plain = ""
+        var rtf = ""
+        DispatchQueue.main.sync {
+            let pb = NSPasteboard.general
+            plain = pb.string(forType: .string) ?? ""
+            if chord == "cmd+v" { rtf = pb.data(forType: .rtf)?.base64EncodedString() ?? "" }
+        }
+        guard !plain.isEmpty || !rtf.isEmpty else {
+            emit(["kind": "key", "app": app, "value": chord]) // empty clipboard — keep the gesture
+            return
+        }
+        var step: [String: Any] = ["kind": "paste", "app": app, "value": String(plain.prefix(20_000))]
+        if !rtf.isEmpty && rtf.count <= 400_000 { step["rtf"] = rtf }
+        fill(&step, from: field)
+        emit(step)
     }
 
     /// Common element descriptor fields. Structure only — labels and roles, never a
