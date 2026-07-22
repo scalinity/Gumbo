@@ -16,6 +16,7 @@ import { acceptFileEditRequest } from './files/edit.ts';
 import { shutdownBrowser } from './browser/client.ts';
 import { rememberHost } from './mac/hosts.ts';
 import { Orchestrator } from './realtime/session.ts';
+import { initUsageRecorder } from './usage/recorder.ts';
 
 const missing = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'XAI_API_KEY'].filter((k) => !process.env[k]);
 if (missing.length) {
@@ -29,6 +30,7 @@ for (const dir of [config.home.tasks, config.home.images, config.home.notes, con
 }
 
 const store = new Store(config.dbPath);
+initUsageRecorder(store);
 const reaped = store.reapInterruptedTasks();
 if (reaped.length) console.log(`reaped ${reaped.length} task(s) left running by a previous run`);
 // In-flight image work dies with the process (live failure 2026-07-16: a tsx-watch

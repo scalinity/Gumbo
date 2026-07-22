@@ -6,6 +6,8 @@ import { config } from '../config.ts';
 import type { TaskRow } from '../events/store.ts';
 import type { Hub } from '../ws/hub.ts';
 import { AUDIO_TTS } from '../ws/protocol.ts';
+import { recordPriced } from '../usage/recorder.ts';
+import { priceTts } from '../usage/pricing.ts';
 
 const TTS_HEADER = Buffer.from([AUDIO_TTS]);
 
@@ -80,13 +82,24 @@ async function synthesize(hub: Hub, text: string): Promise<void> {
   }
   // Forward chunks as they arrive (announcement starts before synthesis finishes).
   let carry: Buffer | null = null;
+  let pcmBytes = 0;
   for await (const chunk of res.body) {
     const aligned = alignPcm16(Buffer.from(chunk), carry);
     carry = aligned.carry;
     if (aligned.frame.byteLength > 0) {
+      pcmBytes += aligned.frame.byteLength;
       hub.sendBinary(Buffer.concat([TTS_HEADER, aligned.frame]), 'shell');
     }
   }
+  // Deliberate: a stream error above skips recording (no reliable duration to price).
+  // /v1/audio/speech returns raw audio with no usage object — estimate from what we DO
+  // have: input chars and measured duration (24 kHz mono pcm16 = 48,000 bytes/s).
+  recordPriced(priceTts(text.length, pcmBytes / 48_000), {
+    provider: 'openai',
+    model: config.models.tts,
+    kind: 'tts_announce',
+    estimated: true,
+  });
 }
 
 /**

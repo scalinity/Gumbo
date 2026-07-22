@@ -1,6 +1,8 @@
 import { config } from '../config.ts';
 import { postJson, SearchError } from './client.ts';
 import { auditSearchCall } from './audit.ts';
+import { recordUsage } from '../usage/recorder.ts';
+import { exaContentsCost, exaSearchCost } from '../usage/pricing.ts';
 
 // Verified against exa.ai/docs 2026-07: Exa 2.0 `type` accepts instant | fast | auto |
 // deep-lite | deep | deep-reasoning. Gumbo exposes the three it routes between.
@@ -69,6 +71,10 @@ export async function exaSearch(
     throw err;
   }
   auditSearchCall({ provider: 'exa', endpoint: '/search', query, resultCount: results.length, ok: true });
+  {
+    const { units, costUsd } = exaSearchCost(tier);
+    recordUsage({ provider: 'exa', kind: 'search', units, costUsd, estimated: true });
+  }
   return results;
 }
 
@@ -97,6 +103,10 @@ export async function exaContents(urls: string[], opts: { signal?: AbortSignal }
     throw err;
   }
   auditSearchCall({ provider: 'exa', endpoint: '/contents', query, resultCount: results.length, ok: true });
+  {
+    const { units, costUsd } = exaContentsCost(results.length);
+    recordUsage({ provider: 'exa', kind: 'contents', units, costUsd, estimated: true });
+  }
   return results;
 }
 

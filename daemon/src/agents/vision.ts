@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { config } from '../config.ts';
+import { recordPriced } from '../usage/recorder.ts';
+import { priceTerraTokens } from '../usage/pricing.ts';
 
 /**
  * M7 vision rung 2: a NESTED one-shot vision query — the screenshot goes to the
@@ -14,6 +16,11 @@ export type VisionQuery = (imagePath: string, question: string, signal?: AbortSi
 
 interface ResponsesPayload {
   output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    input_tokens_details?: { cached_tokens?: number };
+  };
 }
 
 export const visionQuery: VisionQuery = async (imagePath, question, signal) => {
@@ -49,6 +56,16 @@ export const visionQuery: VisionQuery = async (imagePath, question, signal) => {
     throw new Error(`vision query failed: HTTP ${res.status} ${body.slice(0, 200)}`);
   }
   const data = (await res.json()) as ResponsesPayload;
+  if (data.usage) {
+    recordPriced(
+      priceTerraTokens({
+        input: data.usage.input_tokens,
+        output: data.usage.output_tokens,
+        cached: data.usage.input_tokens_details?.cached_tokens,
+      }),
+      { provider: 'openai', model: config.models.subagent, kind: 'vision' },
+    );
+  }
   const message = [...(data.output ?? [])].reverse().find((item) => item.type === 'message');
   const text = (message?.content ?? [])
     .filter((part) => part.type === 'output_text')

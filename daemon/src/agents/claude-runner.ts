@@ -7,6 +7,71 @@ import { config, secretEnvKeys, secretFilePaths } from '../config.ts';
 import { startEgressProxy, type EgressProxy } from './egress-proxy.ts';
 import type { Store } from '../events/store.ts';
 import type { Supervisor, GateResult } from './supervisor.ts';
+import { recordUsage } from '../usage/recorder.ts';
+import { priceClaudeEquivalent } from '../usage/pricing.ts';
+
+// The usage slice of the SDK's result message (sdk.d.ts: modelUsage entries carry
+// inputTokens/outputTokens/cacheReadInputTokens/cacheCreationInputTokens/costUSD;
+// total_cost_usd + snake_case usage ride alongside). Fields optional-guarded — the
+// runner must survive an SDK that stops reporting them.
+export interface ResultUsageMessage {
+  total_cost_usd?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+  modelUsage?: Record<string, {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    costUSD?: number;
+  }>;
+}
+
+export interface ClaudeUsageTotals { in: number; out: number; read: number; write: number; cost: number }
+
+/** Cumulative→delta conversion for one result message — result messages within one query()
+ *  report CUMULATIVE session usage, so each result must record only the not-yet-recorded
+ *  remainder. Advances `recorded` to the new cumulative totals as it goes. Prefers the
+ *  per-model modelUsage map (top-level `usage` EXCLUDES subagent tokens); falls back to a
+ *  single synthetic 'claude' entry from the snake_case usage. Exported for unit tests. */
+export function claudeUsageDeltas(
+  msg: ResultUsageMessage,
+  recorded: Map<string, ClaudeUsageTotals>,
+): Array<{ model: string; delta: ClaudeUsageTotals }> {
+  const models = msg.modelUsage && Object.keys(msg.modelUsage).length > 0
+    ? Object.entries(msg.modelUsage)
+    : msg.usage
+      ? ([['claude', {
+          inputTokens: msg.usage.input_tokens ?? 0,
+          outputTokens: msg.usage.output_tokens ?? 0,
+          cacheReadInputTokens: msg.usage.cache_read_input_tokens ?? 0,
+          cacheCreationInputTokens: msg.usage.cache_creation_input_tokens ?? 0,
+          costUSD: msg.total_cost_usd ?? 0,
+        }]] as const)
+      : [];
+  const deltas: Array<{ model: string; delta: ClaudeUsageTotals }> = [];
+  for (const [model, u] of models) {
+    if (!u || typeof u !== 'object') continue; // a null entry value must never throw here
+    const prev = recorded.get(model) ?? { in: 0, out: 0, read: 0, write: 0, cost: 0 };
+    const delta = {
+      in: Math.max(0, (u.inputTokens ?? 0) - prev.in),
+      out: Math.max(0, (u.outputTokens ?? 0) - prev.out),
+      read: Math.max(0, (u.cacheReadInputTokens ?? 0) - prev.read),
+      write: Math.max(0, (u.cacheCreationInputTokens ?? 0) - prev.write),
+      cost: Math.max(0, (u.costUSD ?? 0) - prev.cost),
+    };
+    recorded.set(model, {
+      in: prev.in + delta.in, out: prev.out + delta.out, read: prev.read + delta.read,
+      write: prev.write + delta.write, cost: prev.cost + delta.cost,
+    });
+    deltas.push({ model, delta });
+  }
+  return deltas;
+}
 
 // Auth-failure markers: a not-logged-in / expired-subscription session comes back either
 // as an assistant error field or as result text carrying these strings (verified during
@@ -340,6 +405,9 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   private firstUserMessageId: string | null = null; // rewind target for undo() (checkpointing)
   private planRejected = false; // the user declined the plan → park, don't fail
   private authFailed = false; // an assistant message reported an auth error
+  // Per-model totals already recorded for this session run — result messages within one
+  // query() report CUMULATIVE session usage, so each result records only the delta.
+  private recordedModelUsage = new Map<string, { in: number; out: number; read: number; write: number; cost: number }>();
   private planFileContent: string | null = null; // last Write into ~/.claude/plans (see PLAN_DIR)
 
   // No parameter properties: daemon tests run node --test in strip-only mode.
@@ -500,6 +568,11 @@ export class ClaudeRunner implements ClaudeSessionRunner {
             }
           }
         } else if (msg.type === 'result') {
+          // Record BEFORE the park/throw exits below — a failed or parked run still burned
+          // tokens. billed=0: subscription auth, so costUSD is the SDK's client-side
+          // estimate at API list prices — exactly the "equivalent value" the usage view
+          // labels it as. Falls back to our own rate table when the SDK reports 0.
+          this.recordClaudeUsage(msg as unknown as ResultUsageMessage, taskId);
           this.turnsResolved += 1;
           if (supervisor.capHit) return this.park(report, 'reached the supervisor question limit — needs your input');
           if (this.planRejected) return this.park(report, 'plan needs your approval or revision');
@@ -528,6 +601,38 @@ export class ClaudeRunner implements ClaudeSessionRunner {
     } finally {
       this.input.close();
       proxy?.close(); // the session owns the proxy — stop listening when it ends
+    }
+  }
+
+  /** One equivalent-value row per model from the result's cumulative modelUsage, recording
+   *  only the delta since the last result. SDK ModelUsage carries costUSD (its own
+   *  API-list-price estimate — preferred); our rate table covers a zero/missing one. */
+  private recordClaudeUsage(msg: ResultUsageMessage, taskId: string) {
+    // Same never-throws contract as the recorder module: this runs inside the message loop
+    // of a gating-critical path, so a malformed SDK payload must degrade to a console line,
+    // never to a rejected run.
+    try {
+      for (const { model, delta: d } of claudeUsageDeltas(msg, this.recordedModelUsage)) {
+        if (d.in === 0 && d.out === 0 && d.read === 0 && d.write === 0) continue;
+        const equivalent = d.cost > 0
+          ? d.cost
+          : priceClaudeEquivalent(model, { input: d.in, output: d.out, cacheRead: d.read, cacheWrite: d.write });
+        recordUsage({
+          provider: 'anthropic',
+          model,
+          kind: 'claude_result',
+          taskId,
+          inputTokens: d.in,
+          outputTokens: d.out,
+          cachedTokens: d.read,
+          cacheWriteTokens: d.write,
+          costUsd: equivalent ?? 0,
+          billed: false,
+          detail: equivalent == null ? { unpriced: true } : undefined,
+        });
+      }
+    } catch (err) {
+      console.error('usage record failed (continuing):', err);
     }
   }
 

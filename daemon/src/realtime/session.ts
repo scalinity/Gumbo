@@ -12,6 +12,8 @@ import type { ConfirmBridge } from '../ws/confirm.ts';
 import { AUDIO_REALTIME } from '../ws/protocol.ts';
 import { announcementText, echoForInstructions, speakAnnouncement } from '../audio/announce.ts';
 import { createOrchestratorTools } from './tools.ts';
+import { recordPriced } from '../usage/recorder.ts';
+import { priceRealtimeTurn, priceTranscription, priceTranscriptionSeconds, type RealtimeUsage } from '../usage/pricing.ts';
 
 // Rebuilt per session so the date AND time are always current (sessions are short-lived;
 // the time anchors reminder phrases like "in 10 minutes").
@@ -328,6 +330,41 @@ export class Orchestrator {
             case 'input_audio_buffer.committed':
               this.sawCommit = true;
               break;
+            case 'response.done': {
+              // Every turn's token bill rides this server event — text/audio/cached splits
+              // priced per modality (cached audio is 80× cheaper than uncached).
+              const usage = (event as { response?: { usage?: RealtimeUsage } }).response?.usage;
+              if (usage) {
+                recordPriced(priceRealtimeTurn(usage), {
+                  provider: 'openai',
+                  model: config.models.realtime,
+                  kind: 'realtime_turn',
+                });
+              }
+              break;
+            }
+            case 'conversation.item.input_audio_transcription.completed': {
+              // Input transcription (gpt-4o-mini-transcribe) bills separately from the
+              // session. The event's usage is token-type or duration-type — handle both.
+              const u = (event as {
+                usage?: { type?: string; input_tokens?: number; output_tokens?: number; seconds?: number };
+              }).usage;
+              if (u?.type === 'tokens') {
+                recordPriced(priceTranscription({ input: u.input_tokens, output: u.output_tokens }), {
+                  provider: 'openai',
+                  model: config.realtimeAudio.input.transcription.model,
+                  kind: 'transcription',
+                });
+              } else if (u?.type === 'duration' && typeof u.seconds === 'number') {
+                recordPriced(priceTranscriptionSeconds(u.seconds), {
+                  provider: 'openai',
+                  model: config.realtimeAudio.input.transcription.model,
+                  kind: 'transcription',
+                  estimated: true,
+                });
+              }
+              break;
+            }
           }
         });
         session.transport.on('function_call', (call: { name?: string; arguments?: string }) => {

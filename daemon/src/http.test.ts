@@ -36,6 +36,30 @@ test('GET /api/hosts returns base + remembered', async () => {
   assert.ok(Array.isArray(json.base) && Array.isArray(json.remembered));
 });
 
+test('GET /api/usage returns a bare day-row array with the from filter applied', async () => {
+  // Both sides of every comparison derive from Date.now() — hardcoded days against the
+  // wall-clock-relative 120-day default window become time bombs (review 🟡).
+  const { localDay } = await import('./usage/recorder.ts');
+  const today = localDay(Date.now());
+  const futureFrom = localDay(Date.now() + 2 * 24 * 60 * 60 * 1000);
+  store.insertUsage({
+    ts: Date.now(), day: today, provider: 'openai', model: 'gpt-realtime-2.1',
+    kind: 'realtime_turn', task_id: null, input_tokens: 10, output_tokens: 5,
+    cached_tokens: 0, cache_write_tokens: 0, units: 0, cost_usd: 0.001, billed: 1,
+    estimated: 0, detail: null,
+  });
+  const res = await fetch(`${base}/api/usage`);
+  assert.equal(res.status, 200);
+  const rows = (await res.json()) as Array<{ day: string; provider: string; calls: number }>;
+  assert.ok(Array.isArray(rows));
+  assert.ok(rows.some((r) => r.day === today && r.provider === 'openai' && r.calls === 1));
+  // an explicit future from excludes it; a malformed from falls back to the default window
+  const later = (await (await fetch(`${base}/api/usage?from=${futureFrom}`)).json()) as unknown[];
+  assert.equal(later.length, 0);
+  const malformed = await fetch(`${base}/api/usage?from=bogus`);
+  assert.equal(malformed.status, 200);
+});
+
 test('POST from an ALLOWED dashboard origin persists and round-trips through GET', async () => {
   const origin = config.allowedOrigins[0];
   const post = await hostsReq('POST', { origin, body: JSON.stringify({ host: 'roundtrip.example' }) });

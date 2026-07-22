@@ -1,6 +1,8 @@
 import { config } from '../config.ts';
 import { postJson, SearchError } from './client.ts';
 import { auditSearchCall } from './audit.ts';
+import { recordUsage } from '../usage/recorder.ts';
+import { tavilySearchCost } from '../usage/pricing.ts';
 
 // Verified against docs.tavily.com 2026-07: search_depth ∈ basic | advanced | fast |
 // ultra-fast (fast/ultra-fast are the 2026 additions, 1 credit like basic).
@@ -61,6 +63,8 @@ export async function tavilySearch(
       responseTime: raw.response_time,
     };
     auditSearchCall({ provider: 'tavily', endpoint: '/search', query, resultCount: lookup.sources.length, ok: true });
+    const { units, costUsd } = tavilySearchCost(opts.depth ?? config.search.tavilyDepth);
+    recordUsage({ provider: 'tavily', kind: 'search', units, costUsd, estimated: true });
     return lookup;
   } catch (err) {
     auditSearchCall({

@@ -2636,3 +2636,66 @@ implied-but-unscheduled items, not missing machinery. the user approved applying
   roles ("my sister", "the landlord"), and the vocabulary rule in CLAUDE.md/AGENTS.md now bans
   invented person names outright. Roles are also simply better spec-writing here: they name the
   relationship the mechanism serves, not a fictional cast member.
+
+### Usage & cost analytics (2026-07-21) — capture pipeline + dashboard Usage view
+
+- **Shape:** one sqlite `usage` row per billable provider call (priced AT WRITE TIME by
+  `usage/pricing.ts` — later rate edits never rewrite history), a never-throws recorder
+  (`usage/recorder.ts`, module singleton like audit.ts, plus its own `logs/usage.jsonl` ledger —
+  `search-audit.jsonl` deliberately untouched so debugging stays noise-free), GET `/api/usage`
+  day-aggregates, and a header-toggled full-page dashboard view (tiles, ember calendar heatmap,
+  stacked per-model bars with day/week/month + cost/tokens switches, hover breakdown card,
+  per-model table). Claude rows are "equivalent value" (`billed=0`, dimmed in charts);
+  Tavily/Exa/Firecrawl are per-unit estimates excluded from totals unless the "search credits"
+  toggle is on (the user rides their free tiers).
+- **xAI usage shape (live smoke, one /v1/responses call):** `usage.input_tokens` INCLUDES the
+  cached share (`input_tokens_details.cached_tokens`); server tools are counted in
+  `num_server_side_tools_used` (+ per-tool `server_side_tool_usage_details`) — no output-item
+  counting needed; and `cost_in_usd_ticks` is xAI's own cost in 1e-10 USD ticks. The smoke's
+  ticks matched our rate-table math to the cent, so grok rows use the server figure with our
+  math as fallback. Docs described none of this — the live-smoke rule earns its keep again.
+- **`@openai/agents` usage:** `result.rawResponses[].usage` with camelCase `inputTokens`/
+  `outputTokens`; `inputTokensDetails` is an **array** of records on the Usage class (single
+  record on RequestUsage) — `recordAgentsRunUsage` handles both. Verified against the installed
+  SDK's `usage.d.ts`, not docs.
+- **Claude Agent SDK:** result messages carry `modelUsage[modelId] = {costUSD, inputTokens,
+  outputTokens, cacheReadInputTokens?, cacheCreationInputTokens?}` — populated under
+  subscription auth as a client-side estimate at API list prices (exactly the equivalent-value
+  semantics we display). Top-level `usage` EXCLUDES subagent tokens — never sum it when
+  modelUsage exists. Result messages within one `query()` report **cumulative** session usage,
+  so the runner records per-model deltas (`recordedModelUsage` map), before the park/throw
+  exits so failed runs still count. **Live double-count check still pending** (below).
+- **Chart palette:** a warm-only ramp mathematically cannot seat 7 distinguishable series inside
+  the dark-mode lightness band (validated and failed twice) — the shipped 8-slot palette
+  reorders the dataviz reference hues into a warm-opening order that passes every check (CVD +
+  normal-vision + contrast) on the actual `#201a15` surface. The slot ORDER is the
+  colorblind-safety mechanism — never reorder/cycle (comment in `usage.tsx`). Claude models fold
+  to one dimmed series, minor kinds fold to `other`; the table keeps per-model detail.
+- **TTS pricing** confirmed on the model docs page ($0.60/1M text in, $12/1M audio out); the
+  speech endpoint returns no usage object, so rows estimate chars/4 input tokens + audio tokens
+  from PCM byte-length duration (48,000 bytes/s), flagged estimated.
+- **Verified live** (isolated daemon on GUMBO_PORT=8747 + scratch GUMBO_HOME + scratch Vite on
+  5280 — the live daemon currently runs from the Gumbo-m8 worktree and never saw this code):
+  tavily + grok seams end-to-end (real API calls → priced rows), /api/usage aggregation, and the
+  full dashboard including all switches (seeded 70-day history). **Still needs the live daemon
+  on main:** realtime `response.done` delivery through the transport wildcard, whether the
+  transcription-completed event carries usage (if not: note the ~$0.003/min gap here, don't
+  guess), images `usage` field names, `@openai/agents` accessor naming on a real run, and the
+  Claude cumulative-vs-per-result delta check (one task + one follow-up turn → tokens must not
+  double).
+- **Test-harness gotcha:** exporting one `GUMBO_HOME` to the whole suite breaks the per-process
+  temp isolation each test file self-provisions (`??=`) — empty-gallery and audit tests fail on
+  shared state. Run `npm test` bare; only single-file runs want an explicit scratch home.
+- **/review-2 (2 Fable agents) + /address, same day:** no 🔴; 7 🟡 + 6 🔵, all addressed —
+  `recordClaudeUsage` wrapped in the recorder's never-throws guard with the cumulative→delta
+  math extracted to exported pure `claudeUsageDeltas` (+3 tests incl. a null modelUsage entry);
+  `priceRealtimeTurn` degraded-payload handling (cached total without its split → apportion
+  audio-first, missing input details → uncached-text + `degraded` flag; the naive read
+  overpriced 80×); grok + images now record usage BEFORE their empty-answer/no-b64 throws (a
+  billed call lands a row even when unusable — grok covered by 3 new mocked-fixture tests
+  incl. the ticks-authoritative branch); http.test time-bomb dates → Date.now()-derived;
+  recorder.test rerun-proof under a preset GUMBO_HOME; `recordAgentsRunUsage` takes the model
+  from its caller (supervisor rows label honestly if the models ever diverge); `localDay`
+  shared recorder→http; deliberate success-only seams (runner abort, TTS stream error) now say
+  so in a comment. Suite 373→384/0. Still live-check items: the modelUsage-fallback interplay
+  on resume (verification #7) and the transport-seam branches.

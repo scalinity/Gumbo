@@ -218,6 +218,63 @@ test('failures are audited ok:false with provider + kind at the client layer', a
   assert.equal(entry.query, 'audit-me');
 });
 
+// Usage recording (2026-07-21 analytics): grok rows land in the isolated store below —
+// initUsageRecorder is test-scoped, so the earlier hermetic tests above record nothing.
+const { Store } = await import('../events/store.ts');
+const { initUsageRecorder } = await import('../usage/recorder.ts');
+
+function usageStore() {
+  const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-grok-usage-')), 'gumbo.db'));
+  initUsageRecorder(store);
+  return store;
+}
+
+test('usage row: cost_in_usd_ticks is authoritative when present', async () => {
+  const store = usageStore();
+  capture(200, {
+    ...completed('It happened.'),
+    usage: {
+      input_tokens: 4000,
+      output_tokens: 100,
+      input_tokens_details: { cached_tokens: 1000 },
+      num_server_side_tools_used: 1,
+      cost_in_usd_ticks: 76_728_000, // = $0.0076728 (the live-smoke calibration value)
+    },
+  });
+  await grokLiveSearch('q', { model: 'grok-4.20-non-reasoning', retries: 0 });
+  const rows = store.usageByDay('2000-01-01');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].input_tokens, 3000); // uncached remainder of 4000 total
+  assert.equal(rows[0].cached_tokens, 1000);
+  assert.ok(Math.abs(rows[0].cost_usd - 0.0076728) < 1e-9);
+});
+
+test('usage row: no ticks → rate-table math including the per-tool-call fee', async () => {
+  const store = usageStore();
+  capture(200, {
+    ...completed('Answer.'),
+    usage: { input_tokens: 1000, output_tokens: 1000, num_server_side_tools_used: 2 },
+  });
+  await grokLiveSearch('q', { model: 'grok-4.20-non-reasoning', retries: 0 });
+  const rows = store.usageByDay('2000-01-01');
+  assert.equal(rows.length, 1);
+  // 1000×$1.25 in + 1000×$2.50 out per 1M, + 2×$0.005 tool calls
+  assert.ok(Math.abs(rows[0].cost_usd - ((1000 * 1.25 + 1000 * 2.5) / 1e6 + 0.01)) < 1e-9);
+});
+
+test('usage row lands even when the answer is empty — the call billed regardless', async () => {
+  const store = usageStore();
+  capture(200, {
+    status: 'completed',
+    output: [], // completed but no message content → empty_results throw after recording
+    usage: { input_tokens: 500, output_tokens: 0, num_server_side_tools_used: 1 },
+  });
+  await assert.rejects(() => grokLiveSearch('q', { retries: 0 }));
+  const rows = store.usageByDay('2000-01-01');
+  assert.equal(rows.length, 1, 'the billed call must land a row despite the empty answer');
+  assert.equal(rows[0].kind, 'x_lookup');
+});
+
 // Opt-in live smoke against the real xAI API — needs XAI_API_KEY in .env and GROK_LIVE_SMOKE=1
 // (keeps `npm test` hermetic + free by default). Restores the real key for its one call only.
 const runSmoke = process.env.GROK_LIVE_SMOKE === '1' && !!REAL_XAI_KEY;

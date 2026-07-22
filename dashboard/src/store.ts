@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { Granularity, Metric, UsageDayRow } from './rollup';
 
 export interface EventRow {
   seq: number;
@@ -51,6 +52,13 @@ interface GumboStore {
   hosts: HostList;
   streamingText: string;
   selectedTaskId: string | null;
+  // Usage view (fetched on open, not streamed — see ws.ts fetchUsage).
+  view: 'feed' | 'usage';
+  usage: UsageDayRow[] | null; // null = not fetched yet
+  usageError: boolean;
+  granularity: Granularity;
+  usageMetric: Metric;
+  includeCredits: boolean; // Tavily/Exa/Firecrawl est. $ — free tiers, so off by default
   setConnected: (connected: boolean) => void;
   setSessionState: (state: SessionState) => void;
   bootstrap: (tasks: Task[], events: EventRow[], images: GalleryImage[], schedules: ScheduleItem[]) => void;
@@ -58,6 +66,11 @@ interface GumboStore {
   addEvent: (event: EventRow) => void;
   appendStreaming: (delta: string) => void;
   selectTask: (id: string | null) => void;
+  setView: (view: 'feed' | 'usage') => void;
+  setUsage: (rows: UsageDayRow[] | null, error?: boolean) => void;
+  setGranularity: (granularity: Granularity) => void;
+  setUsageMetric: (metric: Metric) => void;
+  toggleCredits: () => void;
 }
 
 const TASK_CAP = 200;
@@ -94,6 +107,12 @@ export const useStore = create<GumboStore>((set) => ({
   hosts: { base: [], remembered: [] },
   streamingText: '',
   selectedTaskId: null,
+  view: 'feed',
+  usage: null,
+  usageError: false,
+  granularity: 'day',
+  usageMetric: 'cost',
+  includeCredits: false,
   setConnected: (connected) => set({ connected }),
   setSessionState: (sessionState) => set({ sessionState }),
   setHosts: (hosts) => set({ hosts }),
@@ -158,4 +177,9 @@ export const useStore = create<GumboStore>((set) => ({
     }),
   appendStreaming: (delta) => set((s) => ({ streamingText: s.streamingText + delta })),
   selectTask: (id) => set({ selectedTaskId: id }),
+  setView: (view) => set({ view }),
+  setUsage: (usage, error = false) => set({ usage, usageError: error }),
+  setGranularity: (granularity) => set({ granularity }),
+  setUsageMetric: (usageMetric) => set({ usageMetric }),
+  toggleCredits: () => set((s) => ({ includeCredits: !s.includeCredits })),
 }));

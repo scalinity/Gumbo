@@ -11,6 +11,7 @@ import { createBrowserTools } from './browser-tools.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import { wrapSteering } from './steering.ts';
 import { visionQuery } from './vision.ts';
+import { recordAgentsRunUsage } from '../usage/recorder.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
 export type SubagentKind = 'research' | 'mac';
@@ -512,6 +513,9 @@ export async function runSubagent(opts: {
     };
     const stream = await run(agent, brief, { stream: true, maxTurns: isMac ? config.mac.maxTurns : 25, signal });
     await consume(stream);
+    // Deliberate: an aborted/failed run records nothing — rawResponses may be mid-flight
+    // and a cancelled task's partial spend isn't worth a misleading half-row.
+    recordAgentsRunUsage(stream.rawResponses, { kind: 'subagent_run', model: config.models.subagent, taskId });
     const final = String(stream.finalOutput ?? '');
     // Deterministic backstop (live demo 2026-07-20, THREE different path shapes to the same
     // dead end): the model keeps ENDING computer tasks with "the user needs to sign in"
@@ -535,6 +539,7 @@ export async function runSubagent(opts: {
         { stream: true, maxTurns: config.mac.maxTurns, signal },
       );
       await consume(retry);
+      recordAgentsRunUsage(retry.rawResponses, { kind: 'subagent_run', model: config.models.subagent, taskId });
       return String(retry.finalOutput ?? '');
     }
     return final;

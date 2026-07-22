@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
-const { InputQueue, buildSandboxProfile, sandboxUnavailableReason, ClaudeRunner } = await import('./claude-runner.ts');
+const { InputQueue, buildSandboxProfile, sandboxUnavailableReason, ClaudeRunner, claudeUsageDeltas } = await import('./claude-runner.ts');
 const { config, secretFilePaths } = await import('../config.ts');
 const { homedir } = await import('node:os');
 
@@ -140,4 +140,60 @@ test('sandboxUnavailableReason: null on macOS with sandbox-exec, else a reason (
   } else {
     assert.equal(typeof reason, 'string', 'a non-null reason drives the fail-closed throw');
   }
+});
+
+test('claudeUsageDeltas: cumulative result messages record only the not-yet-recorded remainder', () => {
+  const recorded = new Map();
+  // Turn 1: opus 1000in/200out + a haiku subagent.
+  const first = claudeUsageDeltas(
+    {
+      modelUsage: {
+        'claude-opus-4-8': { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 5000, cacheCreationInputTokens: 100, costUSD: 0.05 },
+        'claude-haiku-4-5': { inputTokens: 300, outputTokens: 50, costUSD: 0.001 },
+      },
+    },
+    recorded,
+  );
+  assert.equal(first.length, 2);
+  assert.deepEqual(first[0], { model: 'claude-opus-4-8', delta: { in: 1000, out: 200, read: 5000, write: 100, cost: 0.05 } });
+  // Turn 2: opus totals GREW (cumulative), haiku unchanged → only the opus delta lands.
+  const second = claudeUsageDeltas(
+    {
+      modelUsage: {
+        'claude-opus-4-8': { inputTokens: 1500, outputTokens: 350, cacheReadInputTokens: 9000, cacheCreationInputTokens: 100, costUSD: 0.08 },
+        'claude-haiku-4-5': { inputTokens: 300, outputTokens: 50, costUSD: 0.001 },
+      },
+    },
+    recorded,
+  );
+  const opus = second.find((e) => e.model === 'claude-opus-4-8');
+  assert.ok(opus);
+  assert.equal(opus.delta.in, 500);
+  assert.equal(opus.delta.out, 150);
+  assert.equal(opus.delta.read, 4000);
+  assert.equal(opus.delta.write, 0);
+  assert.ok(Math.abs(opus.delta.cost - 0.03) < 1e-9);
+  const haiku = second.find((e) => e.model === 'claude-haiku-4-5');
+  assert.deepEqual(haiku?.delta, { in: 0, out: 0, read: 0, write: 0, cost: 0 });
+});
+
+test('claudeUsageDeltas: snake_case usage fallback keys to a synthetic claude entry', () => {
+  const recorded = new Map();
+  const deltas = claudeUsageDeltas(
+    { usage: { input_tokens: 800, output_tokens: 90, cache_read_input_tokens: 2000, cache_creation_input_tokens: 40 }, total_cost_usd: 0 },
+    recorded,
+  );
+  assert.equal(deltas.length, 1);
+  assert.equal(deltas[0].model, 'claude');
+  assert.deepEqual(deltas[0].delta, { in: 800, out: 90, read: 2000, write: 40, cost: 0 });
+});
+
+test('claudeUsageDeltas: a null modelUsage entry value is skipped, never a throw', () => {
+  const recorded = new Map();
+  const deltas = claudeUsageDeltas(
+    { modelUsage: { 'claude-opus-4-8': null as never, 'claude-haiku-4-5': { inputTokens: 10 } } },
+    recorded,
+  );
+  assert.equal(deltas.length, 1);
+  assert.equal(deltas[0].model, 'claude-haiku-4-5');
 });

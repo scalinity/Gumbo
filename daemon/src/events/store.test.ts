@@ -94,3 +94,42 @@ test('recentTranscripts stitches user/assistant lines oldest-first with roles ma
   const lines = store.recentTranscripts(0).map((l) => `${l.role}:${l.text}`);
   assert.deepEqual(lines, ['user:hello gumbo', 'assistant:hi the user']);
 });
+
+const usageBase = {
+  ts: 1_700_000_000_000,
+  task_id: null,
+  input_tokens: 0,
+  output_tokens: 0,
+  cached_tokens: 0,
+  cache_write_tokens: 0,
+  units: 0,
+  cost_usd: 0,
+  billed: 1 as const,
+  estimated: 0 as const,
+  detail: null,
+};
+
+test('usageByDay groups by (day, provider, model, kind, billed) and sums the columns', () => {
+  store.insertUsage({ ...usageBase, day: '2026-07-20', provider: 'openai', model: 'gpt-realtime-2.1', kind: 'realtime_turn', input_tokens: 100, output_tokens: 50, cached_tokens: 10, cost_usd: 0.01 });
+  store.insertUsage({ ...usageBase, day: '2026-07-20', provider: 'openai', model: 'gpt-realtime-2.1', kind: 'realtime_turn', input_tokens: 200, output_tokens: 100, cached_tokens: 20, cost_usd: 0.02 });
+  store.insertUsage({ ...usageBase, day: '2026-07-20', provider: 'anthropic', model: 'claude-opus-4-8', kind: 'claude_result', billed: 0, input_tokens: 5000, cost_usd: 0.5 });
+  store.insertUsage({ ...usageBase, day: '2026-07-21', provider: 'openai', model: 'gpt-realtime-2.1', kind: 'realtime_turn', input_tokens: 7, cost_usd: 0.001 });
+  const rows = store.usageByDay('2026-07-20');
+  const realtime20 = rows.find((r) => r.day === '2026-07-20' && r.kind === 'realtime_turn');
+  assert.ok(realtime20);
+  assert.equal(realtime20.calls, 2);
+  assert.equal(realtime20.input_tokens, 300);
+  assert.equal(realtime20.cached_tokens, 30);
+  assert.ok(Math.abs(realtime20.cost_usd - 0.03) < 1e-9);
+  // billed=0 Claude row stays its own group — the dashboard splits billed vs equivalent on it.
+  const claude = rows.find((r) => r.provider === 'anthropic');
+  assert.ok(claude && claude.billed === 0 && claude.calls === 1);
+  // ordered by day, and the from filter is inclusive
+  assert.deepEqual([...new Set(rows.map((r) => r.day))], ['2026-07-20', '2026-07-21']);
+});
+
+test('usageByDay from filter excludes earlier days', () => {
+  store.insertUsage({ ...usageBase, day: '2026-06-01', provider: 'tavily', model: null, kind: 'search', units: 1, cost_usd: 0.008, estimated: 1 });
+  const rows = store.usageByDay('2026-07-01');
+  assert.ok(!rows.some((r) => r.day === '2026-06-01'));
+});

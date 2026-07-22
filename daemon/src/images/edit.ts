@@ -57,7 +57,7 @@ export async function editImage(file: string, prompt: string, strokes?: Stroke[]
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: form,
   });
-  return saveImageResponse(res, imageNameHint(prompt));
+  return saveImageResponse(res, imageNameHint(prompt), 'image_edit');
 }
 
 /**

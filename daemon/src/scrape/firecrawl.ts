@@ -2,6 +2,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { config } from '../config.ts';
 import { requestJson, SearchError } from '../search/client.ts';
 import { auditSearchCall } from '../search/audit.ts';
+import { recordUsage } from '../usage/recorder.ts';
+import { firecrawlCost } from '../usage/pricing.ts';
 
 // Firecrawl v2 raw client — content acquisition (scrape/crawl/map/extract) for background
 // sub-agents. Deliberately NOT a search provider: /search stays with Tavily (hot path) and
@@ -117,6 +119,7 @@ export async function firecrawlScrape(
     }, (r) => (r.data?.markdown?.trim() ? 1 : 0));
     const page = toPage(raw.data ?? {}, url);
     if (!page.markdown.trim()) throw new SearchError('firecrawl', 'empty_results', 'no markdown content for url');
+    recordUsage({ provider: 'firecrawl', kind: 'scrape', ...firecrawlCost(1), estimated: true });
     return page;
   } catch (err) {
     auditFailure('/scrape', url, err);
@@ -146,6 +149,7 @@ export async function firecrawlMap(
       .filter((l): l is { url: string; title?: string } => typeof l.url === 'string')
       .map((l) => ({ url: l.url, title: l.title }));
     if (links.length === 0) throw new SearchError('firecrawl', 'empty_results', 'no links found for site');
+    recordUsage({ provider: 'firecrawl', kind: 'map', ...firecrawlCost(links.length), estimated: true });
     return links;
   } catch (err) {
     auditFailure('/map', url, err);
@@ -272,6 +276,7 @@ export async function firecrawlCrawl(
             : undefined;
         }
         if (pages.length === 0) throw new SearchError('firecrawl', 'empty_results', 'crawl returned no pages');
+        recordUsage({ provider: 'firecrawl', kind: 'crawl', ...firecrawlCost(pages.length), estimated: true });
         return pages;
       }
       // Abort-aware sleep: a cancelled task must not wait out the poll interval.
@@ -348,6 +353,9 @@ export async function firecrawlExtract(
       }
       if (status.status === 'completed') {
         if (status.data == null) throw new SearchError('firecrawl', 'empty_results', 'extract returned no data');
+        // Extract bills server-side by tokens (15 tokens/credit) with no reported total —
+        // record the call with the URL count and zero cost rather than inventing a number.
+        recordUsage({ provider: 'firecrawl', kind: 'extract', units: urls.length, costUsd: 0, estimated: true, detail: { unpriced: true } });
         return status.data;
       }
       await delay(pollIntervalMs, undefined, { signal: opts.signal });

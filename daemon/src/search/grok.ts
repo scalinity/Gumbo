@@ -1,6 +1,8 @@
 import { config } from '../config.ts';
 import { postJson, SearchError } from './client.ts';
 import { auditSearchCall } from './audit.ts';
+import { recordPriced } from '../usage/recorder.ts';
+import { priceGrok } from '../usage/pricing.ts';
 
 // Grok (xAI) live X/web search via the Agent Tools API — `POST /v1/responses` with server-side
 // `web_search`/`x_search` tools (verified against the live API 2026-07-16). The older declarative
@@ -37,10 +39,24 @@ interface ResponsesOutputItem {
   content?: ResponsesContentPart[];
 }
 
+// Usage shape verified LIVE 2026-07-21 (one smoked /v1/responses call): input_tokens is the
+// TOTAL including the cached share; num_server_side_tools_used counts the billed $5/1k tool
+// calls; cost_in_usd_ticks is xAI's own authoritative cost in 1e-10 USD ticks (the smoke's
+// ticks matched our rate-table math to the cent — ticks win when present, our math is the
+// fallback).
+interface GrokUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  input_tokens_details?: { cached_tokens?: number };
+  num_server_side_tools_used?: number;
+  cost_in_usd_ticks?: number;
+}
+
 interface GrokResponse {
   status?: string;
   error?: unknown;
   output?: ResponsesOutputItem[];
+  usage?: GrokUsage;
 }
 
 // Two system prompts (Responses API `instructions`) for the two consumers: the hot path wants a
@@ -150,6 +166,25 @@ export async function grokLiveSearch(
     // A non-completed run (e.g. hit max_tool_calls before answering) has no trustworthy answer.
     if (raw.status && raw.status !== 'completed') {
       throw new SearchError('grok', 'empty_results', `response status ${raw.status}`);
+    }
+    // Record usage BEFORE the empty-answer check: a completed response with no usable
+    // answer still billed its tokens and tool calls — one usage row per billable call.
+    {
+      const model = opts.model ?? config.grok.backgroundModel;
+      const u = raw.usage ?? {};
+      const toolCalls = u.num_server_side_tools_used ?? 0;
+      const priced = priceGrok(
+        model,
+        { input: u.input_tokens, output: u.output_tokens, cached: u.input_tokens_details?.cached_tokens },
+        toolCalls,
+      );
+      // xAI reports its own cost in 1e-10 USD ticks — authoritative when present.
+      if (u.cost_in_usd_ticks != null) priced.costUsd = u.cost_in_usd_ticks / 1e10;
+      recordPriced(priced, {
+        provider: 'grok',
+        model,
+        kind: opts.style === 'detailed' ? 'x_search' : 'x_lookup',
+      });
     }
     const parts = (raw.output ?? []).filter((o) => o.type === 'message').flatMap((o) => o.content ?? []);
     const answer = stripInlineCitations(

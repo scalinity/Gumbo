@@ -3,6 +3,7 @@ import { createReadStream, existsSync, readdirSync, realpathSync, statSync } fro
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { config } from './config.ts';
 import { forgetHost, listHosts, rememberHost, validHostEntry } from './mac/hosts.ts';
+import { localDay } from './usage/recorder.ts';
 import type { Store } from './events/store.ts';
 
 const MIME: Record<string, string> = {
@@ -157,6 +158,19 @@ export function createHttpServer(store: Store) {
           }),
         ),
       );
+      return;
+    }
+
+    // Usage analytics: day-bucketed aggregates, default window ~120 days. Read-only like
+    // /api/tasks (no Origin guard needed); the dashboard rolls days into weeks/months.
+    if (url.pathname === '/api/usage') {
+      res.setHeader('Content-Type', 'application/json');
+      const fromParam = url.searchParams.get('from');
+      const fromDay =
+        fromParam && /^\d{4}-\d{2}-\d{2}$/.test(fromParam)
+          ? fromParam
+          : localDay(Date.now() - 120 * 24 * 60 * 60 * 1000);
+      res.end(JSON.stringify(store.usageByDay(fromDay)));
       return;
     }
 

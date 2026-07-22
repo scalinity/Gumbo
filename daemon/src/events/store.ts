@@ -33,6 +33,42 @@ export interface ScheduleRow {
   created_at: number;
 }
 
+// One billable provider call (see the usage table comment for column semantics).
+export interface UsageRow {
+  ts: number;
+  day: string; // local 'YYYY-MM-DD'
+  provider: string;
+  model: string | null;
+  kind: string;
+  task_id: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cache_write_tokens: number;
+  units: number;
+  cost_usd: number;
+  billed: 0 | 1;
+  estimated: 0 | 1;
+  detail: string | null; // JSON modality split / flags
+}
+
+// A day-bucketed aggregate the dashboard charts consume directly.
+export interface UsageDayRow {
+  day: string;
+  provider: string;
+  model: string | null;
+  kind: string;
+  billed: 0 | 1;
+  estimated: 0 | 1;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cache_write_tokens: number;
+  units: number;
+  cost_usd: number;
+}
+
 type EventListener = (event: EventRow) => void;
 
 export class Store {
@@ -87,6 +123,31 @@ export class Store {
         eventkit_id TEXT, created_at INT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS schedule_due ON schedule(status, fire_at);
+      -- Usage analytics: one row per billable provider call, priced AT WRITE TIME by
+      -- usage/pricing.ts so later rate edits never rewrite history. billed=0 marks Claude
+      -- "equivalent value" rows (subscription auth — real cost $0); estimated=1 marks
+      -- unit-price estimates (credit providers, TTS). day is the LOCAL date stamped at
+      -- write so aggregation needs no per-query timezone math. ~150 B/row at n-of-1 —
+      -- pruning can ride the events-table retention story if one ever lands.
+      CREATE TABLE IF NOT EXISTS usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INT NOT NULL,
+        day TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT,
+        kind TEXT NOT NULL,
+        task_id TEXT,
+        input_tokens INT NOT NULL DEFAULT 0,
+        output_tokens INT NOT NULL DEFAULT 0,
+        cached_tokens INT NOT NULL DEFAULT 0,
+        cache_write_tokens INT NOT NULL DEFAULT 0,
+        units REAL NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0,
+        billed INT NOT NULL DEFAULT 1,
+        estimated INT NOT NULL DEFAULT 0,
+        detail TEXT
+      );
+      CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
     `);
   }
 
@@ -301,5 +362,35 @@ export class Store {
 
   listTasks(limit = 100): TaskRow[] {
     return this.db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?').all(limit) as unknown as TaskRow[];
+  }
+
+  insertUsage(row: UsageRow) {
+    this.db
+      .prepare(
+        `INSERT INTO usage (ts, day, provider, model, kind, task_id, input_tokens, output_tokens,
+           cached_tokens, cache_write_tokens, units, cost_usd, billed, estimated, detail)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.ts, row.day, row.provider, row.model, row.kind, row.task_id,
+        row.input_tokens, row.output_tokens, row.cached_tokens, row.cache_write_tokens,
+        row.units, row.cost_usd, row.billed, row.estimated, row.detail,
+      );
+  }
+
+  /** Day-bucketed aggregates for /api/usage — the dashboard rolls days into weeks/months
+   *  itself, so this one query feeds every chart. */
+  usageByDay(fromDay: string): UsageDayRow[] {
+    return this.db
+      .prepare(
+        `SELECT day, provider, model, kind, billed, estimated, COUNT(*) AS calls,
+           SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+           SUM(cached_tokens) AS cached_tokens, SUM(cache_write_tokens) AS cache_write_tokens,
+           SUM(units) AS units, SUM(cost_usd) AS cost_usd
+         FROM usage WHERE day >= ?
+         GROUP BY day, provider, model, kind, billed, estimated
+         ORDER BY day`,
+      )
+      .all(fromDay) as unknown as UsageDayRow[];
   }
 }

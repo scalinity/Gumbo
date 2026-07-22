@@ -39,6 +39,18 @@ async function bootstrap() {
   useStore.getState().setHosts(hosts);
 }
 
+/** Usage view data — fetched when the view opens (header toggle onClick), refetched on
+ *  every open so the numbers are always fresh. No streaming, no polling. */
+export async function fetchUsage() {
+  try {
+    const res = await fetch('/api/usage');
+    if (!res.ok) throw new Error(String(res.status));
+    useStore.getState().setUsage(await res.json());
+  } catch {
+    useStore.getState().setUsage(null, true);
+  }
+}
+
 /** M7 allowlist management — POST/DELETE return the updated list, which lands in the store. */
 export async function mutateHost(method: 'POST' | 'DELETE', host: string) {
   const res = await fetch('/api/hosts', {

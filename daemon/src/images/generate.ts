@@ -10,6 +10,8 @@ import { config } from '../config.ts';
 import { echoForInstructions } from '../audio/announce.ts';
 import { imageNameHint } from './files.ts';
 import type { Store } from '../events/store.ts';
+import { recordPriced } from '../usage/recorder.ts';
+import { priceImageUsage } from '../usage/pricing.ts';
 
 export type ImageShape = 'square' | 'landscape' | 'portrait';
 export type ImageQuality = 'low' | 'medium' | 'high' | 'auto';
@@ -48,12 +50,28 @@ export async function generateImage(prompt: string, shape: ImageShape, quality?:
  *  PNG in the images home, return the bare filename (the only thing that travels on).
  *  Names are prompt-derived WORDS (the user, 2026-07-16 — recallable by voice), with a
  *  numbered suffix only on collision; 'wx' keeps every write non-clobbering. */
-export async function saveImageResponse(res: Response, nameHint = 'image'): Promise<string> {
+export async function saveImageResponse(
+  res: Response,
+  nameHint = 'image',
+  usageKind: 'image_generate' | 'image_edit' = 'image_generate',
+): Promise<string> {
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`images api ${res.status}: ${detail.slice(0, 200)}`);
   }
-  const body = (await res.json()) as { data?: Array<{ b64_json?: string }> };
+  const body = (await res.json()) as {
+    data?: Array<{ b64_json?: string }>;
+    usage?: Parameters<typeof priceImageUsage>[0];
+  };
+  // Record BEFORE the b64 check: a 200 that carries usage billed its tokens even if the
+  // image payload is unusable.
+  if (body.usage) {
+    recordPriced(priceImageUsage(body.usage), {
+      provider: 'openai',
+      model: config.models.image,
+      kind: usageKind,
+    });
+  }
   const b64 = body.data?.[0]?.b64_json;
   if (!b64) throw new Error('images api: no b64_json in response');
   for (let attempt = 0; attempt < 30; attempt++) {

@@ -1,6 +1,7 @@
 import { memo, useRef, useState } from 'react';
 import { useStore, type EventRow } from './store';
-import { sendDebugText, cancelTask, mutateHost } from './ws';
+import { sendDebugText, cancelTask, mutateHost, fetchUsage } from './ws';
+import { UsagePage } from './usage';
 
 function stamp(ts: number) {
   return new Date(ts).toLocaleTimeString('en-US', { hour12: false });
@@ -25,11 +26,22 @@ function Simmer() {
 function Header() {
   const state = useStore((s) => s.sessionState);
   const connected = useStore((s) => s.connected);
+  const view = useStore((s) => s.view);
+  const setView = useStore((s) => s.setView);
+  const openUsage = () => {
+    // Fetch-on-open keeps the numbers fresh without streaming or polling.
+    setView('usage');
+    fetchUsage();
+  };
   return (
     <header className="header">
       <div className="wordmark">Gumbo</div>
       <Simmer />
       <div className="session-label">{state}</div>
+      <div className="view-toggle" role="tablist">
+        <button data-on={view === 'feed'} onClick={() => setView('feed')}>activity</button>
+        <button data-on={view === 'usage'} onClick={openUsage}>usage</button>
+      </div>
       <div className="conn" data-ok={connected}>{connected ? 'daemon connected' : 'daemon offline — retrying'}</div>
     </header>
   );
@@ -491,13 +503,20 @@ function Composer() {
 }
 
 export default function App() {
+  const view = useStore((s) => s.view);
   return (
     <div className="app">
       <Header />
       <Rail />
       <main className="main">
-        <Feed />
-        <Composer />
+        {view === 'usage' ? (
+          <UsagePage />
+        ) : (
+          <>
+            <Feed />
+            <Composer />
+          </>
+        )}
       </main>
     </div>
   );
