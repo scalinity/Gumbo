@@ -235,6 +235,27 @@ test('M8: a one-shot routine fires once and ends (no chain), with a routine.fire
   assert.equal(store.listSchedules().filter((r) => r.kind === 'routine' && r.status === 'pending').length, 0);
 });
 
+// Scan BUG (2026-07-22): a non-routine internal kind must fire its OWN event and stay out
+// of the user's reminder list — never get relabeled/surfaced as a reminder.
+test('a non-reminder/non-routine internal kind fires its own <kind>.fired event and is hidden from listReminders', async () => {
+  const { store, scheduler, events } = setup();
+  // Seed an internal "reflection" housekeeping row directly (the extensibility seam).
+  store.createSchedule({
+    id: 'refl01', fire_at: Date.now() - 1000, kind: 'reflection', text: 'nightly digest',
+    status: 'pending', eventkit_id: null, created_at: Date.now(), recurrence: null, series_id: null,
+  });
+  scheduler.setReminder('call the dentist', Date.now() + 60_000); // a real user reminder
+
+  scheduler.sweepNow();
+  await drainMicrotasks();
+  assert.ok(events.some((e) => e.type === 'reflection.fired'), 'the internal kind fires reflection.fired');
+  assert.ok(!events.some((e) => e.type === 'reminder.fired'), 'it is NEVER mislabeled as reminder.fired');
+
+  const listed = scheduler.listReminders();
+  assert.ok(listed.every((r) => r.kind !== 'reflection'), '"what are my reminders" never lists internal housekeeping rows');
+  assert.ok(listed.some((r) => r.text === 'call the dentist'), 'real reminders still show');
+});
+
 test('M8: routines are EXCLUDED from the EventKit mirror (no Reminders.app spam per occurrence)', () => {
   const { hub, scheduler } = setup();
   scheduler.scheduleRoutine('quiet routine', Date.now() + 60_000, { freq: 'daily', hour: 9, minute: 0 });

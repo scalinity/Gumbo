@@ -79,7 +79,13 @@ export class Scheduler {
       try {
         this.store.transaction(() => {
           this.store.updateScheduleStatus(row.id, 'fired');
-          const eventType = row.kind === 'routine' ? 'routine.fired' : 'reminder.fired';
+          // Dispatch by kind explicitly: emit a kind-SPECIFIC `<kind>.fired` event, never
+          // default every non-routine kind to reminder.fired. A future internal kind (a
+          // reflection/digest housekeeping row) then surfaces as its own event and is never
+          // mislabeled as a user reminder — `kind` is the extensibility seam, and this keeps
+          // it honest. (index.ts pulses the notch only on reminder.fired, so an internal
+          // kind stays silent by construction.)
+          const eventType = `${row.kind}.fired`;
           this.store.addEvent(null, eventType, { id: row.id, kind: row.kind, text: row.text, fire_at: row.fire_at });
           if (row.recurrence) {
             // Guarded parse (review 🟡, corroborated): a non-JSON recurrence would THROW
@@ -186,8 +192,15 @@ export class Scheduler {
     return { ...row, status: 'cancelled' };
   }
 
+  // Kinds a user would call a "reminder" or "what's scheduled". An internal housekeeping
+  // kind (a reflection/digest row) must opt IN to being user-visible — it never leaks into
+  // the reminders list by default.
+  private static USER_VISIBLE_KINDS: ReadonlySet<string> = new Set(['reminder', 'routine']);
+
   listReminders(limit = 20): ScheduleRow[] {
-    return this.store.listSchedules(limit);
+    // Filter to user-visible kinds AFTER fetching a padded window, so internal rows in the
+    // recent set don't crowd out the reminders the user actually asked about.
+    return this.store.listSchedules(limit + 20).filter((r) => Scheduler.USER_VISIBLE_KINDS.has(r.kind)).slice(0, limit);
   }
 
   /**
