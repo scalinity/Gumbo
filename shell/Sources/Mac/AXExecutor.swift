@@ -181,7 +181,20 @@ final class AXExecutor {
         }
         lastNodes = nodes
         lastApp = target
-        return AXResult(ok: true, output: render(nodes, app: target, truncated: truncated), errorKind: nil, health: nil)
+        var output = render(nodes, app: target, truncated: truncated)
+        // Formatting is INVISIBLE in element text — a checkpoint judging "the selected text
+        // is blue" against a plain snapshot always fails and drops a CORRECT replay into
+        // the fallback (which then "fixes" it). Append the focused selection's style
+        // (AXAttributedStringForRange → AXStyleName) so observations can see formatting.
+        var focusedRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(AXUIElement.systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+           let fEl = focusedRef.map({ $0 as! AXUIElement }), !isSecureField(fEl),
+           let sel = selectedRange(fEl), sel.length > 0 {
+            let text = truncate(stringAttr(fEl, kAXSelectedTextAttribute) ?? "", 40)
+            let style = selectionStyle(fEl)
+            output += "\n(selected right now: \"\(text)\"\(style.map { " — style: \($0)" } ?? ""))"
+        }
+        return AXResult(ok: true, output: output, errorKind: nil, health: nil)
     }
 
     /// BFS-ish DFS with a depth cap and an interactive-role filter applied DURING traversal
