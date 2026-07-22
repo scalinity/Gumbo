@@ -643,7 +643,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         if (action === 'stop') {
           try {
             const done = await manager.stopTeaching();
-            return `Recording stopped (${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}"). Do NOT speak yet and do NOT pre-narrate ("distilling…", "I'll let you know when it's done") — the one-line "Learned …" summary will arrive on its own in a moment; deliver ONLY that, briefly, and nothing before it.`;
+            return `Recording stopped (${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}"). The save is still compiling; a separate directive will arrive in a moment, and THAT turn — not this one — is where the confirmation gets spoken. For THIS turn say at most a tiny acknowledgment like "Got it." — NEVER say "Learned", "saved", "ready", or the procedure name now (the user would hear the confirmation twice), and never pre-narrate ("distilling…", "I'll let you know").`;
           } catch {
             // Already stopped — the user likely finished by clicking the teaching orb and THEN also
             // said "done". The procedure was already captured; never tell him nothing was stored.
