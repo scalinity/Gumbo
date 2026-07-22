@@ -18,6 +18,19 @@ final class KillSwitch {
     /// Fired once per arm, on the main thread, with the abort reason for the daemon.
     var onFire: ((String) -> Void)?
 
+    /// M8: the SAME tap, two meanings for the user's input. `.abort` (tasks) = untagged
+    /// input kills the run; `.record` (teaching) = untagged input IS the demonstration,
+    /// forwarded to the recorder and never an abort. Main-thread writes (MacBridge),
+    /// tap-thread reads — same tearing story as handoffActive.
+    enum Mode { case abort, record }
+    var mode: Mode = .abort
+
+    /// Record-mode sink: a cheap scalar snapshot per untagged event. NO AX work may
+    /// happen in this callback path — the tap callback lagging triggers
+    /// tapDisabledByTimeout and events during the disabled window are silently lost;
+    /// hit-testing runs on the recorder's own queue.
+    var onRecordEvent: ((RecordedHID) -> Void)?
+
     /// M7 "the user's input is expected" (handoff + any pending notch confirm) — set on the
     /// main thread (MacBridge routes mac_handoff there), read on the tap's thread. A Bool
     /// read can't tear on arm64; the worst race is one event judged under the previous
@@ -73,6 +86,14 @@ final class KillSwitch {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        // M8: arming gets the same grace as a handoff end — a fresh arm is always
+        // adjacent to some interaction of the user's (an unattended routine RE-arming the
+        // instant he clicks Approve on its parked confirm is the sharp case: his trailing
+        // mouse drift must not abort the resuming task). Steady-state stays hair-trigger.
+        // Accepted residual (review 🔵, documented-and-kept): an ATTENDED fresh arm gets
+        // the same 1.5 s window — the shell can't distinguish the cases (mac_task is one
+        // message), and no synthetic act can land inside one model turn anyway.
+        handoffEndedAt = CFAbsoluteTimeGetCurrent()
         return true
     }
 
@@ -97,8 +118,18 @@ final class KillSwitch {
         // Gumbo's own synthetic events (tagged) pass; untagged input is the user.
         if SyntheticInput.isSynthetic(event) { return }
         // M7: pure-modifier presses never abort — ⌃⌥ is the PTT chord (voice steering
-        // rides it), and modifiers alone cannot drive the machine.
+        // rides it), and modifiers alone cannot drive the machine. Record mode keeps the
+        // exemption: keyDown events carry chord flags, so ⌘S is captured without it, and
+        // the user can hold PTT mid-demo to say "done" without polluting the recording.
         if type == .flagsChanged { return }
+        // M8 record mode: the user's input is the demonstration — forward, never abort.
+        if mode == .record {
+            switch type {
+            case .keyUp, .mouseMoved: break // recorder noise (keyDown/drag/scroll carry the signal)
+            default: onRecordEvent?(RecordedHID(type: type, event: event))
+            }
+            return
+        }
         // M7 handoff/confirm: the user is doing his step — his input is the point, not an abort.
         if handoffActive { return }
         // …and the moments right after: trailing motion from answering the prompt.

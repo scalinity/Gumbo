@@ -20,6 +20,9 @@ export interface GrokSource {
 export interface GrokLookup {
   answer: string;
   sources: GrokSource[];
+  /** Grok's own server-side sub-searches ("x_keyword_search: from:OpenAI …") — transcript
+   *  material for background consumers; the spoken hot path ignores it. */
+  trace?: string[];
 }
 
 interface ResponsesAnnotation {
@@ -37,6 +40,10 @@ interface ResponsesOutputItem {
   type?: string;
   role?: string;
   content?: ResponsesContentPart[];
+  /** custom_tool_call items (measured live 2026-07-22): Grok's own server-side searches,
+   *  e.g. name "x_keyword_search" with input '{"query":"from:OpenAI since:…"}'. */
+  name?: string;
+  input?: string;
 }
 
 // Usage shape verified LIVE 2026-07-21 (one smoked /v1/responses call): input_tokens is the
@@ -196,8 +203,24 @@ export async function grokLiveSearch(
     );
     if (!answer) throw new SearchError('grok', 'empty_results', 'no answer content for query');
     const sources = parseCitations(parts);
+    // Grok's OWN sub-searches ride output[] as custom_tool_call items (measured live —
+    // the docs don't describe them). Surfaced so a background task's transcript can show
+    // what the Grok channel actually searched, not just its synthesized answer. Only the
+    // X-side searches carry query text; web-side web_search_call items are opaque (xAI
+    // does not disclose their queries) and are deliberately left out — a "searched
+    // something, can't say what" line is noise, not transcript.
+    const trace: string[] = [];
+    for (const o of raw.output ?? []) {
+      if (o.type !== 'custom_tool_call') continue;
+      let detail = o.input ?? '';
+      try {
+        const parsed = JSON.parse(o.input ?? '{}') as { query?: unknown };
+        if (typeof parsed.query === 'string' && parsed.query) detail = parsed.query;
+      } catch { /* unparseable input renders raw */ }
+      trace.push(`${o.name ?? 'search'}: ${detail}`.slice(0, 200));
+    }
     auditSearchCall({ provider: 'grok', endpoint: '/responses', query, resultCount: sources.length, ok: true });
-    return { answer, sources };
+    return { answer, sources, trace };
   } catch (err) {
     auditSearchCall({
       provider: 'grok',

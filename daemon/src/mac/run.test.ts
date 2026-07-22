@@ -36,18 +36,56 @@ function fakeBridge() {
 test('an auto (read-only) bash command runs daemon-side and audits gate=auto', async () => {
   const before = auditLines().length;
   let ranScript = '';
-  const out = await executeMacDo('open -a "Notes"', 'bash', {
+  // A genuine read-only bash command (NOT an app-open — those now route to the shell
+  // resolver, see the routing test below).
+  const out = await executeMacDo('defaults read -g AppleInterfaceStyle', 'bash', {
     macBridge: fakeBridge() as never,
     confirm: async () => false, // must NOT be consulted for an auto command
-    runBash: async (script) => { ranScript = script; return { ok: true, output: 'opened' }; },
+    runBash: async (script) => { ranScript = script; return { ok: true, output: 'Dark' }; },
   });
-  assert.equal(ranScript, 'open -a "Notes"', 'bash ran daemon-side');
-  assert.match(out, /opened/);
+  assert.equal(ranScript, 'defaults read -g AppleInterfaceStyle', 'bash ran daemon-side');
+  assert.match(out, /Dark/);
   assert.equal(auditLines().length, before + 1, 'exactly one audit line');
   const entry = lastAudit();
   assert.equal(entry.gate, 'auto');
   assert.equal(entry.ok, true);
   assert.equal(entry.tier, 'hot');
+});
+
+test('opening/focusing an app routes to the shell resolver (fuzzy + launch), not raw exec', async () => {
+  // osascript `tell application "X" to activate` → the shell activate action.
+  const bridge = fakeBridge();
+  let bashRan = false;
+  const out = await executeMacDo('tell application "ChatGPT" to activate', 'osascript', {
+    macBridge: bridge as never,
+    confirm: async () => false,
+    runBash: async () => { bashRan = true; return { ok: true, output: '' }; },
+  });
+  const activate = bridge.calls.find((c) => (c as { kind?: string }).kind === 'activate');
+  assert.ok(activate, 'a bare app-activate routes to the fuzzy resolver');
+  assert.equal((activate as { app?: string }).app, 'ChatGPT', 'the app name (approximate) goes to the resolver');
+  assert.match(out, /shell ran it/);
+
+  // bash `open -a "X"` → same routing, NOT daemon-side bash.
+  const bridge2 = fakeBridge();
+  await executeMacDo('open -a "ChatGPT"', 'bash', {
+    macBridge: bridge2 as never,
+    confirm: async () => false,
+    runBash: async () => { bashRan = true; return { ok: true, output: '' }; },
+  });
+  assert.ok(bridge2.calls.some((c) => (c as { kind?: string; app?: string }).kind === 'activate' && (c as { app?: string }).app === 'ChatGPT'));
+  assert.equal(bashRan, false, 'a bare app-open never falls to daemon-side bash');
+
+  // `open -a "X" <url>` is NOT a bare app-open (it opens a doc) — runs as bash, unchanged.
+  const bridge3 = fakeBridge();
+  let ran = '';
+  await executeMacDo('open -a "Safari" https://example.com', 'bash', {
+    macBridge: bridge3 as never,
+    confirm: async () => false,
+    runBash: async (s) => { ran = s; return { ok: true, output: 'ok' }; },
+  });
+  assert.equal(ran, 'open -a "Safari" https://example.com', 'open -a WITH a url is not a pure app-open');
+  assert.equal(bridge3.calls.length, 0, 'not routed to the shell');
 });
 
 test('a risky command DECLINED at the notch never executes but is still audited', async () => {
@@ -93,7 +131,7 @@ test('osascript / shortcuts route to the shell, not daemon bash', async () => {
 });
 
 test('a failed execution surfaces the typed error and audits ok=false', async () => {
-  const out = await executeMacDo('open -a "Nope"', 'bash', {
+  const out = await executeMacDo('cat /no/such/file', 'bash', {
     macBridge: fakeBridge() as never,
     confirm: async () => false,
     runBash: async () => ({ ok: false, output: 'not found', errorKind: 'script_error' }),

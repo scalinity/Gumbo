@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // LSUIElement apps show no menu bar, but ⌘Q still resolves through mainMenu key
     // equivalents — without this, quitting from the dashboard window is impossible.
+    // The Edit menu is equally load-bearing: without it, ⌘V/⌘C/⌘X/⌘A have no
+    // key-equivalent route in ANY window — paste was dead in the dashboard webview.
+    // The selectors dispatch down the responder chain, so the WKWebView (and any
+    // native field) receives them.
     private func setupMainMenu() {
         let mainMenu = NSMenu()
         let appItem = NSMenuItem()
@@ -32,6 +36,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(NSMenuItem(title: "Quit Gumbo", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        editMenu.addItem(NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z"))
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
         NSApp.mainMenu = mainMenu
     }
 
@@ -132,6 +147,10 @@ final class GumboController {
         notch.installClickCatcher() // bare hardware notch opens the dashboard too
         // Bubble clicks expand in place (mini panel); the dashboard is its corner link.
         bubbles.onOpenDashboard = { [weak self] taskId in self?.showDashboard(taskId: taskId) }
+        // M8: clicking the TEACHING task's orb ends the demonstration instead of expanding it —
+        // the user needn't say "done". The daemon tells us which orb is the teaching one (mac_teach).
+        bubbles.onFinishTeaching = { [weak self] _ in self?.ws.sendJSON(["type": "teach_finish"]) }
+        mac.onTeachingTaskChanged = { [weak self] taskId in self?.bubbles.teachingTaskId = taskId }
         // M5.5: image thumbnails stack directly beneath the task orbs; clicking one opens
         // the viewer/editor, whose context + edit requests ride the WS back to the daemon.
         bubbles.onStackBottomChange = { [weak self] y in self?.imageBubbles.setStackBottom(y) }
@@ -163,12 +182,18 @@ final class GumboController {
         }
         // M6: mac_action results + kill-switch aborts ride back over the same socket.
         mac.onReply = { [weak self] json in self?.ws.sendJSON(json) }
+        // M8: the watch-me recorder pins a persistent "Watching…" badge on the notch,
+        // and a dropped daemon socket stops an active recording loudly.
+        mac.onRecordingChanged = { [weak self] active in self?.notch.setRecording(active) }
+        ws.onDisconnect = { [weak self] in self?.mac.handleSocketDropped() }
         ws.connect()
     }
 
     func showDashboard(taskId: String? = nil) {
+        // No NSApp.activate here either — dashboard.show() raises the window through the
+        // orderFront path without seizing frontmost (see DashboardWindow.show). Asking to
+        // activate an accessory app is what made the menu-bar touch bounce focus to Terminal.
         dashboard.show(taskId: taskId)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: wiring

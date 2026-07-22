@@ -37,17 +37,22 @@ enum SyntheticInput {
     /// the only rung that moves the real cursor — used for drags and stubborn widgets).
     /// clicks: 2 = a real double-click (each pair stamped with its click state — two
     /// independent single clicks do NOT register as a double).
-    static func click(at point: CGPoint, pid: pid_t?, button: CGMouseButton = .left, clicks: Int = 1) {
+    /// flags: modifier keys held for the click (.maskShift = a shift+click, which extends
+    /// the app's REAL text selection from the real caret — the drag-equivalent).
+    static func click(at point: CGPoint, pid: pid_t?, button: CGMouseButton = .left, clicks: Int = 1, flags: CGEventFlags = []) {
         let (downType, upType): (CGEventType, CGEventType) = button == .right
             ? (.rightMouseDown, .rightMouseUp)
             : (.leftMouseDown, .leftMouseUp)
         let move = tagged(CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button))
+        move?.flags = flags
         post(move, pid: pid)
         for state in 1...max(1, clicks) {
             let down = tagged(CGEvent(mouseEventSource: source, mouseType: downType, mouseCursorPosition: point, mouseButton: button))
             let up = tagged(CGEvent(mouseEventSource: source, mouseType: upType, mouseCursorPosition: point, mouseButton: button))
             down?.setIntegerValueField(.mouseEventClickState, value: Int64(state))
             up?.setIntegerValueField(.mouseEventClickState, value: Int64(state))
+            down?.flags = flags
+            up?.flags = flags
             post(down, pid: pid)
             post(up, pid: pid)
         }
@@ -55,9 +60,10 @@ enum SyntheticInput {
 
     // MARK: keyboard
 
-    /// Type a string into the focused element via per-character Unicode key events —
-    /// the fallback for Electron/web fields, whose JS listeners ignore AXValue writes but
-    /// fire on real key events.
+    /// Type a string into the focused element via per-character Unicode key events — the path
+    /// for NATIVE fields (AXExecutor.performType), because real per-character keys are what fire
+    /// an app's interactive auto-formatting (a typed "- " → a Notes bullet list) that a bulk
+    /// paste bypasses. Web/Electron fields use paste instead (their renderer drops these keys).
     static func type(_ text: String, pid: pid_t?) {
         for scalar in text.unicodeScalars {
             let s = String(scalar)
@@ -66,6 +72,28 @@ enum SyntheticInput {
                 let utf16 = Array(s.utf16)
                 event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
                 post(event, pid: pid)
+            }
+        }
+    }
+
+    /// Enter text by writing it to the pasteboard and posting ⌘V, then restoring the prior
+    /// clipboard. Far more reliable than per-character key events for web/Electron fields:
+    /// their renderer subprocess routinely drops synthetic unicode key events posted to the
+    /// app process, but a normal paste goes through the app's Edit▸Paste path to the focused
+    /// field — and one ⌘V can't spray ~50 stray keys into the app's shortcut layer when the
+    /// field isn't ready to receive them (the cause of the vanishing-window artifact).
+    static func paste(_ text: String, pid: pid_t?) {
+        let pb = NSPasteboard.general
+        let prior = pb.string(forType: .string)
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        _ = pressKey("cmd+v", pid: pid)
+        // Restore the user's clipboard after the paste has had time to land (best-effort;
+        // only the string flavor is preserved — enough for a personal tool).
+        if let prior {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                pb.clearContents()
+                pb.setString(prior, forType: .string)
             }
         }
     }
@@ -105,8 +133,9 @@ enum SyntheticInput {
     }
 
     /// US-ANSI virtual keycodes — enough for the shortcuts the demos exercise (⌘N, ⌘L,
-    /// ⌘T, return/tab/escape/arrows). Extend as procedures need more.
-    private static let keyCodes: [String: CGKeyCode] = [
+    /// ⌘T, return/tab/escape/arrows). Extend as procedures need more. Internal (not
+    /// private) since M8: the Recorder inverts this map to label recorded chords.
+    static let keyCodes: [String: CGKeyCode] = [
         "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
         "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19,
         "3": 20, "4": 21, "6": 22, "5": 23, "9": 25, "7": 26, "8": 28, "0": 29, "o": 31,

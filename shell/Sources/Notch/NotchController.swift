@@ -91,12 +91,28 @@ final class NotchController {
         DispatchQueue.main.async { [self] in
             model.state = state
             if state == .idle {
-                scheduleHide()
+                if !model.recording { scheduleHide() } // M8: the recording badge pins the notch
             } else {
                 hideWork?.cancel()
                 hideWork = nil
                 if state == .listening { model.transcript = "" }
                 show()
+            }
+        }
+    }
+
+    /// M8 teaching indicator: a persistent "Watching…" while the recorder is live. SPEC
+    /// §M8 requires the recording to be visibly indicated the WHOLE time — so it pins the
+    /// notch open and suppresses the idle hide until recording ends.
+    func setRecording(_ active: Bool) {
+        DispatchQueue.main.async { [self] in
+            model.recording = active
+            if active {
+                hideWork?.cancel()
+                hideWork = nil
+                show()
+            } else if model.state == .idle {
+                scheduleHide()
             }
         }
     }
@@ -190,7 +206,7 @@ final class NotchController {
     private func scheduleHide() {
         guard visible, hideWork == nil else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.model.state == .idle, self.model.pulse == nil, let notch = self.notch else { return }
+            guard let self, self.model.state == .idle, self.model.pulse == nil, !self.model.recording, let notch = self.notch else { return }
             self.visible = false
             self.hideWork = nil
             Task { await notch.hide() }
@@ -221,6 +237,7 @@ private final class NotchClickCatcherView: NSView {
 final class NotchModel: ObservableObject {
     @Published var state: NotchState = .idle
     @Published var level: Float = 0
+    @Published var recording = false // M8: watch-me recorder live (persistent badge)
     @Published var transcript = "" // full text (newline-flattened)
     @Published var revealedChars = 0 // how much has been *heard* (playback pacing)
     @Published var paced = false // true while speaker audio is draining
@@ -257,7 +274,7 @@ struct NotchContentView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            SimmerBars(state: model.state, level: model.level, pulse: activePulse)
+            SimmerBars(state: model.state, level: model.level, pulse: activePulse, recording: model.recording)
                 .frame(width: 34, height: 22)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
@@ -285,8 +302,12 @@ struct NotchContentView: View {
         case "failed": return "Task failed"
         case "cancelled": return "Task cancelled"
         case "reminder": return "Reminder" // M5: a scheduled reminder just fired
+        case "needs_input": return "Needs you" // M8: a paused (often unattended) task waits on the user
         default: break
         }
+        // M8: while recording, the idle notch says so — a live session display (the user
+        // talking mid-demo) is the more truthful presence and wins.
+        if model.recording && model.state == .idle { return "Watching…" }
         switch model.state {
         case .idle: return "Gumbo"
         case .listening: return "Listening…"
@@ -301,6 +322,7 @@ struct SimmerBars: View {
     let state: NotchState
     let level: Float
     var pulse: String? = nil // completion pulse: overrides color + motion while set
+    var recording: Bool = false // M8: steady red while the watch-me recorder is live
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
@@ -321,8 +343,10 @@ struct SimmerBars: View {
         case "failed": return alarm
         case "cancelled": return faint
         case "reminder": return gold // M5: gold beacon — matches the dashboard's reminder accent
+        case "needs_input": return gold // M8: attention-gold — a paused task waits on the user
         default: break
         }
+        if recording && state == .idle { return alarm } // M8: unmistakably "being recorded"
         switch state {
         case .listening: return bay
         case .speaking, .thinking: return ember
@@ -336,6 +360,11 @@ struct SimmerBars: View {
             // celebratory ripple — quicker than 'thinking', reads as an arrival
             let phase = sin(time * 6.2 + Double(index) * 1.3) * 0.5 + 0.5
             return base + CGFloat(phase) * 10
+        }
+        if recording && state == .idle {
+            // slow, steady breathe — alive but calm, distinct from every session motion
+            let phase = sin(time * 2.2 + Double(index) * 0.9) * 0.5 + 0.5
+            return base + CGFloat(phase) * 4
         }
         switch state {
         case .idle:

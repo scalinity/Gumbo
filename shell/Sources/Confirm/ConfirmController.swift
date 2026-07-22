@@ -32,6 +32,10 @@ final class ConfirmController {
     private var currentTaskId: String?
 
     func present(id: String, taskId: String, taskTitle: String, title: String, detail: String, body: String, timeoutMs: Double, rememberHost: String = "", confirmLabel: String = "Approve", denyLabel: String = "Deny") {
+        // M8: the daemon RE-broadcasts still-pending confirms on every hello (long-window
+        // unattended pauses must survive shell relaunches). A shell that never lost the
+        // panel drops the duplicate — one confirm id, one panel (review 🔵).
+        if currentId == id || queue.contains(where: { $0.id == id }) { return }
         queue.append(Request(id: id, taskId: taskId, taskTitle: taskTitle, title: title, detail: detail, body: body, timeoutMs: timeoutMs, rememberHost: rememberHost, confirmLabel: confirmLabel, denyLabel: denyLabel))
         if !showing { showNext() }
     }

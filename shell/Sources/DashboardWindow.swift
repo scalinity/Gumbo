@@ -27,7 +27,12 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
         // be refused by macOS — the window then orders behind the frontmost app and looks
         // like it never opened. Force the ordering regardless of activation.
         window?.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
+        // Deliberately NO NSApp.activate: on macOS 26 an accessory app can't cooperatively
+        // become frontmost (it's decorative — see QuickTextController), and ASKING leaves
+        // Gumbo half-active so the OS snaps frontmost back to the previous app (Terminal)
+        // the instant the user touches the menu bar — which read as "the app backgrounds
+        // itself." The orderOut/makeKey/orderFront path above raises the window without it;
+        // the app stays a clean background app, like every other surface here.
         if let taskId {
             pendingTaskId = taskId
             selectTask(taskId, attempts: 5)

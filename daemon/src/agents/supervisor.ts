@@ -231,6 +231,9 @@ export interface EscalationRequest {
    *  polish 2026-07-20). Shell defaults: Approve / Deny. */
   confirmLabel?: string;
   denyLabel?: string;
+  /** M8 unattended routines: with no shell connected, PARK the confirm (broadcast on the
+   *  next hello) instead of the instant deny — the long window is the real bound. */
+  waitForShell?: boolean;
 }
 
 // Mirrors the SDK's PermissionResult without importing its types into every caller.

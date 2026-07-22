@@ -343,6 +343,13 @@ body {
 
 .say .text { white-space: pre-wrap; overflow-wrap: break-word; min-width: 0; }
 
+/* streamed chunks: each span mounts once and fades in — the token-by-token arrival effect */
+.say .tok { animation: tokIn 0.32s ease-out both; }
+@keyframes tokIn {
+  from { opacity: 0; filter: blur(3px); }
+  to { opacity: 1; filter: none; }
+}
+
 .cursor {
   display: inline-block;
   width: 7px;
@@ -367,6 +374,8 @@ body {
 .machine .tag { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); padding-top: 2px; }
 .machine .body { white-space: pre-wrap; overflow-wrap: break-word; min-width: 0; }
 .machine[data-kind='result'] .body { color: var(--faint); }
+/* M8: the sub-agent's reasoning summaries — dim narration between the tool calls */
+.machine[data-kind='thought'] .body { color: var(--faint); font-style: italic; }
 .machine[data-kind='finished'][data-status='done'] .body { color: var(--bay); }
 .machine[data-kind='finished'][data-status='failed'] .body,
 .machine[data-kind='error'] .body { color: var(--alarm); }

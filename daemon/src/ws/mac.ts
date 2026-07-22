@@ -5,7 +5,7 @@ import type { MacAction, MacActionResult, MacErrorKind, MacHealth } from './prot
 
 const ERROR_KINDS: ReadonlySet<string> = new Set([
   'element_not_found', 'stale_ref', 'ax_unavailable', 'timeout', 'out_of_scope',
-  'secure_field', 'script_error', 'aborted', 'capture_denied',
+  'secure_field', 'script_error', 'aborted', 'capture_denied', 'element_disabled',
 ] satisfies MacErrorKind[]);
 const HEALTH_STATES: ReadonlySet<string> = new Set(
   ['healthy', 'stale_cache', 'ax_disabled', 'not_granted'] satisfies MacHealth[],
@@ -92,6 +92,10 @@ export class MacBridge {
       result.health = r.health as MacHealth;
     }
     if ((r as { no_change?: unknown }).no_change === true) result.no_change = true;
+    const selectHow = (r as { select_how?: unknown }).select_how;
+    if (selectHow === 'real click' || selectHow === 'keyboard' || selectHow === 'ax-write') {
+      result.select_how = selectHow;
+    }
     return result;
   }
 
@@ -121,12 +125,29 @@ export class MacBridge {
   }
   private handoffActive = false;
 
+  /** M8 teaching state: while active, the shell's tap runs in RECORD mode (the user's
+   *  input is the demonstration). Edge-triggered like setHandoff; teaching and computer
+   *  tasks are mutually exclusive (manager), so one flag suffices. */
+  setTeaching(active: boolean, taskId?: string) {
+    if (this.teachingActive === active) return;
+    this.teachingActive = active;
+    this.teachingTaskId = active ? (taskId ?? null) : null;
+    // Carry the teaching task id so the shell can route a click on THAT task's orb to "finish
+    // teaching" (the user's chosen affordance) instead of opening the dashboard.
+    this.hub.broadcast({ type: 'mac_teach', active, task_id: this.teachingTaskId }, 'shell');
+  }
+  private teachingActive = false;
+  private teachingTaskId: string | null = null;
+
   /** A shell that (re)connects mid-task must arm its kill switch immediately —
    *  broadcast the current state on every hello (shell relaunches are routine).
    *  Handoff state rides along: reconnecting mid-handoff must NOT abort on the user's
-   *  in-progress typing. */
+   *  in-progress typing. M8: teach state is UNCONDITIONAL like mac_task — a shell
+   *  still recording for a restarted (teach-less) daemon must be told to stop, and a
+   *  fresh shell mid-teach must re-arm its recorder. */
   resync() {
     this.hub.broadcast({ type: 'mac_task', active: this.activeTasks > 0 }, 'shell');
     if (this.handoffActive) this.hub.broadcast({ type: 'mac_handoff', active: true }, 'shell');
+    this.hub.broadcast({ type: 'mac_teach', active: this.teachingActive, task_id: this.teachingTaskId }, 'shell');
   }
 }

@@ -326,3 +326,451 @@ test('set_reminder rejects non-local ISO shapes that Date.parse would read as UT
     assert.match(result, /must be a LOCAL date-time/, `must reject "${bad}"`);
   }
 });
+
+// M8: teaching rides ONE new realtime tool (start/stop/cancel are actions, not tools) and
+// the raw teach/record primitives stay off the registry like the AX/browser ones.
+test('M8: teach_procedure is registered; record primitives never leak to the realtime registry', () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  assert.ok(names.includes('teach_procedure'), 'teach_procedure missing from the realtime registry');
+  for (const banned of ['record_start', 'record_stop', 'teach_event']) {
+    assert.ok(!names.includes(banned), `${banned} is wire/subagent machinery, never a realtime tool`);
+  }
+});
+
+test('M8: teach_procedure start requires a name; lifecycle calls route to the manager', async () => {
+  const calls: string[] = [];
+  const manager = {
+    startTeaching: async (name: string) => { calls.push(`start:${name}`); return { id: 't1' }; },
+    stopTeaching: async () => { calls.push('stop'); return { name: 'demo', stepCount: 3 }; },
+    cancelTeaching: () => { calls.push('cancel'); return true; },
+  };
+  const tools = createOrchestratorTools(
+    manager as never,
+    {} as never,
+    {
+      scheduler: {} as never,
+      announce: async () => {},
+      imageContext: { get: () => null } as never,
+      fileContext: { get: () => null } as never,
+      presentFile: (() => true) as never,
+      openImage: (() => true) as never,
+      macBridge: {} as never,
+      confirmMacDo: (async () => false) as never,
+    },
+  );
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+
+  const noName = await teach.invoke({}, JSON.stringify({ action: 'start', name: null }));
+  assert.match(noName, /name is needed/i);
+  assert.deepEqual(calls, [], 'no manager call without a name');
+
+  const started = await teach.invoke({}, JSON.stringify({ action: 'start', name: 'file expenses' }));
+  assert.match(started, /watching the user/i);
+  const stopped = await teach.invoke({}, JSON.stringify({ action: 'stop', name: null }));
+  assert.match(stopped, /3 steps/);
+  const cancelled = await teach.invoke({}, JSON.stringify({ action: 'cancel', name: null }));
+  assert.match(cancelled, /discarded/i);
+  assert.deepEqual(calls, ['start:file expenses', 'stop', 'cancel']);
+});
+
+test('M8: teach_procedure surfaces manager refusals as spoken text (busy Mac, no recording)', async () => {
+  const manager = {
+    startTeaching: async () => { throw new Error('a computer-use task ("Browse") is already driving the Mac; wait for it to finish or cancel it first'); },
+    stopTeaching: async () => { throw new Error('no recording is active'); },
+    cancelTeaching: () => false,
+  };
+  const tools = createOrchestratorTools(
+    manager as never,
+    {} as never,
+    {
+      scheduler: {} as never,
+      announce: async () => {},
+      imageContext: { get: () => null } as never,
+      fileContext: { get: () => null } as never,
+      presentFile: (() => true) as never,
+      openImage: (() => true) as never,
+      macBridge: {} as never,
+      confirmMacDo: (async () => false) as never,
+    },
+  );
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  assert.match(await teach.invoke({}, JSON.stringify({ action: 'start', name: 'x' })), /already driving the Mac/);
+  // stop with nothing recording is REASSURING (the user likely finished via the orb, then said "done")
+  // — never a "nothing was stored" alarm.
+  const stopMsg = await teach.invoke({}, JSON.stringify({ action: 'stop', name: null }));
+  assert.match(stopMsg, /already saved|Nothing is recording/i);
+  assert.doesNotMatch(stopMsg, /nothing was stored/i);
+  assert.match(await teach.invoke({}, JSON.stringify({ action: 'cancel', name: null })), /No recording is active/);
+});
+
+test('M8: save_last_run distills the newest finished computer task (never a teaching session)', async () => {
+  const saved: Array<{ taskId: string; name: string }> = [];
+  const manager = { startTeaching: async () => ({}), stopTeaching: async () => ({ name: '', stepCount: 0 }), cancelTeaching: () => false };
+  const store = {
+    listTasks: () => [
+      { id: 'teachrow', kind: 'computer', status: 'done', title: 'Teaching: file expenses' },
+      { id: 'run9', kind: 'computer', status: 'done', title: 'Check invoices' },
+      { id: 'old', kind: 'computer', status: 'done', title: 'Older run' },
+    ],
+    getLatestEventPayload: () => null, // none of these are replay runs
+  };
+  const tools = createOrchestratorTools(
+    manager as never,
+    store as never,
+    {
+      scheduler: {} as never,
+      announce: async () => {},
+      imageContext: { get: () => null } as never,
+      fileContext: { get: () => null } as never,
+      presentFile: (() => true) as never,
+      openImage: (() => true) as never,
+      macBridge: {} as never,
+      confirmMacDo: (async () => false) as never,
+      procedures: {
+        saveFromTask: async (taskId: string, name: string) => {
+          saved.push({ taskId, name });
+          return { name, version: 1, stepCount: 4 };
+        },
+      } as never,
+    },
+  );
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  const result = await teach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'check invoices' }));
+  assert.match(result, /Saved "check invoices" \(version 1, 4 steps\)/);
+  assert.deepEqual(saved, [{ taskId: 'run9', name: 'check invoices' }], 'teaching rows are skipped; newest real run wins');
+});
+
+test('M8: run_procedure is registered and routes matches/misses correctly', async () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  assert.ok(names.includes('run_procedure'), 'run_procedure missing from the realtime registry');
+
+  const spawned: Array<{ title: string; replay: unknown }> = [];
+  const body = JSON.stringify({ name: 'file expenses', goal: 'file the report', preconditions: [], apps: ['Mail'], steps: [{ lane: 'ax', desc: 'x' }] });
+  const manager = {
+    spawnSubagent: (title: string, _brief: string, _type: string, replay: unknown) => {
+      spawned.push({ title, replay });
+      return { id: 'r1' };
+    },
+  };
+  const store = {
+    getProcedure: (name: string) => (name === 'file expenses' ? { name: 'file expenses', version: 2, title: 'file expenses — file the report', body } : undefined),
+    searchProcedures: () => [],
+    listProcedures: () => [{ name: 'file expenses' }],
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+  });
+  const runProc = tools.find((t) => (t as { name: string }).name === 'run_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  const hit = await runProc.invoke({}, JSON.stringify({ procedure: 'file expenses', notes: 'July', adapt: null }));
+  assert.match(hit, /Running "file expenses" now/);
+  assert.equal(spawned.length, 1);
+  assert.equal((spawned[0].replay as { notes: string }).notes, 'July');
+
+  const miss = await runProc.invoke({}, JSON.stringify({ procedure: 'water the lawn', notes: null, adapt: null }));
+  assert.match(miss, /No saved procedure matches/);
+  assert.match(miss, /"file expenses"/, 'the miss lists what IS saved');
+  assert.equal(spawned.length, 1, 'a miss never spawns');
+});
+
+test('M8: run_procedure `adapt` routes a VARIATION to template-mode, keeps faithful runs deterministic (all edges)', async () => {
+  const spawned: Array<{ title: string; brief: string; type: string; replay: unknown }> = [];
+  const goodBody = JSON.stringify({
+    name: 'packing list', goal: 'draft a packing list in Notes', preconditions: ['Notes is open'], apps: ['Notes'],
+    steps: [{ lane: 'ax', desc: 'Click New Note' }, { lane: 'ax', desc: 'Type the items' }],
+  });
+  const manager = {
+    spawnSubagent: (title: string, brief: string, type: string, replay: unknown) => {
+      spawned.push({ title, brief, type, replay });
+      return { id: 'r9' };
+    },
+  };
+  const store = {
+    getProcedure: (name: string) => {
+      if (name === 'packing list') return { name: 'packing list', version: 1, title: 'packing list — draft', body: goodBody };
+      if (name === 'broken') return { name: 'broken', version: 1, title: 'broken', body: '{ not valid json' };
+      return undefined;
+    },
+    searchProcedures: () => [],
+    listProcedures: () => [{ name: 'packing list' }],
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+  });
+  const runProc = tools.find((t) => (t as { name: string }).name === 'run_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+
+  // (1) adapt present → TEMPLATE mode: NO replay opt, "(adapted)" title, brief carries the change + the demonstrated skeleton.
+  const adapted = await runProc.invoke({}, JSON.stringify({ procedure: 'packing list', notes: null, adapt: 'but for a picnic instead' }));
+  assert.match(adapted, /Adapting "packing list"/);
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].title, 'packing list (adapted)');
+  assert.equal(spawned[0].replay, undefined, 'a template run must NOT carry the deterministic-replay opt');
+  assert.match(spawned[0].brief, /for a picnic/, 'the adaptation drives WHAT');
+  assert.match(spawned[0].brief, /Click New Note/, 'the demonstrated skeleton guides HOW');
+
+  // (2) adapt whitespace-only → treated as a FAITHFUL run (deterministic replay opt present).
+  const faithful = await runProc.invoke({}, JSON.stringify({ procedure: 'packing list', notes: null, adapt: '   ' }));
+  assert.match(faithful, /Running "packing list" now/);
+  assert.equal(spawned.length, 2);
+  assert.ok((spawned[1].replay as { procedure?: unknown })?.procedure, 'a faithful run carries the replay opt');
+
+  // (3) adapt + notes together → the template brief folds in both.
+  await runProc.invoke({}, JSON.stringify({ procedure: 'packing list', notes: 'label it Trip', adapt: 'for a picnic' }));
+  assert.match(spawned[2].brief, /for a picnic/);
+  assert.match(spawned[2].brief, /label it Trip/);
+
+  // (4) corrupt body + adapt → refusal, NO spawn (validation is before the adapt branch).
+  const corrupt = await runProc.invoke({}, JSON.stringify({ procedure: 'broken', notes: null, adapt: 'for a picnic' }));
+  assert.match(corrupt, /corrupt or from an incompatible version/);
+  assert.equal(spawned.length, 3, 'a corrupt procedure never spawns, adapted or not');
+
+  // (5) not found + adapt → refusal, NO spawn.
+  const miss = await runProc.invoke({}, JSON.stringify({ procedure: 'nope', notes: null, adapt: 'for a picnic' }));
+  assert.match(miss, /No saved procedure matches/);
+  assert.equal(spawned.length, 3);
+});
+
+test('M8: schedule_routine is registered; known procedures schedule, unknown ones refuse with the saved list', async () => {
+  const names = buildTools().map((t) => (t as { name: string }).name);
+  assert.ok(names.includes('schedule_routine'), 'schedule_routine missing from the realtime registry');
+
+  const scheduled: Array<{ name: string; fireAt: number; rec: unknown }> = [];
+  const scheduler = {
+    scheduleRoutine: (name: string, fireAt: number, rec: unknown) => {
+      scheduled.push({ name, fireAt, rec });
+      return { id: 's1', fire_at: fireAt };
+    },
+  };
+  const store = {
+    getProcedure: (name: string) => (name === 'file expenses' ? { name: 'file expenses', version: 1, body: '{}' } : undefined),
+    searchProcedures: () => [],
+    listProcedures: () => [{ name: 'file expenses' }],
+  };
+  const tools = createOrchestratorTools({} as never, store as never, {
+    scheduler: scheduler as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+  });
+  const sched = tools.find((t) => (t as { name: string }).name === 'schedule_routine') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+
+  // Recurring: "the first Monday at 9" — fire_at computed, not passed.
+  const rec = await sched.invoke({}, JSON.stringify({
+    procedure: 'file expenses', fire_at: null,
+    recurrence: { freq: 'monthly', hour: 9, minute: 0, weekday: 1, nth: 1, day: null },
+  }));
+  assert.match(rec, /Scheduled "file expenses" to run the first Monday of each month at 9:00/);
+  assert.equal(scheduled.length, 1);
+  assert.ok(scheduled[0].fireAt > Date.now());
+
+  // Unknown procedure: refuse and list what exists — never schedule a guess.
+  const miss = await sched.invoke({}, JSON.stringify({ procedure: 'mystery', fire_at: null, recurrence: { freq: 'daily', hour: 9, minute: 0, weekday: null, nth: null, day: null } }));
+  assert.match(miss, /No saved procedure matches/);
+  assert.equal(scheduled.length, 1);
+
+  // Incomplete recurrence: told to fix, nothing scheduled.
+  const bad = await sched.invoke({}, JSON.stringify({ procedure: 'file expenses', fire_at: null, recurrence: { freq: 'weekly', hour: 9, minute: 0, weekday: null, nth: null, day: null } }));
+  assert.match(bad, /incomplete/);
+  assert.equal(scheduled.length, 1);
+});
+
+test('M8 fix: run_procedure refuses a corrupt/schema-drifted body instead of feeding the engine raw JSON', async () => {
+  const manager = { spawnSubagent: () => { throw new Error('must not spawn'); } };
+  const store = {
+    getProcedure: () => ({ name: 'broken', version: 1, title: 'broken — x', body: '{"goal":"x","steps":[{"lane":"teleport","desc":"zap"}]}' }),
+    searchProcedures: () => [],
+    listProcedures: () => [],
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+  });
+  const runProc = tools.find((t) => (t as { name: string }).name === 'run_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  const out = await runProc.invoke({}, JSON.stringify({ procedure: 'broken', notes: null, adapt: null }));
+  assert.match(out, /corrupt or from an incompatible version/);
+});
+
+test('M8 fix: save_last_run skips replay/routine runs — "save that" means the ORIGINAL run', async () => {
+  const saved: string[] = [];
+  const manager = { startTeaching: async () => ({}), stopTeaching: async () => ({ name: '', stepCount: 0 }), cancelTeaching: () => false };
+  const store = {
+    listTasks: () => [
+      { id: 'replay1', kind: 'computer', status: 'done', title: 'Check invoices' }, // newest — but a replay
+      { id: 'orig1', kind: 'computer', status: 'done', title: 'Check invoices' },
+    ],
+    getLatestEventPayload: (taskId: string, type: string) =>
+      taskId === 'replay1' && type === 'procedure.replay' ? { outcome: 'completed' } : null,
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+    procedures: {
+      saveFromTask: async (taskId: string, name: string) => { saved.push(taskId); return { name, version: 1, stepCount: 2 }; },
+    } as never,
+  });
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  await teach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'check invoices' }));
+  assert.deepEqual(saved, ['orig1'], 'the replay run must be skipped in favor of the original');
+});
+
+test('M8 fix: save_last_run refuses a STALE task without confirm_old, and names the source when it saves', async () => {
+  // "Save that" after a spoken lookup found a 6-hour-old Notes task and bottled it under
+  // a fresh name (live failure 2026-07-22) — a stale match needs the user's explicit word.
+  const saved: string[] = [];
+  const manager = { startTeaching: async () => ({}), stopTeaching: async () => ({ name: '', stepCount: 0 }), cancelTeaching: () => false };
+  const mkStore = (updatedAt: number) => ({
+    listTasks: () => [{ id: 't1', kind: 'computer', status: 'done', title: 'Update packing list procedure', updated_at: updatedAt }],
+    getLatestEventPayload: () => null,
+  });
+  const mkTeach = (store: unknown) => {
+    const tools = createOrchestratorTools(manager as never, store as never, {
+      scheduler: {} as never,
+      announce: async () => {},
+      imageContext: { get: () => null } as never,
+      fileContext: { get: () => null } as never,
+      presentFile: (() => true) as never,
+      openImage: (() => true) as never,
+      macBridge: {} as never,
+      confirmMacDo: (async () => false) as never,
+      procedures: {
+        saveFromTask: async (taskId: string, name: string) => { saved.push(taskId); return { name, version: 1, stepCount: 14 }; },
+      } as never,
+    });
+    return tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+      invoke: (ctx: unknown, args: string) => Promise<string>;
+    };
+  };
+
+  const staleTeach = mkTeach(mkStore(Date.now() - 6 * 60 * 60_000));
+  const refusal = await staleTeach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'AI headline' }));
+  assert.match(refusal, /NOT saved/, 'a stale task is never saved on a guess');
+  assert.match(refusal, /Update packing list procedure/, 'the refusal names the stale task so the user can decide');
+  assert.match(refusal, /hours ago/, 'the refusal states the age');
+  assert.equal(saved.length, 0, 'saveFromTask must not run');
+
+  const confirmed = await staleTeach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'AI headline', confirm_old: true }));
+  assert.match(confirmed, /Saved "AI headline"/, 'confirm_old saves the stale task the user confirmed');
+  assert.deepEqual(saved, ['t1']);
+
+  const freshTeach = mkTeach(mkStore(Date.now() - 30_000));
+  const fresh = await freshTeach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'AI headline' }));
+  assert.match(fresh, /distilled from the task "Update packing list procedure"/, 'the confirmation names its source so a mismatch is audible');
+});
+
+test('M8: teach_procedure list + delete manage saved procedures', async () => {
+  const deleted: string[] = [];
+  const store = {
+    listProcedures: () => [{ name: 'packing list' }, { name: 'file expenses' }],
+    getProcedure: (n: string) => (n === 'packing list' ? { name: 'packing list', version: 2, body: '{}' } : undefined),
+    searchProcedures: (q: string) => (/pack/i.test(q) ? [{ name: 'packing list', version: 2, body: '{}' }] : []),
+    deleteProcedure: (n: string) => { deleted.push(n); return 2; },
+    addEvent: () => {},
+  };
+  const manager = { cancelTeaching: () => false };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never, announce: async () => {},
+    imageContext: { get: () => null } as never, fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never, openImage: (() => true) as never,
+    macBridge: {} as never, confirmMacDo: (async () => false) as never,
+  });
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+
+  const list = await teach.invoke({}, JSON.stringify({ action: 'list', name: null }));
+  assert.match(list, /"packing list".*"file expenses"/);
+
+  // delete resolves an approximate name to the real one, then removes all versions.
+  const del = await teach.invoke({}, JSON.stringify({ action: 'delete', name: 'the packing list' }));
+  assert.match(del, /Deleted "packing list" \(all 2 versions\)/);
+  assert.deepEqual(deleted, ['packing list']);
+
+  // delete without a name refuses; a no-match lists what exists and deletes nothing.
+  assert.match(await teach.invoke({}, JSON.stringify({ action: 'delete', name: null })), /Which procedure/);
+  assert.match(await teach.invoke({}, JSON.stringify({ action: 'delete', name: 'water the lawn' })), /No saved procedure matches/);
+  assert.deepEqual(deleted, ['packing list'], 'a no-match never deletes');
+});
+
+test('M8 fix: save_last_run asks when SEVERAL runs just finished, then saves the task the user picked', async () => {
+  // A create-then-fix pair: newest-wins would save the fix-up, whose steps assume the
+  // broken state (live failure 2026-07-22) — ambiguity is the user's to resolve, once.
+  const saved: string[] = [];
+  const manager = { startTeaching: async () => ({}), stopTeaching: async () => ({ name: '', stepCount: 0 }), cancelTeaching: () => false };
+  const store = {
+    listTasks: () => [
+      { id: 'fixup', kind: 'computer', status: 'done', title: 'Fix Notes formatting', updated_at: Date.now() - 60_000 },
+      { id: 'orig', kind: 'computer', status: 'done', title: 'Create Groceries note', updated_at: Date.now() - 5 * 60_000 },
+    ],
+    getLatestEventPayload: () => null,
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+    procedures: {
+      saveFromTask: async (taskId: string, name: string) => { saved.push(taskId); return { name, version: 1, stepCount: 9 }; },
+    } as never,
+  });
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  const ask = await teach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'groceries note' }));
+  assert.match(ask, /NOT saved/, 'nothing saved on an ambiguous "that"');
+  assert.match(ask, /Fix Notes formatting/);
+  assert.match(ask, /Create Groceries note/);
+  assert.equal(saved.length, 0);
+  const chosen = await teach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'groceries note', task_id: 'orig' }));
+  assert.match(chosen, /Saved "groceries note"/);
+  assert.match(chosen, /Create Groceries note/, 'the confirmation names the chosen source');
+  assert.deepEqual(saved, ['orig'], 'the task the user picked is the one distilled — not the newest');
+});

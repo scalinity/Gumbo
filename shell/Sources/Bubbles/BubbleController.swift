@@ -13,6 +13,11 @@ final class BubbleController {
     /// M5.5: reports the y just below the orb stack after every layout, so the image
     /// thumbnails (ImageBubbleController) can stack directly beneath the task orbs.
     var onStackBottomChange: ((CGFloat) -> Void)?
+    /// M8: while set, a click on THIS task's orb ends the demonstration instead of expanding the
+    /// panel — the teaching orb can't be usefully "opened", so the user repurposes its click to
+    /// "done". Set by App from the daemon's mac_teach; cleared when teaching stops.
+    var teachingTaskId: String?
+    var onFinishTeaching: ((String) -> Void)?
 
     static let collapsedSize = NSSize(width: 84, height: 84)
     static let expandedSize = NSSize(width: 332, height: 408)
@@ -185,7 +190,19 @@ final class BubbleController {
         panel.contentView = FirstMouseHostingView(
             rootView: BubbleRootView(
                 model: model,
-                onToggle: { [weak self] in self?.toggle(taskId) },
+                onToggle: { [weak self] in
+                    guard let self else { return }
+                    // The teaching orb's click ENDS teaching (it can't be usefully opened); every
+                    // other orb toggles its observability panel. Flip the orb to warm gold NOW so
+                    // the click has immediate feedback while the daemon distills the demonstration.
+                    if taskId == self.teachingTaskId {
+                        self.bubbles[taskId]?.model.finishing = true
+                        self.teachingTaskId = nil // a second click just toggles the panel, never re-fires
+                        self.onFinishTeaching?(taskId)
+                    } else {
+                        self.toggle(taskId)
+                    }
+                },
                 onDashboard: { [weak self] in self?.onOpenDashboard?(taskId) }))
         return panel
     }
@@ -254,6 +271,11 @@ final class BubbleModel: ObservableObject {
     @Published var status: String
 
     var state: OrbState { OrbState(wire: status) }
+    /// M8: set the instant the user clicks the teaching orb to finish — renders the orb warm gold
+    /// ("registered, processing") until the task settles, so the click has immediate feedback and
+    /// he doesn't click again. Only overrides while still alive; a settled orb shows its real color.
+    @Published var finishing = false
+    var displayState: OrbState { finishing && state.isAlive ? .needsInput : state }
     @Published var expanded = false
     @Published var events: [BubbleEvent] = []
     @Published var settledAt: Date? // when the task left 'running' — drives the cooling ripple
@@ -272,7 +294,7 @@ final class BubbleModel: ObservableObject {
 }
 
 struct BubbleEvent: Identifiable {
-    enum Kind { case call, result, message, prompt, lifecycle }
+    enum Kind { case call, result, message, prompt, thought, lifecycle }
 
     let seq: Int
     let kind: Kind
@@ -326,6 +348,9 @@ struct BubbleEvent: Identifiable {
         case "subagent.message", "claude.message":
             kind = .message
             body = payload["text"] as? String ?? ""
+        case "subagent.thought": // the model's reasoning summary — narration between tool calls
+            kind = .thought
+            body = payload["text"] as? String ?? ""
         case "claude.prompt": // the instruction the session is responding to (incl. the opener)
             kind = .prompt
             body = payload["text"] as? String ?? ""
@@ -349,9 +374,10 @@ struct BubbleEvent: Identifiable {
             kind = .lifecycle
             let status = payload["status"] as? String ?? ""
             body = status == "needs_input" ? "Paused — needs the user" : "Running again"
-        case "task.created":
-            kind = .lifecycle
-            body = "Task started"
+        case "task.created": // the brief IS the kickoff instruction — render it, not a bare marker
+            let brief = payload["brief"] as? String ?? ""
+            kind = brief.isEmpty ? .lifecycle : .prompt
+            body = brief.isEmpty ? "Task started" : brief
         case "task.finished":
             kind = .lifecycle
             let status = payload["status"] as? String ?? "done"
@@ -450,7 +476,7 @@ struct OrbView: View {
     @ObservedObject var model: BubbleModel
     var diameter: CGFloat
 
-    private var palette: OrbPalette { OrbPalette.palette(for: model.state) }
+    private var palette: OrbPalette { OrbPalette.palette(for: model.displayState) }
 
     /// Flow speed + luminosity: running burns, done drifts calmly (never frozen —
     /// frozen reads as dead), failed smolders, cancelled is nearly out.
@@ -668,7 +694,8 @@ private struct BubbleEventRow: View {
                 .padding(.top, 1)
             Text(event.text)
                 .font(.system(size: 10.5))
-                .foregroundStyle(.white.opacity(event.kind == .message || event.kind == .prompt ? 0.82 : 0.6))
+                .italic(event.kind == .thought)
+                .foregroundStyle(.white.opacity(event.kind == .message || event.kind == .prompt ? 0.82 : event.kind == .thought ? 0.5 : 0.6))
                 .lineLimit(event.kind == .message || event.kind == .prompt ? 14 : 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(event.time)
@@ -684,6 +711,7 @@ private struct BubbleEventRow: View {
         case .result: return "◂"
         case .message: return "●"
         case .prompt: return "»" // the user's/Gumbo's instruction INTO the session
+        case .thought: return "…"
         case .lifecycle: return "◆"
         }
     }
@@ -694,6 +722,7 @@ private struct BubbleEventRow: View {
         case .result: return faint
         case .message: return bay
         case .prompt: return Tokens.gold
+        case .thought: return .white.opacity(0.35)
         case .lifecycle: return .white.opacity(0.5)
         }
     }

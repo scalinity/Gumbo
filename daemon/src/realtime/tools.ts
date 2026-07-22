@@ -15,6 +15,8 @@ import type { FileEditContext } from '../files/context.ts';
 import type { TaskManager } from '../tasks/manager.ts';
 import type { Store } from '../events/store.ts';
 import type { Scheduler } from '../schedule/scheduler.ts';
+import { computeNextFire, describeRecurrence, parseRecurrence } from '../schedule/recurrence.ts';
+import { validateProcedure, templateBrief } from '../agents/procedures.ts';
 import type { MacBridge } from '../ws/mac.ts';
 import { executeMacDo } from '../mac/run.ts';
 
@@ -53,6 +55,9 @@ export interface OrchestratorToolDeps {
   // M6: the hands (shell executor) + the notch confirm for a risky one-shot command.
   macBridge: MacBridge;
   confirmMacDo: (detail: string) => Promise<boolean>;
+  /** M8: procedure memory — "save that as a procedure" distills a finished computer
+   *  task's trace. Optional so bare test harnesses keep working. */
+  procedures?: { saveFromTask(taskId: string, name: string): Promise<{ name: string; version: number; stepCount: number }> };
 }
 
 export function createOrchestratorTools(manager: TaskManager, store: Store, deps: OrchestratorToolDeps) {
@@ -71,14 +76,17 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       brief: z.string().describe('Detailed, self-contained instructions for the sub-agent'),
       task_type: z
         .enum(['research', 'mac'])
-        .default('research')
-        .describe('"mac" ONLY for clicking/typing/navigating INSIDE an app — never for merely opening an app or loading a URL (that is mac_do); "research" for everything web/writing'),
+        .describe('REQUIRED — choose explicitly, never omit: "mac" for anything that operates THIS Mac\'s apps or screen (clicking, typing, creating/editing content inside an app; a research-lane agent has NO hands and cannot touch apps — a Notes task routed "research" fails instantly); "research" for web research, analysis, and writing. Merely opening an app or URL is mac_do, not a task.'),
+      depth: z
+        .enum(['standard', 'deep'])
+        .default('standard')
+        .describe('"deep" when the user asks for DEEP/comprehensive research ("deep research", "deep dive", "go deep", "be thorough/comprehensive") — a long run (5–15 min) that reads dozens-to-hundreds of sources and compiles a fully sourced report. "standard" for normal background research. Never "deep" for mac tasks.'),
     }),
-    execute: async ({ title, brief, task_type }) => {
+    execute: async ({ title, brief, task_type, depth }) => {
       // The voice model tends to echo tool results verbatim — keep the id clearly
       // marked as internal so it isn't read aloud.
       try {
-        const task = manager.spawnSubagent(title, brief, task_type);
+        const task = manager.spawnSubagent(title, brief, task_type, undefined, depth);
         return `Started "${title}" in the background (internal task_id ${task.id} — never say it aloud). You will be told when it finishes — no need to wait.`;
       } catch (err) {
         return `Could not start that: ${err instanceof Error ? err.message : String(err)}`;
@@ -98,7 +106,11 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
       'you MUST use osascript with `activate` (the app fronts itself). Example — "open Chrome and go to ' +
       'claude.ai" is one osascript that foregrounds AND navigates: `tell application "Google Chrome" to ' +
       'activate` then `tell application "Google Chrome" to open location "https://claude.ai"`. Any app: ' +
-      '`tell application "Notes" to activate`. Also single-shot: toggle a setting, read system info ' +
+      '`tell application "Notes" to activate`. When the user names an APP (ChatGPT, Slack, Notes…), open ' +
+      'the installed Mac APP, not a website — use `tell application "<name>" to activate`; Gumbo ' +
+      'resolves close/partial names to the installed app (say "ChatGPT" even if it is "ChatGPT Classic") ' +
+      'and launches it if needed. Only open a website when he names a site or URL. Also single-shot: ' +
+      'toggle a setting, read system info ' +
       '(tmutil, defaults read, osascript one-liners). Only escalate to spawn_subagent(task_type "mac") ' +
       'when you must then CLICK, TYPE, or navigate menus INSIDE the app. NEVER pair the two for the web: ' +
       'if a computer task will read or act on a page ("check my notifications", "who am I logged in ' +
@@ -222,6 +234,14 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         .map((e) => `${e.type}: ${JSON.stringify(e.payload).slice(0, 200)}`)
         .join('\n');
       parts.push(`Recent activity (oldest first):\n${recent}`);
+      // "Is it stuck?" needs the AGE of that activity, not just its shape — a live run
+      // showed 80 s of silence being read back as "making progress" because the recent
+      // events looked busy. State the gap so the answer can be honest.
+      const last = events[events.length - 1];
+      if (task.status === 'running' && last) {
+        const ageS = Math.round((Date.now() - last.ts) / 1000);
+        parts.push(`Last activity: ${ageS}s ago.${ageS > 60 ? ' That is a LONG silent gap — if nothing is visibly happening, the task may be stalled; say so honestly (cancelling it is a reasonable option to offer).' : ''}`);
+      }
       return parts.join('\n\n');
     },
   });
@@ -415,14 +435,25 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   const listReminders = tool({
     name: 'list_reminders',
     description:
-      "List the user's reminders — upcoming first, then recently fired/cancelled. Use it to answer " +
-      '"what are my reminders" and to find the id for cancel_reminder.',
+      "List the user's reminders AND scheduled routines — upcoming first, then recently " +
+      'fired/cancelled. Use it to answer "what are my reminders / what\'s scheduled" and to find ' +
+      'the id for cancel_reminder.',
     parameters: z.object({}),
     execute: async () => {
       const rows = deps.scheduler.listReminders();
-      if (rows.length === 0) return 'No reminders.';
+      if (rows.length === 0) return 'No reminders or scheduled routines.';
       return rows
-        .map((r) => `${r.id} · ${r.status} · ${fireAtLabel(r.fire_at)} · ${r.text}`)
+        .map((r) => {
+          let label = r.text;
+          if (r.kind === 'routine') {
+            try {
+              label = `routine: "${(JSON.parse(r.text) as { procedure?: string }).procedure ?? '?'}"`;
+            } catch {
+              label = 'routine';
+            }
+          }
+          return `${r.id} · ${r.status} · ${fireAtLabel(r.fire_at)} · ${label}${r.recurrence ? ' · recurring' : ''}`;
+        })
         .join('\n');
     },
   });
@@ -430,14 +461,84 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
   const cancelReminder = tool({
     name: 'cancel_reminder',
     description:
-      'Cancel a pending reminder (removes it from both the scheduler and Reminders.app). Get the ' +
-      'id from list_reminders; ids are internal — never say one aloud.',
+      'Cancel a pending reminder (removes it from both the scheduler and Reminders.app) OR a ' +
+      'scheduled routine — cancelling a recurring routine\'s pending occurrence ends the whole ' +
+      'series. Get the id from list_reminders; ids are internal — never say one aloud.',
     parameters: z.object({ reminder_id: z.string() }),
     execute: async ({ reminder_id }) => {
       const row = deps.scheduler.cancelReminder(reminder_id);
-      return row
-        ? `Cancelled the reminder "${row.text}".`
-        : `No pending reminder with that id — it may have fired or been cancelled already. Check list_reminders.`;
+      if (!row) return `No pending entry with that id — it may have fired or been cancelled already. Check list_reminders.`;
+      if (row.kind === 'routine') {
+        return `Cancelled the scheduled routine${row.recurrence ? ' (the whole recurring series ends here)' : ''}.`;
+      }
+      return `Cancelled the reminder "${row.text}".`;
+    },
+  });
+
+  // M8 scheduled routines: the M5 scheduler's kind seam, second consumer. KNOWN
+  // procedures only; unattended runs pause at every would-be-confirm (never auto-approve).
+  const scheduleRoutine = tool({
+    name: 'schedule_routine',
+    description:
+      'Schedule a SAVED procedure to run by itself — once, or recurring ("every day at 9", "every ' +
+      'Monday at 8:30", "the first Monday of each month at 9"). Only saved procedures can be ' +
+      'scheduled (teach one or save one first — run_procedure without a match lists what exists). ' +
+      'Unattended runs NEVER auto-approve anything: a step that would ask the user pauses the run ' +
+      'and waits for him. Runs fire only while this Mac is awake with Gumbo running (no ' +
+      'Reminders.app entry) — for a spoken reminder use set_reminder instead. For one-shots ' +
+      'resolve fire_at yourself like set_reminder; for recurring pass recurrence and fire_at null.',
+    parameters: z.object({
+      procedure: z.string().describe('The saved procedure name (or the user\'s description of it)'),
+      fire_at: z
+        .string()
+        .nullable()
+        .describe('One-shot run time — absolute LOCAL ISO date-time like 2026-07-21T09:00:00; null when recurrence is given'),
+      recurrence: z
+        .object({
+          freq: z.enum(['daily', 'weekly', 'monthly']),
+          hour: z.number().int().min(0).max(23),
+          minute: z.number().int().min(0).max(59),
+          weekday: z.number().int().min(0).max(6).nullable().describe('0=Sunday … 6=Saturday; required for weekly, and for monthly-nth'),
+          nth: z.number().int().min(1).max(4).nullable().describe('monthly: the nth weekday (1=first Monday etc.)'),
+          day: z.number().int().min(1).max(28).nullable().describe('monthly alternative: a fixed day of the month'),
+        })
+        .nullable()
+        .describe('Recurring schedule; null for a one-shot'),
+    }),
+    execute: async ({ procedure: query, fire_at, recurrence }) => {
+      const row = store.getProcedure(query.trim()) ?? store.searchProcedures(query, 1)[0];
+      if (!row) {
+        const saved = store.listProcedures(5).map((p) => `"${p.name}"`).join(', ');
+        return `No saved procedure matches "${query}" — only saved procedures can be scheduled. ${saved ? `Saved: ${saved}.` : 'Nothing is saved yet — teach one first.'}`;
+      }
+      const rec = recurrence
+        ? parseRecurrence({
+            freq: recurrence.freq, hour: recurrence.hour, minute: recurrence.minute,
+            ...(recurrence.weekday !== null ? { weekday: recurrence.weekday } : {}),
+            ...(recurrence.nth !== null ? { nth: recurrence.nth } : {}),
+            ...(recurrence.day !== null ? { day: recurrence.day } : {}),
+          })
+        : null;
+      if (recurrence && !rec) {
+        return 'That recurrence is incomplete — weekly needs a weekday; monthly needs either a day of month or weekday+nth. Fix it and call again.';
+      }
+      let fireAtMs: number;
+      if (rec) {
+        fireAtMs = computeNextFire(rec, Date.now());
+      } else {
+        if (!fire_at) return 'A one-shot routine needs fire_at (or pass a recurrence).';
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(fire_at) || /(z|[+-]\d{2}:?\d{2})$/i.test(fire_at)) {
+          return `fire_at must be a LOCAL date-time like 2026-07-21T09:00:00. Got "${fire_at}"; re-resolve and call again.`;
+        }
+        fireAtMs = Date.parse(fire_at);
+        if (Number.isNaN(fireAtMs)) return `Could not parse "${fire_at}".`;
+        if (fireAtMs <= Date.now()) {
+          return `${fireAtLabel(fireAtMs)} is in the past — it is now ${fireAtLabel(Date.now())}. Re-resolve and call again.`;
+        }
+      }
+      const scheduled = deps.scheduler.scheduleRoutine(row.name, fireAtMs, rec);
+      const when = rec ? `${describeRecurrence(rec)} (first run ${fireAtLabel(scheduled.fire_at)})` : fireAtLabel(scheduled.fire_at);
+      return `Scheduled "${row.name}" to run ${when} (internal id ${scheduled.id} — never say it aloud). It runs only while this Mac is awake with Gumbo on; anything risky will pause and wait for the user.`;
     },
   });
 
@@ -495,6 +596,206 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
     },
   });
 
+  // M8 watch-me teaching: the user demonstrates a task ONCE and the shell's tap records it
+  // semantically. The description is the router (start/stop/cancel are voice phrases, not
+  // separate tools — the registry stays lean, the M6 lesson).
+  const teachProcedure = tool({
+    name: 'teach_procedure',
+    description:
+      'Learn a Mac procedure by WATCHING the user demonstrate it himself. action "start" begins ' +
+      'recording his clicks and typing as a named procedure — use when he says "watch me", "let me ' +
+      'show you how", "I\'ll teach you"; needs a short name (infer one from what he says he\'s about ' +
+      'to demonstrate, e.g. "file expense report"). While recording, everything he does on the Mac ' +
+      'is the demonstration; passwords are never recorded. action "stop" ends and saves the ' +
+      'recording — use when he says "done", "that\'s it", "stop watching". action "cancel" discards ' +
+      'it ("never mind", "forget that"). Recording shows in the notch the whole time. action ' +
+      '"save_last_run": when Gumbo itself just finished a multi-step computer task and the user says ' +
+      '"save that as a procedure" / "remember how you did that" — distills that run instead of a ' +
+      'demonstration (name: infer from his words or the task). ACKNOWLEDGE FIRST: say one short ' +
+      'line ("Saving that run now") BEFORE calling — distillation takes ~20 silent seconds and an ' +
+      'unacknowledged request feels unheard; the tool result then carries the real confirmation ' +
+      'to speak (never a second acknowledgment). action "list": what procedures are ' +
+      'saved ("what have I taught you", "what procedures do you have") — a QUICK lookup: call it ' +
+      'SILENTLY, say NOTHING first (no "let me check", no restating the question), then speak exactly ' +
+      'once — the answer. action "delete": remove a ' +
+      'saved procedure by name ("delete the packing list", "forget how to file expenses") — needs the ' +
+      'name.',
+    parameters: z.object({
+      action: z.enum(['start', 'stop', 'cancel', 'save_last_run', 'list', 'delete']),
+      name: z
+        .string()
+        .nullable()
+        .describe('Short procedure name — required for start and delete, optional for save_last_run (defaults to the task title); null for stop/cancel/list'),
+      confirm_old: z
+        .boolean()
+        .nullable()
+        .default(null)
+        .describe('save_last_run only: pass true ONLY after the user explicitly confirms he wants a task that finished a while ago (the tool refuses stale saves otherwise); null everywhere else'),
+      task_id: z
+        .string()
+        .nullable()
+        .default(null)
+        .describe('save_last_run only: the internal id of the run the user chose, ONLY after the tool listed several recent candidates and he picked one; null everywhere else'),
+    }),
+    execute: async ({ action, name, confirm_old, task_id }) => {
+      try {
+        if (action === 'list') {
+          const rows = store.listProcedures();
+          if (rows.length === 0) return 'No procedures saved yet — teach one by saying "watch me…". Deliver that as ONE sentence; never restate the question first.';
+          return 'Saved procedures: ' + rows.map((p) => `"${p.name}"`).join(', ') + '. Deliver the names in ONE short sentence — the answer only, never a lead-in like "let me see" or a restatement of what the user asked.';
+        }
+        if (action === 'delete') {
+          const query = name?.trim();
+          if (!query) return 'Which procedure should I delete? Ask the user for the name.';
+          // Resolve an approximate name to a real one before deleting (never delete a guess
+          // silently): exact match, else the closest search hit.
+          const row = store.getProcedure(query) ?? store.searchProcedures(query, 1)[0];
+          if (!row) {
+            const saved = store.listProcedures(5).map((p) => `"${p.name}"`).join(', ');
+            return `No saved procedure matches "${query}". ${saved ? `Saved: ${saved}.` : 'Nothing is saved.'}`;
+          }
+          const removed = store.deleteProcedure(row.name);
+          store.addEvent(null, 'procedure.deleted', { name: row.name, versions: removed });
+          return `Deleted "${row.name}"${removed > 1 ? ` (all ${removed} versions)` : ''}. Tell the user BY NAME what you removed — when he says "delete them all", name each one as it goes, so he knows exactly what's gone.`;
+        }
+        if (action === 'start') {
+          const trimmed = name?.trim();
+          if (!trimmed) return 'A name is needed to start — ask the user what to call this procedure.';
+          await manager.startTeaching(trimmed);
+          return `Recording — watching the user demonstrate "${trimmed}". Tell him to go ahead and to say "done" when he's finished.`;
+        }
+        if (action === 'stop') {
+          try {
+            const done = await manager.stopTeaching();
+            return `Recording stopped (${done.stepCount} step${done.stepCount === 1 ? '' : 's'} of "${done.name}"). The save is still compiling; a separate directive will arrive in a moment, and THAT turn — not this one — is where the confirmation gets spoken. For THIS turn say at most a tiny acknowledgment like "Got it." — NEVER say "Learned", "saved", "ready", or the procedure name now (the user would hear the confirmation twice), and never pre-narrate ("distilling…", "I'll let you know").`;
+          } catch {
+            // Already stopped — the user likely finished by clicking the teaching orb and THEN also
+            // said "done". The procedure was already captured; never tell him nothing was stored.
+            return `Nothing is recording right now. If you JUST finished a demonstration (e.g. by clicking its orb), it's ALREADY SAVED — reassure the user it's captured and ready to run. Do NOT claim it wasn't saved.`;
+          }
+        }
+        if (action === 'save_last_run') {
+          if (!deps.procedures) return 'Procedure saving is not wired up right now.';
+          // Replay/routine runs are excluded (review 🔵): "save that" means the ORIGINAL
+          // run, not a re-distillation of a replay's own trace (they carry a
+          // procedure.replay event; teaching sessions are excluded by title).
+          const eligible = store
+            .listTasks(50)
+            .filter((t) =>
+              t.kind === 'computer' && t.status === 'done' && !t.title.startsWith('Teaching:')
+              && store.getLatestEventPayload(t.id, 'procedure.replay') === null);
+          const last = task_id ? eligible.find((t) => t.id === task_id) : eligible[0];
+          if (!last) return 'No finished computer task to save — Gumbo has to complete one first (replays of already-saved procedures don\'t count).';
+          // SEVERAL runs just finished → "that" is ambiguous, and newest-wins picks wrong
+          // exactly when it matters most: a create-then-fix pair saves the FIX-UP — a
+          // state-repair whose steps assume the broken state and corrupt a correct one on
+          // replay (live failure 2026-07-22). Ask; never guess between candidates.
+          if (!task_id) {
+            const recent = eligible
+              .filter((t) => Date.now() - (t.updated_at ?? 0) <= config.procedures.saveLastRunMaxAgeMs)
+              .slice(0, 3);
+            if (recent.length > 1) {
+              const listed = recent
+                .map((t) => `"${t.title}" (internal id ${t.id}, ${Math.max(1, Math.round((Date.now() - t.updated_at) / 60_000))} min ago)`)
+                .join('; ');
+              return `NOT saved — several computer tasks just finished and "that" is ambiguous: ${listed}. A follow-up fix/repair run is usually NOT the procedure the user means (its steps assume the broken state). Ask him WHICH run to save — name them naturally, never say the ids aloud — then call save_last_run again with task_id set to his choice.`;
+            }
+          }
+          // "That" means something Gumbo JUST did. A quick voice answer (x_lookup,
+          // web_quick_lookup) never becomes a task, so without a recency bound "save that"
+          // silently reaches back hours and bottles the wrong run under a fresh name (a
+          // live save stamped "AI headline" on a 6-hour-old Notes task this way). A stale
+          // match needs the user's explicit word, never a guess.
+          const age = Date.now() - (last.updated_at ?? Date.now());
+          // An explicit task_id IS the user's confirmation — the stale guard applies only
+          // to the implicit newest-wins pick.
+          if (!task_id && age > config.procedures.saveLastRunMaxAgeMs && confirm_old !== true) {
+            const agoMin = Math.round(age / 60_000);
+            const ago = agoMin < 60 ? `${agoMin} minutes` : `${Math.round(agoMin / 6) / 10} hours`;
+            return `NOT saved — nothing recent qualifies. The newest finished computer task is "${last.title}", from ${ago} ago; quick spoken answers (news lookups, searches) are not replayable computer tasks and cannot be saved. Tell the user exactly that, name "${last.title}" and its age, and ask if that old task is really what he wants saved. ONLY if he says yes, call save_last_run again with confirm_old true.`;
+          }
+          const saved = await deps.procedures.saveFromTask(last.id, name?.trim() || last.title);
+          return `Saved "${saved.name}" (version ${saved.version}, ${saved.stepCount} steps) as a reusable procedure — distilled from the task "${last.title}". SAY the source out loud (e.g. "Saved ${saved.name} — from the run that did ${last.title}") so a wrong source gets caught immediately.`;
+        }
+        return manager.cancelTeaching('cancelled by the user')
+          ? 'Recording discarded — nothing was kept.'
+          : 'No recording is active.';
+      } catch (err) {
+        return `Could not do that: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  });
+
+  // M8 replay: a saved procedure runs deterministically (fast, near-zero model chatter),
+  // falling back to the full computer-use loop only when the UI drifted. The description
+  // routes between this and spawn_subagent: taught/saved tasks come HERE.
+  const runProcedure = tool({
+    name: 'run_procedure',
+    description:
+      'Run a SAVED procedure — something Gumbo learned by watching the user demonstrate it, or saved ' +
+      'from a successful run. Use when he asks for a task he taught or saved ("file this month\'s ' +
+      'expense report", "do the invoices thing like I showed you"). Pass his words as `procedure` — ' +
+      'exact name or a description both match. If nothing matches, tell him what IS saved and offer a ' +
+      'normal task (spawn_subagent) instead — never guess. A faithful run is fast and quiet, and still ' +
+      'asks via the notch before anything risky (approvals never carry over from the demonstration). ' +
+      'If the user asks for the task but CHANGED — "…but for a picnic", "…but make it formal", "…for the ' +
+      'whole team" — put the change in `adapt`: it runs the learned approach adapted to the new intent ' +
+      'instead of reproducing the original exactly. Leave `adapt` null for a faithful repeat. `notes` ' +
+      'is different: run-specific VALUES of the SAME task (a month, a filename), not a change to it.',
+    parameters: z.object({
+      procedure: z.string().describe("The procedure name or the user's description of it"),
+      notes: z
+        .string()
+        .nullable()
+        .describe('Run-specific VALUES for the same task (a month, a filename, an account) — applied to parameterized steps; null if none'),
+      adapt: z
+        .string()
+        .nullable()
+        .describe('A CHANGE that makes this a variation of the taught task ("for a picnic instead", "make it formal"); null for a faithful repeat. When set, runs the learned steps as a template, adapted — not an exact replay'),
+    }),
+    execute: async ({ procedure: query, notes, adapt }) => {
+      try {
+        const row = store.getProcedure(query.trim()) ?? store.searchProcedures(query, 1)[0];
+        if (!row) {
+          const saved = store.listProcedures(5).map((p) => `"${p.name}"`).join(', ');
+          return `No saved procedure matches "${query}". ${saved ? `Saved procedures: ${saved}.` : 'Nothing has been saved yet.'} Offer to do it as a normal task instead (spawn_subagent) — don't guess.`;
+        }
+        // Validate on READ like the routine path does (review 🟡, corroborated): both
+        // entry points to the engine share one guard, and a schema-drifted or corrupted
+        // row gets a clean refusal instead of reaching the engine raw. Runs BEFORE the
+        // adapt branch so both faithful and adapted runs are guarded.
+        let procedure = null;
+        try {
+          procedure = validateProcedure(JSON.parse(row.body), row.name);
+        } catch { /* fall through to the guard below */ }
+        if (!procedure) {
+          return `The saved procedure "${row.name}" is corrupt or from an incompatible version — teach it again or save it from a fresh run.`;
+        }
+        // ADAPTED run: the user changed the task, so run the learned steps as a TEMPLATE
+        // through the full intelligent loop (no deterministic replay, no self-heal of the
+        // original) rather than reproducing it. A blank/whitespace adapt is a faithful run.
+        const adaptText = adapt?.trim();
+        if (adaptText) {
+          const task = manager.spawnSubagent(
+            `${row.name} (adapted)`,
+            templateBrief(procedure, adaptText.slice(0, 500), notes?.trim() || null),
+            'mac',
+          );
+          return `Adapting "${row.name}" to that (internal task_id ${task.id} — never say it aloud), running it the intelligent way. Give the user ONE short "on it" line — no elaborate promise about what you'll report; the result is delivered on its own the moment it finishes.`;
+        }
+        // FAITHFUL run: fast deterministic replay + parameter-fill, drift → intelligent
+        // fallback, success-after-drift → self-heal.
+        const brief =
+          `Replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${procedure.goal}.` +
+          (notes?.trim() ? ` Run-specific notes from the user: ${notes.trim()}` : '');
+        const task = manager.spawnSubagent(row.name, brief, 'mac', { procedure, notes: notes?.trim() || null });
+        return `Running "${row.name}" now (internal task_id ${task.id} — never say it aloud). Say EXACTLY ONE short line that you're on it — just "Running your packing list" or "On it" — and STOP. Do NOT add a second sentence, do NOT promise to report back or "tell you what happened", do NOT explain that it might ask for approval or will finish on its own. The result is delivered on its own the moment it finishes.`;
+      } catch (err) {
+        return `Could not start that: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  });
+
   // Hot path: Tavily, hard-capped at config.search.quickLookupTimeoutMs, no retries. The
   // description below IS the router between this and spawn_subagent — its wording is part
   // of the spec; don't loosen it.
@@ -537,6 +838,7 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
 
   return [
     spawnSubagent, spawnClaudeSession, sendToSession, undoSession, quickLookup, xLookupTool, macDo,
+    teachProcedure, runProcedure, scheduleRoutine,
     generateImage, editImageTool, openImage, setReminder, listReminders, cancelReminder,
     listTasks, getTaskStatus, cancelTask, readReport, saveNote, presentFileTool, editFileTool,
   ];

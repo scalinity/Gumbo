@@ -35,6 +35,23 @@ function present(result: MacActionResult): string {
  * times running is a top-4 documented computer-use failure — short-circuit with a warning
  * before it burns the step budget looping.
  */
+/** M8 replay: the structured last-result side-channel. The engine makes DETERMINISTIC
+ *  decisions, so it must never parse tool-result strings (screen text echoed into a diff
+ *  could spoof or suppress any textual signal — the same reason no_change is a wire
+ *  flag). Tools report ok/errorKind/noChange/declined here; the engine reads exactly one
+ *  observation per invoke. */
+export type ToolObservation = {
+  tool: string;
+  ok: boolean;
+  errorKind?: string;
+  noChange?: boolean;
+  /** A confirm gate (host, submit, risky script, handoff) resolved as a deny. */
+  declined?: boolean;
+  /** ax_act select_text only: which mechanism made the selection ('ax-write' = a shadow
+   *  the app's format actions may not track — the replay engine branches on this). */
+  selectHow?: string;
+};
+
 /** Optional M7 wiring: requestHandoff pauses the task for the user's own step (manager owns
  *  the lifecycle — status flip, kill-switch stand-down, notch Done). A login he performs
  *  during the handoff needs no capture step — the persistent automation profile is
@@ -42,6 +59,8 @@ function present(result: MacActionResult): string {
 export interface MacToolDeps {
   visionQuery: VisionQuery;
   requestHandoff?: (reason: string) => Promise<boolean>;
+  /** M8: structured result observer for the replay engine (see ToolObservation). */
+  observe?: (obs: ToolObservation) => void;
 }
 
 export function createMacTools(
@@ -73,6 +92,7 @@ export function createMacTools(
     }),
     async execute({ app, max_elements }) {
       const result = await macBridge.request({ kind: 'snapshot', app, max_elements }, { signal });
+      deps.observe?.({ tool: 'ax_snapshot', ok: result.ok, errorKind: result.error_kind });
       return present(result);
     },
   });
@@ -99,19 +119,34 @@ export function createMacTools(
       'Act on an element by ref (from the latest snapshot). Verbs: press (click/activate), focus, ' +
       'set_value (write a value directly), type (send keystrokes — use for web/Electron fields), ' +
       'key (a keyboard shortcut like "cmd+n" or "return" — value holds the chord, no ref needed), ' +
-      'show_menu (right-click/context menu), wait_for (block until an element with role+name appears; ' +
-      'use role+name instead of ref). Returns a before/after DIFF of what changed — read it to verify ' +
-      'the step worked; an empty diff means nothing changed, so DO NOT assume success. Secure ' +
-      '(password) fields are refused.',
+      'show_menu (right-click/context menu), select_text (highlight text in a field so a following ' +
+      'format action applies — value holds the exact text to select, no coordinates; the selection is ' +
+      'made with real keystrokes, so format controls treat it like a hand-made one), menu_path ' +
+      '(walk the app\'s MENU BAR by titles with null ref and press the final item — value = the ' +
+      '" > "-separated path, e.g. "Format > Font > Highlight". Reliable for any menu-bar command; ' +
+      'NEVER guess keyboard shortcuts — a wrong chord just beeps. With a ref it walks that ' +
+      'element\'s context menu instead, but some apps ignore programmatic picks there — prefer the ' +
+      'menu bar or the app\'s own on-screen controls. A format control that reads (disabled) in a ' +
+      'popover is usually operable anyway — press it; the executor clicks it for real), paste (set the ' +
+'clipboard to value and ⌘V it into the field — replays captured pastes with their styling; mostly ' +
+'engine-driven), replace_text ' +
+      '(replace the CURRENT selection\'s text directly, ZERO keystrokes — auto-capitalize/auto-format ' +
+      'cannot alter it, unlike type. select_text the wrong text first, then replace_text with value = ' +
+      'the exact replacement. THE tool for fixing case/typo divergences), wait_for (block ' +
+      'until an element with role+name appears; use role+name instead of ref). Returns a before/after ' +
+      'DIFF of what changed — read it to verify the step worked; an empty diff means nothing changed, ' +
+      'so DO NOT assume success. Secure (password) fields are refused.',
     parameters: z.object({
-      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for']),
+      verb: z.enum(['press', 'focus', 'set_value', 'type', 'key', 'show_menu', 'wait_for', 'select_text', 'menu_path', 'replace_text', 'paste']),
       ref: z.string().nullable().describe('Element ref from ax_snapshot; null for key/wait_for'),
-      value: z.string().nullable().describe('Text for type/set_value, or the chord for key'),
+      value: z.string().nullable().describe('Text for type/set_value/select_text, the chord for key, or the " > " menu path for menu_path'),
       role: z.string().nullable().describe('wait_for: the role to wait for (e.g. "AXButton")'),
       name: z.string().nullable().describe('wait_for: substring of the label to wait for'),
       timeout_ms: z.number().int().min(100).max(30_000).default(5000),
+      occurrence: z.number().int().min(0).nullable().default(null).describe('select_text: which match of value to select when it appears more than once (0-based); null = first'),
+      rtf: z.string().nullable().default(null).describe('paste: base64 RTF payload of the captured clipboard (the replay engine attaches this from the teaching record; leave null otherwise)'),
     }),
-    async execute({ verb, ref, value, role, name, timeout_ms }) {
+    async execute({ verb, ref, value, role, name, timeout_ms, occurrence, rtf }) {
       // Repetition guard: same verb on same ref ×3 in a row → stop and warn.
       const key = `${verb}:${ref ?? role ?? ''}:${value ?? name ?? ''}`;
       repeatCount = key === lastActKey ? repeatCount + 1 : 0;
@@ -121,11 +156,12 @@ export function createMacTools(
         return `You have repeated "${verb}" on the same target 3 times with no progress. Stop and take a fresh ax_snapshot, then try a different approach (a different element, a keyboard shortcut, or check for a dialog blocking the way).`;
       }
       const result = await macBridge.request(
-        { kind: 'act', verb, ref, value, role, name, timeout_ms },
+        { kind: 'act', verb, ref, value, role, name, timeout_ms, ...(occurrence != null ? { occurrence } : {}), ...(rtf ? { rtf } : {}) },
         { signal, timeoutMs: timeout_ms + 5000 },
       );
       const summary = `${verb} ${ref ?? role ?? ''}`.trim();
       auditMacAction({ tier: 'subagent', kind: 'act', action: summary, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      deps.observe?.({ tool: 'ax_act', ok: result.ok, errorKind: result.error_kind, noChange: result.no_change === true, selectHow: result.select_how });
       // Keyed on the STRUCTURED no_change flag, not output text — screen content echoed
       // into the diff could otherwise spoof (or suppress) the stall signal (review 🔵).
       const stalled = result.ok && result.no_change === true;
@@ -167,6 +203,7 @@ export function createMacTools(
         const approved = await confirmScript(`${decision.reason}: ${describeMacDo(script)}`);
         if (!approved) {
           auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script}`, gate: 'declined', ok: false, error: decision.reason, taskId });
+          deps.observe?.({ tool: 'run_script', ok: false, declined: true });
           return `the user didn't approve that script (${decision.reason}) — try another approach or skip it.`;
         }
       }
@@ -177,6 +214,7 @@ export function createMacTools(
       // Audit the FULL script like the hot lane does (drift between the two lanes' audit
       // shapes was a review 🟡) — the JSONL writer escapes newlines, so length is the only cost.
       auditMacAction({ tier: 'subagent', kind: 'script', action: `${interpreter}: ${script}`, gate, ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      deps.observe?.({ tool: 'run_script', ok: result.ok, errorKind: result.error_kind });
       return present(result);
     },
   });
@@ -247,8 +285,21 @@ export function createMacTools(
       }
       // The audit line records that pixels LEFT THE MACHINE (one vision-model query).
       auditMacAction({ tier: 'subagent', kind: 'capture', action: `screen_look ${target}: ${question.slice(0, 120)}`, gate: 'auto', ok: true, taskId });
+      // The screenshot is written at POINT resolution, so the model's pixel coordinates are
+      // already point units. Tell it the window's GLOBAL top-left so any coordinate it returns
+      // is a global point click_point can use directly (not a window-local one) — without this,
+      // a window offset from the screen origin makes every reported click miss by that offset.
+      const rectMatch = /\((-?\d+),(-?\d+)\s+(\d+)x(\d+)\)/.exec(shot.output ?? '');
+      let coordNote = '';
+      if (rectMatch) {
+        const [, x, y, w, h] = rectMatch.map(Number);
+        coordNote =
+          `\n\n(Coordinate frame: this image is a window whose top-left is GLOBAL point (${x},${y}), ` +
+          `size ${w}x${h}, rendered one pixel per point. Report EVERY click coordinate as a GLOBAL ` +
+          `point — add the (${x},${y}) offset to the in-image position — within x∈[${x}..${x + w}], y∈[${y}..${y + h}].)`;
+      }
       try {
-        return await deps.visionQuery(file, question, signal);
+        return await deps.visionQuery(file, question + coordNote, signal);
       } catch (err) {
         return `screen_look failed (${err instanceof Error ? err.message : String(err)}) — fall back to screen_ocr or report what you could not see.`;
       }
@@ -300,6 +351,7 @@ export function createMacTools(
       if (!deps.requestHandoff) return 'Handoff is unavailable for this task — report what you finished and what remains.';
       const done = await deps.requestHandoff(reason);
       auditMacAction({ tier: 'subagent', kind: 'act', action: `handoff: ${reason.slice(0, 160)}`, gate: done ? 'confirmed' : 'declined', ok: done, taskId });
+      deps.observe?.({ tool: 'request_handoff', ok: done, declined: !done });
       if (!done) {
         return "the user declined (or didn't respond in time) — wrap up: report what you completed and what remains, and end the task.";
       }
@@ -320,6 +372,26 @@ export function createMacTools(
     async execute({ app }) {
       const result = await macBridge.request({ kind: 'activate', app }, { signal });
       auditMacAction({ tier: 'subagent', kind: 'act', action: `activate ${app}`, gate: 'auto', ok: result.ok, error: result.ok ? undefined : result.error_kind, taskId });
+      deps.observe?.({ tool: 'focus_app', ok: result.ok, errorKind: result.error_kind });
+      return present(result);
+    },
+  });
+
+  // Observation-only like ax_snapshot/ax_query: no audit line, no observe() — it reads,
+  // never acts. The styled ranges come from the same channel the teach capture and the
+  // replay acceptance diff trust; for native-app styling it is DETERMINISTIC where
+  // screen_look only estimates (vision affirmed bold+highlight that were absent, live).
+  const readDocument = tool({
+    name: 'read_document',
+    description:
+      "Read the focused document/note of a native app: full TEXT plus its STYLED RANGES — bold, " +
+      'italic, underline, highlight colors, and list structure (dashed/bulleted/checklist), with ' +
+      'exact character offsets, straight from Accessibility. THE way to verify styling and ' +
+      'structure in a native app (Notes etc.): deterministic, never guessed — trust it over ' +
+      'screen_look for text styling. Pass the app name.',
+    parameters: z.object({ app: z.string().describe('App whose focused document to read, e.g. "Notes"') }),
+    async execute({ app }) {
+      const result = await macBridge.request({ kind: 'document_state', app }, { signal });
       return present(result);
     },
   });
@@ -337,5 +409,27 @@ export function createMacTools(
     },
   });
 
-  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, focusApp, screenOcr, screenLook, clickPoint, requestHandoff];
+  const preserveClipboard = tool({
+    name: 'preserve_clipboard',
+    description:
+      "Save or restore the user's clipboard losslessly (every type — text, image, files). Call " +
+      "action:'save' RIGHT BEFORE you Copy an image to save it (the Copy overwrites his clipboard), " +
+      "then action:'restore' AFTER the file is written and verified — so his clipboard ends up exactly " +
+      'as he left it. It changes nothing on disk and needs no approval. Safety net: if you forget to ' +
+      'restore, his clipboard is restored automatically when the task ends.',
+    parameters: z.object({ action: z.enum(['save', 'restore']) }),
+    // No auditMacAction line and no deps.observe() — deliberately, like ax_query/ax_snapshot:
+    // this only round-trips the user's OWN clipboard (no external sink, no on-disk effect), and
+    // the tool never returns the contents to the model (the shell keeps the bytes), so there is
+    // nothing to gate, audit, or replay.
+    async execute({ action }) {
+      const result = await macBridge.request(
+        { kind: action === 'save' ? 'clipboard_snapshot' : 'clipboard_restore' },
+        { signal },
+      );
+      return present(result);
+    },
+  });
+
+  return [axSnapshot, axQuery, axAct, runScript, checkPermissions, focusApp, screenOcr, screenLook, clickPoint, requestHandoff, preserveClipboard, readDocument];
 }

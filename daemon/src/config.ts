@@ -77,6 +77,10 @@ export const config = {
     realtime: 'gpt-realtime-2.1',
     subagent: 'gpt-5.6-terra',
     supervisor: 'gpt-5.6-terra',
+    // Hard per-request ceiling for Agents-SDK model calls (the SDK default is ~10 min —
+    // a stalled call read as a silent hang on a live fallback run). Generous enough for
+    // long reasoning turns; the client retries what the timeout exposes.
+    requestTimeoutMs: 120_000,
     // M3 cold announcements. Verified live (2026-07-15): /v1/audio/speech accepts the
     // 'marin' voice on this model with response_format 'pcm' → 24 kHz mono pcm16, the
     // exact shell wire format — same voice as the realtime session, zero transcoding.
@@ -153,7 +157,7 @@ export const config = {
     scriptTimeoutMs: 60_000, // sub-agent run_script (osascript/shortcuts get more room than the hot path)
     confirmTimeoutMs: 30_000, // hot mac_do notch confirm — shorter than Claude's 60 s (a voice turn is waiting)
     snapshotMaxElements: 400, // interactive elements per compacted snapshot the model sees
-    maxTurns: 50, // computer-mode sub-agent step budget (SPEC §M6: default ~50)
+    maxTurns: 100, // computer-mode sub-agent step budget (SPEC §M6); exhaustion ends as an honest partial report, never a crash
     outputMaxChars: 262_144, // defensive cap on any single shell result payload
     // M7 vision lane: one-shot ScreenCaptureKit capture (+ Vision OCR) budgets. The
     // first capture triggers the Screen Recording TCC prompt, which can sit for a while —
@@ -167,6 +171,53 @@ export const config = {
     // captcha) and taps Done. Generous like planConfirmTimeoutMs — a login takes minutes,
     // not seconds. Deny-on-timeout stays: an unanswered handoff wraps the task up cleanly.
     handoffTimeoutMs: 300_000,
+  },
+  // M8 watch-me teaching: the shell's kill-switch tap flips to RECORD mode and streams
+  // the user's demonstration back as semantic steps (role/label/identifier — never
+  // coordinates, never secure-field content). Caps are LOUD stops, never silent
+  // truncation (Law 5): hitting one ends the recording with the reason announced.
+  teach: {
+    maxSteps: 400, // a demonstration is dozens of steps; hundreds means a forgotten recorder
+    maxDurationMs: 10 * 60_000, // auto-stop — a demo is minutes, not hours
+    valueMaxChars: 400, // per-step typed-text cap (sanitize)
+  },
+  // M8 procedure memory: the one-shot compile (recording/trace → replayable procedure)
+  // and its trace-condensation budget. Background work — generous like other one-shots.
+  research: {
+    // Deep mode is a different SHAPE, not just a bigger budget: search results come back
+    // as a skim (no page bodies in the loop) and reads go through the note extractor, so
+    // the orchestrating context holds evidence, never raw pages — that is what makes
+    // reading 100+ sources reachable (full-text searches saturate a loop in ~4 turns).
+    standardMaxTurns: 25,
+    deepMaxTurns: 60,
+    readBatchMax: 8, // pages per read_and_extract call (schema allows more; extras are named, never silently dropped)
+    extractInputMaxChars: 60_000, // per-page window fed to the extractor; the note states when a page exceeded it
+  },
+  procedures: {
+    compileTimeoutMs: 60_000,
+    traceMaxChars: 24_000, // condensed tool.call/tool.result stream fed to the compiler
+    // "Save that as a procedure" binds to the newest finished computer task — but only a
+    // RECENT one without an explicit confirm (a stale match means "that" pointed at
+    // something that never became a task, e.g. a spoken lookup).
+    saveLastRunMaxAgeMs: 15 * 60_000,
+    // Replay precondition resilience: if a step's target app isn't running (it was open
+    // when taught, or a prior run left it closed), the engine launches it — a closed app
+    // must never drift a faithful replay. Poll for readiness after the launch (a cold
+    // app takes a beat) before giving up to the intelligent fallback.
+    appLaunchAttempts: 4,
+    appLaunchWaitMs: 1000,
+    // Demo-measured replay pacing (2026-07-21 forensics): the pause before a resolve/act
+    // retry, and the settle after re-pressing a revealer button re-opens its container.
+    retrySleepMs: 800,
+    revealerSettleMs: 600,
+  },
+  // M8 scheduled routines. The unattended policy is non-negotiable: a would-be-confirm
+  // PAUSES the run (needs_input + pulse + parked notch confirm) until the user answers —
+  // deny-on-timeout stays at pause scale, and NOTHING is ever auto-approved in absentia.
+  routines: {
+    pauseTimeoutMs: 60 * 60_000, // parked-confirm window before the standing deny fires
+    queueWindowMs: 30 * 60_000, // a routine firing into a busy Mac retries this long, then skips LOUDLY
+    retryIntervalMs: 60_000,
   },
   // M7 browser lane: Playwright/CDP on a DEDICATED PERSISTENT automation profile
   // (~/Gumbo/browser/profile) — never the user's live Chrome (locked decision: anti-bot

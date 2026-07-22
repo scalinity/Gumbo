@@ -8,6 +8,8 @@ import { ClaudeRunner, type ClaudeRunnerOpts, type ClaudeSessionRunner } from '.
 import { Supervisor, type EscalationRequest } from '../agents/supervisor.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import type { MacBridge } from '../ws/mac.ts';
+import { sanitizeTeachStep, teachingReport, SECRET_FIELD_RE, type TeachStep } from './teach.ts';
+import { validateProcedure, type Procedure } from '../agents/procedures.ts';
 
 /** Resolves the user's notch answer for a supervisor escalation (ws/confirm.ts in prod).
  *  The signal fires if the task is cancelled while the confirm is pending. */
@@ -81,20 +83,18 @@ export class TaskManager {
 
   /** Spawn a background sub-agent. taskType 'mac' runs the computer-use loop (kind
    *  'computer' so the kill switch can find it) with the AX toolset; 'research' is the
-   *  default web/writing agent. */
-  spawnSubagent(title: string, brief: string, taskType: SubagentKind = 'research'): TaskRow {
+   *  default web/writing agent. M8: `replay` runs a saved procedure deterministically
+   *  first — the loop becomes its drift fallback, and a successful fallback run
+   *  SELF-HEALS the procedure (version+1 via healProcedure). */
+  spawnSubagent(
+    title: string,
+    brief: string,
+    taskType: SubagentKind = 'research',
+    replay?: { procedure: Procedure; notes: string | null; unattended?: boolean },
+    depth?: 'standard' | 'deep',
+  ): TaskRow {
     if (taskType === 'mac' && !this.macBridge) throw new Error('Mac control is unavailable (no shell bridge wired).');
-    // One computer task at a time: there is ONE screen/keyboard — concurrent tasks fight
-    // over the same apps (live demo: three overlapping wallpaper tasks drove System
-    // Settings against each other). Same spirit as assertCwdFree for Claude sessions.
-    if (taskType === 'mac') {
-      for (const otherId of this.aborts.keys()) {
-        const other = this.store.getTask(otherId);
-        if (other?.kind === 'computer') {
-          throw new Error(`a computer-use task ("${other.title}") is already driving the Mac; wait for it to finish or cancel it first`);
-        }
-      }
-    }
+    if (taskType === 'mac') this.assertMacFree();
     const id = randomUUID().slice(0, 8);
     const workspace = join(config.home.tasks, id);
     mkdirSync(workspace, { recursive: true });
@@ -111,11 +111,37 @@ export class TaskManager {
     // takes the user's mouse, so the kill switch must treat that input as the answer, not
     // an abort. Deny on timeout / no shell as always; research tasks pass undefined.
     const standDown = taskType === 'mac' ? makeStandDown(this.macBridge!) : undefined;
+    const unattended = replay?.unattended === true;
+    // M8 unattended PARK bracket: while a routine waits on the user, the task is NOT
+    // driving — the tap DISARMS (mac_task refcount) instead of standing down. Holding
+    // setHandoff(true) for an hour-scale window would suppress the kill switch while
+    // the user uses his Mac normally, then resume driving under his hands on timeout-deny
+    // (the reviewed inversion). Re-arm happens on answer; the shell's arm-time grace
+    // covers his trailing input from clicking Approve.
+    const park = unattended
+      ? async <T>(fn: () => Promise<T>): Promise<T> => {
+          this.macBridge!.taskFinished();
+          try {
+            return await fn();
+          } finally {
+            this.macBridge!.taskStarted();
+          }
+        }
+      : undefined;
+    const bracket = unattended ? park! : standDown!;
     // M7: the browser lane labels its own confirms via the optional title param.
+    // M8 unattended: every would-be-confirm PAUSES the task (needs_input + routine.paused
+    // + pulse via index.ts) with the long window + park-for-shell; deny-on-timeout stays —
+    // NOTHING is ever auto-approved in absentia.
     const confirmScript =
       taskType === 'mac'
-        ? (detail: string, confirmTitle = 'Allow this Mac script?', rememberHost?: string) =>
-            standDown!(() => this.escalate(id, title, { title: confirmTitle, detail, rememberHost }, abort.signal))
+        ? (detail: string, confirmTitle = 'Allow this Mac script?', rememberHost?: string) => {
+            const req: EscalationRequest = unattended
+              ? { title: confirmTitle, detail, rememberHost, timeoutMs: config.routines.pauseTimeoutMs, waitForShell: true }
+              : { title: confirmTitle, detail, rememberHost };
+            if (!unattended) return bracket(() => this.escalate(id, title, req, abort.signal));
+            return this.pauseForAnswer(id, detail, () => bracket(() => this.escalate(id, title, req, abort.signal)));
+          }
         : undefined;
     // M7 cooperative handoff: pause (needs_input announces it aloud), stand the kill
     // switch down so the user's own typing IS the handoff, wait for his notch "Done"
@@ -125,6 +151,7 @@ export class TaskManager {
       taskType === 'mac'
         ? async (reason: string) => {
             this.setTaskStatus(id, 'needs_input', reason);
+            if (unattended) this.store.addEvent(id, 'routine.paused', { reason });
             // the user closing the automation browser mid-handoff IS his answer (live-demo
             // polish): decline promptly (confirm_cancel dismisses the notch panel) instead
             // of letting the prompt linger to its multi-minute timeout. Local controller:
@@ -134,11 +161,16 @@ export class TaskManager {
             abort.signal.addEventListener('abort', onTaskAbort, { once: true });
             const unsubBrowser = getBrowserClient().onContextClosed(() => local.abort());
             try {
-              return await standDown!(() => this.escalate(
+              // M8 unattended: handoffs get the pause semantics too (long window +
+              // park-for-shell) — a login wall at 6 AM waits for the user, one clean pause,
+              // instead of a 5-minute deny into an empty room.
+              return await bracket(() => this.escalate(
                 id, title,
                 {
                   title: 'Your turn — tap Done when finished', detail: reason,
-                  timeoutMs: config.mac.handoffTimeoutMs, confirmLabel: 'Done', denyLabel: 'Cancel',
+                  timeoutMs: unattended ? config.routines.pauseTimeoutMs : config.mac.handoffTimeoutMs,
+                  confirmLabel: 'Done', denyLabel: 'Cancel',
+                  ...(unattended ? { waitForShell: true } : {}),
                 },
                 local.signal,
               ));
@@ -156,16 +188,158 @@ export class TaskManager {
     // Two-arg then(): the rejection handler sees ONLY runSubagent errors, so a failure
     // while writing the report (success path) can't be mislabeled 'cancelled'/'failed'.
     runSubagent({
-      taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType,
+      taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType, depth,
       macBridge: this.macBridge, confirmScript, requestHandoff,
       takeSteering: taskType === 'mac' ? () => this.takeSteering(id) : undefined,
+      procedure: replay
+        ? { procedure: replay.procedure, notes: replay.notes, steeringPending: () => this.hasSteering(id), unattended }
+        : undefined,
     }).then(
-      (report) => this.finishWithReport(id, title, workspace, report),
+      (report) => {
+        this.finishWithReport(id, title, workspace, report);
+        if (replay) this.healAfterFallback(id, replay.procedure.name);
+      },
       (err: unknown) => {
         this.finish(id, abort.signal.aborted ? 'cancelled' : 'failed', { error: String(err) });
       },
     );
     return task;
+  }
+
+  /** M8 self-heal: a replay that DRIFTED but whose fallback loop then finished 'done'
+   *  becomes the procedure's next version (this run's trace recompiles). Best-effort and
+   *  after the announce — a heal failure must never touch the task's own outcome. */
+  private healAfterFallback(taskId: string, procedureName: string) {
+    if (!this.healProcedure) return;
+    const replayEvent = this.store.getLatestEventPayload(taskId, 'procedure.replay') as { outcome?: string } | null;
+    if (replayEvent?.outcome !== 'fallback') return;
+    if (this.store.getTask(taskId)?.status !== 'done') return;
+    // A TAUGHT procedure is the user's ground-truth demonstration — never let an auto-heal silently
+    // overwrite it with a drifted/adapted run. Spurious drift (e.g. Notes auto-formatting a typed
+    // "- " into a bullet, which the loop misread as failure) was corrupting freshly-taught lists
+    // down to a single item, every replay. Heal only a non-taught version; update a taught one by
+    // re-teaching.
+    if (this.store.getProcedure(procedureName)?.provider === 'taught') {
+      this.store.addEvent(taskId, 'procedure.heal_skipped', { name: procedureName, reason: 'latest version is taught — ground truth, re-teach to change it' });
+      return;
+    }
+    this.healProcedure(procedureName, taskId).then(
+      (result) => this.store.addEvent(taskId, 'procedure.healed', result),
+      (err: unknown) => this.store.addEvent(taskId, 'session.error', { message: `procedure heal failed: ${String(err)}` }),
+    );
+  }
+
+  /** M8 Phase 3 seam, wired in index.ts → procedures.saveFromTask(taskId, name, 'healed'). */
+  healProcedure?: (name: string, taskId: string) => Promise<{ name: string; version: number; stepCount: number }>;
+
+  /** Peek (no drain) — the replay engine bails to the full loop on queued steering; only
+   *  the loop's wrapped tools may consume it. */
+  hasSteering(id: string): boolean {
+    return (this.steering.get(id)?.length ?? 0) > 0;
+  }
+
+  /** M8 unattended pause bookkeeping: needs_input (spoken + pulsed via index.ts) +
+   *  routine.paused (the away-items surface) around the parked confirm; status restores
+   *  on answer unless the task ended meanwhile. */
+  private async pauseForAnswer(id: string, reason: string, run: () => Promise<boolean>): Promise<boolean> {
+    this.setTaskStatus(id, 'needs_input', `paused unattended: ${reason}`);
+    this.store.addEvent(id, 'routine.paused', { reason });
+    try {
+      return await run();
+    } finally {
+      if (!this.finished.has(id) && !this.aborts.get(id)?.signal.aborted) {
+        this.setTaskStatus(id, 'running', 'answered');
+      }
+    }
+  }
+
+  // ——— M8 scheduled routines: fire → queue → spawn (or skip LOUDLY) ———
+  private routineQueue: Array<{ name: string; firstTriedAt: number }> = [];
+  private routineRetryTimer: NodeJS.Timeout | null = null;
+  /** Loud-skip seam (Law 5: never a silent skip) — wired in index.ts to a spoken/pulsed
+   *  notification; the routine.skipped event is the durable record either way. */
+  onRoutineSkipped: (name: string, reason: string) => void = () => {};
+
+  /** A routine schedule row fired. NEVER throws — the row is already marked fired, so an
+   *  exception here would be a silently lost occurrence (onFire errors are swallowed
+   *  into session.error). KNOWN procedures only, validated at fire time. */
+  runRoutine(row: { id: string; text: string }) {
+    try {
+      const payload = JSON.parse(row.text) as { procedure?: string };
+      const name = typeof payload.procedure === 'string' ? payload.procedure.trim() : '';
+      if (!name) {
+        this.skipRoutine(row.id, 'the routine row carries no procedure name');
+        return;
+      }
+      this.routineQueue.push({ name, firstTriedAt: Date.now() });
+      this.drainRoutineQueue();
+    } catch (err) {
+      this.skipRoutine(row.id, `unreadable routine payload: ${String(err)}`);
+    }
+  }
+
+  /** Start queued routines when the Mac frees up — called on fire, on every task finish,
+   *  and on a retry timer while blocked. A routine that can't start inside the window is
+   *  skipped WITH notice. Public so tests drive it without timers. */
+  drainRoutineQueue() {
+    while (this.routineQueue.length > 0) {
+      const item = this.routineQueue[0];
+      if (Date.now() - item.firstTriedAt > config.routines.queueWindowMs) {
+        this.routineQueue.shift();
+        this.skipRoutine(item.name, 'the Mac stayed busy past the retry window');
+        continue;
+      }
+      const row = this.store.getProcedure(item.name);
+      if (!row) {
+        this.routineQueue.shift();
+        this.skipRoutine(item.name, 'no saved procedure by that name');
+        continue;
+      }
+      let procedure: Procedure | null = null;
+      try {
+        procedure = validateProcedure(JSON.parse(row.body), row.name);
+      } catch { /* fall through to the guard below */ }
+      if (!procedure) {
+        this.routineQueue.shift();
+        this.skipRoutine(item.name, 'the saved procedure failed validation');
+        continue;
+      }
+      try {
+        this.spawnSubagent(
+          row.name,
+          `Scheduled routine: replay of the saved procedure "${row.name}" (v${row.version}). Goal: ${procedure.goal}. ` +
+            'This run is UNATTENDED — the user may not be at the Mac. Anything that needs his answer pauses and waits; never improvise around a pause.',
+          'mac',
+          { procedure, notes: null, unattended: true },
+        );
+        this.routineQueue.shift();
+        this.store.addEvent(null, 'routine.started', { name: row.name, version: row.version });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (/already driving the Mac/.test(message)) {
+          this.scheduleRoutineRetry(); // busy — keep it queued, try again shortly
+          return;
+        }
+        this.routineQueue.shift();
+        this.skipRoutine(item.name, message);
+      }
+    }
+  }
+
+  private scheduleRoutineRetry() {
+    if (this.routineRetryTimer) return;
+    this.routineRetryTimer = setTimeout(() => {
+      this.routineRetryTimer = null;
+      this.drainRoutineQueue();
+    }, config.routines.retryIntervalMs);
+    this.routineRetryTimer.unref();
+  }
+
+  private skipRoutine(name: string, reason: string) {
+    this.store.addEvent(null, 'routine.skipped', { name, reason });
+    try {
+      this.onRoutineSkipped(name, reason);
+    } catch { /* announce is best-effort; the event is the durable record */ }
   }
 
   /**
@@ -403,6 +577,194 @@ export class TaskManager {
     this.store.addEvent(id, 'task.finished', { status, ...(payload as object) });
     const task = this.store.getTask(id);
     if (task) this.onFinished(task);
+    // M8: a computer task's image-save may have snapshotted the user's clipboard (preserve_clipboard
+    // 'save') before a Copy-Image and not yet restored it. Restore on GENUINE task end here — NOT on
+    // the shell's mac_task active:false, which an unattended park also fires (refcount 1→0→1) and
+    // would evict the just-copied image mid-save. Idempotent (no-op if already restored or nothing
+    // snapshotted); fire-and-forget so finish() stays synchronous for the kill-switch label race.
+    if (task?.kind === 'computer') this.macBridge?.request?.({ kind: 'clipboard_restore' }, { timeoutMs: 2000 })?.catch(() => {});
+    // M8: a finished computer task may unblock a queued routine — try now, off this tick
+    // (finish() must stay synchronous for the kill-switch label race).
+    if (this.routineQueue.length > 0) setImmediate(() => this.drainRoutineQueue());
+  }
+
+  /** One computer task at a time: there is ONE screen/keyboard — concurrent tasks fight
+   *  over the same apps (live demo: three overlapping wallpaper tasks drove System
+   *  Settings against each other). Same spirit as assertCwdFree for Claude sessions.
+   *  M8: a teaching session registers as a kind:'computer' task row, so this one scan
+   *  covers task-vs-task, task-vs-teaching, and teaching-vs-task alike. */
+  private assertMacFree() {
+    for (const otherId of this.aborts.keys()) {
+      const other = this.store.getTask(otherId);
+      if (other?.kind === 'computer') {
+        throw new Error(`a computer-use task ("${other.title}") is already driving the Mac; wait for it to finish or cancel it first`);
+      }
+    }
+  }
+
+  // ——— M8 watch-me teaching ———
+  // A teach session is a REAL kind:'computer' task row with no runner: the one-task rule
+  // covers both directions for free, cancelComputerTasks (kill switch) reaches it, the
+  // boot reaper closes a recording that died with the daemon, and stop rides
+  // finishWithReport → the existing announce path.
+  private teaching: {
+    taskId: string; name: string; title: string; workspace: string;
+    steps: TeachStep[]; timer: NodeJS.Timeout; stopping?: boolean;
+  } | null = null;
+
+  /** M8 Phase 2 seam, wired in index.ts to the procedure compiler. When present,
+   *  stopTeaching distills the demonstration before the task finishes (ONE announce
+   *  carries both); absent (tests), the raw step report lands alone. Returns the report
+   *  tail; a rejection means "not saved" and is reported loudly, never swallowed. */
+  distillProcedure?: (name: string, steps: TeachStep[], taskId: string, outcome: string | null, signal?: AbortSignal) => Promise<string>;
+
+  /** Begin recording a demonstration. Resolves once the shell's recorder is ARMED —
+   *  fail-closed: if the tap can't arm, the teach task fails and this throws (never a
+   *  silently un-recorded "recording"). */
+  async startTeaching(name: string): Promise<TaskRow> {
+    if (!this.macBridge) throw new Error('Mac control is unavailable (no shell bridge wired).');
+    if (this.teaching) throw new Error(`already recording "${this.teaching.name}" — stop or cancel it first`);
+    this.assertMacFree();
+    const id = randomUUID().slice(0, 8);
+    const workspace = join(config.home.tasks, id);
+    mkdirSync(workspace, { recursive: true });
+    const now = Date.now();
+    const title = `Teaching: ${name}`;
+    const task: TaskRow = { id, kind: 'computer', title, status: 'running', workspace, created_at: now, updated_at: now };
+    this.store.createTask(task);
+    this.store.addEvent(id, 'task.created', { title, brief: `watch-me demonstration: ${name}`, kind: 'computer', teaching: true });
+    const abort = new AbortController();
+    this.aborts.set(id, abort);
+    // Abort = cancel (kill switch / voice cancel / dashboard): stop the shell recorder,
+    // discard the steps, close the row. finish() may already have run
+    // (cancelComputerTasks labels first) — it's idempotent.
+    abort.signal.addEventListener('abort', () => {
+      if (this.teaching?.taskId !== id) return;
+      this.clearTeaching();
+      this.finish(id, 'cancelled', { reason: 'teaching cancelled' });
+    }, { once: true });
+    const res = await this.macBridge.request({ kind: 'record_start' }, { signal: abort.signal });
+    if (!res.ok) {
+      this.finish(id, 'failed', { error: `recording could not start: ${res.output}` });
+      throw new Error(`recording could not start: ${res.output}`);
+    }
+    const timer = setTimeout(() => {
+      this.stopTeaching('time limit reached').catch((err: unknown) => {
+        this.store.addEvent(id, 'session.error', { message: `teach auto-stop: ${String(err)}` });
+      });
+    }, config.teach.maxDurationMs);
+    timer.unref();
+    this.teaching = { taskId: id, name, title, workspace, steps: [], timer };
+    this.macBridge.setTeaching(true, id); // id → the shell, so the teaching orb's click finishes it
+    return task;
+  }
+
+  /** One demonstration step streamed from the shell's record-mode tap. Untrusted-shaped
+   *  (hand-built Swift JSON) — sanitized here. Hitting the step cap stops the recording
+   *  LOUDLY (Law 5: never silently truncate a demonstration). */
+  teachEvent(raw: unknown) {
+    const t = this.teaching;
+    if (!t) return; // stale/late event after stop — wire noise, not a signal
+    const step = sanitizeTeachStep(raw);
+    if (!step) return;
+    // Steps DO land while stopping: the shell's final typing-burst flush arrives between
+    // the record_stop send and its ack — that window is the whole point of the ordering.
+    t.steps.push(step);
+    this.store.addEvent(t.taskId, 'teach.step', { step });
+    if (!t.stopping && t.steps.length >= config.teach.maxSteps) {
+      this.stopTeaching('step limit reached').catch((err: unknown) => {
+        this.store.addEvent(t.taskId, 'session.error', { message: `teach auto-stop: ${String(err)}` });
+      });
+    }
+  }
+
+  /** End the recording and land its report (announce path included). Ordering is
+   *  load-bearing: the shell flushes its pending typing burst BEFORE answering
+   *  record_stop, and both ride the same socket — so by the time the ack resolves,
+   *  every teach_event has already been ingested. Clear teaching only after. */
+  async stopTeaching(note?: string): Promise<{ name: string; stepCount: number }> {
+    const t = this.teaching;
+    if (!t) throw new Error('no recording is active');
+    if (t.stopping) throw new Error('the recording is already being stopped');
+    t.stopping = true;
+    clearTimeout(t.timer);
+    await this.macBridge?.request({ kind: 'record_stop' });
+    if (this.teaching !== t) throw new Error('the recording was cancelled');
+    this.teaching = null;
+    this.macBridge?.setTeaching(false);
+    // Capture the demonstration's OUTCOME: the final document (full text + styled ranges)
+    // of the app the user typed into. The compiler builds content from this observed RESULT
+    // — corrections, undos, and caret wandering are already reflected in it, which the
+    // keystroke stream can never reliably reconstruct. Best-effort: no readable document,
+    // no section (the compiler falls back to the step stream alone).
+    let outcome: string | null = null;
+    let outcomeNote = '';
+    // The demo's document lives in the app the user WORKED in — never the launcher he
+    // opened it with (a paste-only demo's last typed text is the Spotlight query, which
+    // pointed the capture at "Siri" and failed it). Prefer the last text step outside a
+    // launcher; fall back to the last step of ANY kind outside one (a paste or click in
+    // the real app still names it).
+    const LAUNCHERS = new Set(['Siri', 'Spotlight', 'Gumbo']); // Gumbo: the finish-teaching orb click records as a step
+    const lastText = [...t.steps].reverse().find((s) => (s.kind === 'type' || s.kind === 'select_text') && !LAUNCHERS.has(s.app))
+      ?? [...t.steps].reverse().find((s) => !LAUNCHERS.has(s.app));
+    if (lastText?.app && this.macBridge && SECRET_FIELD_RE.test(lastText.name ?? '')) {
+      // Never capture a credential-shaped field's document — the capture would persist
+      // its content into the memory table and the compile input.
+      outcomeNote = '\n(final-document capture skipped: the demonstrated field is credential-shaped)\n';
+    } else if (lastText?.app && this.macBridge) {
+      // Capture the DEMONSTRATED field (identifier/role from the last text step), not
+      // whatever text area happens to be largest — the capture's scope should match what
+      // the user actually showed, never widen past it.
+      const doc = await this.macBridge.request({
+        kind: 'document_state', app: lastText.app,
+        identifier: lastText.identifier ?? null, role: lastText.role ?? null,
+      });
+      if (doc.ok) {
+        outcome = doc.output;
+        outcomeNote = `\n${doc.output}\n`;
+      } else {
+        // Law 5 — no silent negatives: a failed capture means the compiler falls back to
+        // keystroke archaeology, which is materially worse. Say so in the report.
+        outcomeNote = `\n(final-document capture FAILED: ${doc.output} — content compiled from the keystroke stream alone)\n`;
+      }
+    }
+    const base = teachingReport(t.name, t.steps, note) + outcomeNote;
+    if (this.distillProcedure && t.steps.length > 0) {
+      // The task stays 'running' for the few seconds of compile; ONE announce then
+      // carries the step list AND the saved-procedure summary (or the loud not-saved
+      // note — the demonstration itself is never lost to a compile failure).
+      this.distillProcedure(t.name, t.steps, t.taskId, outcome, this.aborts.get(t.taskId)?.signal).then(
+        (summary) => this.finishWithReport(t.taskId, t.title, t.workspace, `${base}\n${summary}`),
+        (err: unknown) => this.finishWithReport(
+          t.taskId, t.title, t.workspace,
+          `${base}\nProcedure NOT saved — distillation failed: ${err instanceof Error ? err.message : String(err)}. ` +
+            'The demonstration above is preserved; teach it again, or say "save that as a procedure" after Gumbo does it once itself.',
+        ),
+      );
+    } else {
+      this.finishWithReport(t.taskId, t.title, t.workspace, base);
+    }
+    return { name: t.name, stepCount: t.steps.length };
+  }
+
+  /** Discard an active recording (voice "never mind", shell disconnect). No-op false
+   *  when nothing is recording. */
+  cancelTeaching(_reason: string): boolean {
+    const t = this.teaching;
+    if (!t) return false;
+    return this.cancel(t.taskId); // → abort → the listener clears state + finishes 'cancelled'
+  }
+
+  /** Tear down teaching state (cancel path). The shell-side stop is fire-and-forget
+   *  here — the daemon's state is authoritative, and a shell that missed the stop gets
+   *  mac_teach:false on its next hello (resync). */
+  private clearTeaching() {
+    const t = this.teaching;
+    if (!t) return;
+    clearTimeout(t.timer);
+    this.teaching = null;
+    this.macBridge?.setTeaching(false);
+    void this.macBridge?.request({ kind: 'record_stop' });
   }
 
   /** M6 kill switch: untagged HID input (the user) or the abort hotkey — stop every
@@ -439,6 +801,17 @@ export class TaskManager {
       return true;
     }
     return false;
+  }
+
+  /** True while any spawned task or teaching session is still in flight. The realtime session
+   *  stays alive across this so a completion announces through the live, OWNING path — not the
+   *  canned cold TTS, which can only read a fixed line and can't retry/fix a failure.
+   *  Bounded, never a permanent leak: finish() always deletes the abort. Note the asymmetry — a
+   *  mac task parked at needs_input (a handoff, or an unattended routine's long park) KEEPS its
+   *  abort in the map, so it holds the session open; a parked Claude session drops its abort and
+   *  does not. Both intended: a mac task is one screen the voice should stay present for. */
+  hasActiveTasks(): boolean {
+    return this.aborts.size > 0;
   }
 
   readReport(id: string): string | null {

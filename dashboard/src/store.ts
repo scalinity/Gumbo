@@ -51,6 +51,9 @@ interface GumboStore {
   schedules: ScheduleItem[];
   hosts: HostList;
   streamingText: string;
+  /** The same streamed reply as arrival-ordered chunks: each mounts once in the UI, so
+   *  the token fade-in plays per chunk and never replays on earlier text. */
+  streamingChunks: string[];
   selectedTaskId: string | null;
   // Usage view (fetched on open, not streamed — see ws.ts fetchUsage).
   view: 'feed' | 'usage';
@@ -106,6 +109,7 @@ export const useStore = create<GumboStore>((set) => ({
   schedules: [],
   hosts: { base: [], remembered: [] },
   streamingText: '',
+  streamingChunks: [],
   selectedTaskId: null,
   view: 'feed',
   usage: null,
@@ -134,6 +138,7 @@ export const useStore = create<GumboStore>((set) => ({
       let images = s.images;
       let schedules = s.schedules;
       let streamingText = s.streamingText;
+      let streamingChunks = s.streamingChunks;
       if (event.type === 'image.created') {
         // Filename only — the daemon keeps base64 off the event stream by contract.
         const file = String(event.payload?.file ?? '');
@@ -172,10 +177,12 @@ export const useStore = create<GumboStore>((set) => ({
         );
       } else if (event.type === 'transcript.assistant') {
         streamingText = '';
+        streamingChunks = [];
       }
-      return { events, tasks, images, schedules, streamingText };
+      return { events, tasks, images, schedules, streamingText, streamingChunks };
     }),
-  appendStreaming: (delta) => set((s) => ({ streamingText: s.streamingText + delta })),
+  appendStreaming: (delta) =>
+    set((s) => ({ streamingText: s.streamingText + delta, streamingChunks: [...s.streamingChunks, delta] })),
   selectTask: (id) => set({ selectedTaskId: id }),
   setView: (view) => set({ view }),
   setUsage: (usage, error = false) => set({ usage, usageError: error }),

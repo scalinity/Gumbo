@@ -196,19 +196,41 @@ enum ScreenVision {
         case .fail(let fail): return fail
         case .ok(let c): cap = c
         }
+        // The vision model (screen_look) reports coordinates in the PNG's pixel space, but
+        // click_point consumes GLOBAL POINTS — so a 2x Retina capture makes every returned
+        // coordinate ~2x too large and clicks sail off the window. Write the screenshot at
+        // POINT resolution so the model's coordinates ARE points. (OCR keeps the hi-res
+        // capture: Vision's boxes are normalized and calibrated in `ocr()`; only the
+        // model-eyeballed screenshot needs this.)
+        let image = downscaledToPoints(cap.image, rect: cap.rect, scale: cap.scale)
         let url = URL(fileURLWithPath: outPath)
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
             return AXResult.failure("script_error", "Could not create \(outPath).")
         }
-        CGImageDestinationAddImage(dest, cap.image, nil)
+        CGImageDestinationAddImage(dest, image, nil)
         guard CGImageDestinationFinalize(dest) else {
             return AXResult.failure("script_error", "Could not write \(outPath).")
         }
         return AXResult(
             ok: true,
-            output: "captured \(cap.label) at scale \(Int(cap.scale))x → \(outPath)",
+            output: "captured \(cap.label) at point resolution → \(outPath)",
             errorKind: nil, health: nil
         )
+    }
+
+    /// Render a captured CGImage down to POINT resolution (1 px per point) so a vision model's
+    /// pixel-space coordinates line up with the global POINTS that click_point consumes.
+    private static func downscaledToPoints(_ image: CGImage, rect: CGRect, scale: CGFloat) -> CGImage {
+        guard scale > 1 else { return image }
+        let w = Int(rect.width.rounded()), h = Int(rect.height.rounded())
+        guard w > 0, h > 0,
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return image }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage() ?? image
     }
 
     // MARK: plumbing

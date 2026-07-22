@@ -162,6 +162,23 @@ export class BrowserClient {
     return this.refs.get(ref) ?? null;
   }
 
+  /** M8 replay resolution: the ref whose role+name match a taught target — resolved over
+   *  the SAME refs map the submit gate reads, never by parsing snapshot text. Exact name
+   *  first, then containment; ambiguity is a null (the replay engine treats it as drift
+   *  and bails — it never guesses between two matches). */
+  findRef(role: string | null, name: string | null): string | null {
+    const norm = (s: string | null | undefined) => (s ?? '').trim().toLowerCase();
+    const wantRole = norm(role);
+    const wantName = norm(name);
+    if (!wantName) return null;
+    const pool = [...this.refs.entries()].filter(([, info]) => !wantRole || norm(info.role) === wantRole);
+    const exact = pool.filter(([, info]) => norm(info.name) === wantName);
+    if (exact.length === 1) return exact[0][0];
+    if (exact.length > 1) return null;
+    const contains = pool.filter(([, info]) => norm(info.name).includes(wantName));
+    return contains.length === 1 ? contains[0][0] : null;
+  }
+
   /** The enclosing <form>'s method for a ref (or the focused element with ref null) —
    *  input to the POST-form submit gate. null = no form / unreadable (auto direction is
    *  then decided by the lexicon alone). */

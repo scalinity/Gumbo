@@ -11,6 +11,10 @@ final class WSClient: NSObject, URLSessionWebSocketDelegate {
     /// to re-arm daemon-side state that died with a restart (M5.5: the image viewer's
     /// context), mirroring how the daemon re-syncs bubbles on hello (review 🟡).
     var onConnect: (() -> Void)?
+    /// Fires (on main) once per socket drop, before the reconnect attempt. M8: an active
+    /// recording has nowhere to stream — the recorder must stop LOUDLY, never buffer
+    /// into a dead socket.
+    var onDisconnect: (() -> Void)?
 
     private let url = URL(string: "ws://127.0.0.1:8737/ws")!
     private var session: URLSession?
@@ -65,6 +69,7 @@ final class WSClient: NSObject, URLSessionWebSocketDelegate {
         closed = true
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        DispatchQueue.main.async { self.onDisconnect?() } // once per drop (the guard above)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.connect()
         }

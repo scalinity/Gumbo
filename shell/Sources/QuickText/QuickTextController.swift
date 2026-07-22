@@ -219,7 +219,25 @@ private final class SendingTextView: NSTextView {
             onCancel?()
             return
         }
-        super.keyDown(with: event) // ⇧⏎ newline, typing, ⌘V paste
+        super.keyDown(with: event) // ⇧⏎ newline, typing
+    }
+
+    // The .nonactivatingPanel keeps the app INACTIVE while this view is key, and main-menu
+    // key-equivalent dispatch is unreliable in that state — the standard editing chords
+    // never arrived (⌘V did nothing). Handle them directly; keyDown never sees
+    // command-chords, so this is the only reliable hook.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "v": paste(nil); return true
+            case "c": copy(nil); return true
+            case "x": cut(nil); return true
+            case "a": selectAll(nil); return true
+            case "z": undoManager?.undo(); return true
+            default: break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     // Grab first responder the moment we're placed in the (already-key) window — a deterministic

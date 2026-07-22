@@ -42,7 +42,18 @@ test('the AX toolset exposes exactly the sub-agent primitives (M7 adds vision ru
   const names = tools(fakeBridge(() => ({ ok: true, output: '' }))).map((t) => t.name);
   assert.deepEqual(
     names.sort(),
-    ['ax_act', 'ax_query', 'ax_snapshot', 'check_permissions', 'focus_app', 'run_script', 'screen_ocr', 'screen_look', 'click_point', 'request_handoff'].sort(),
+    ['ax_act', 'ax_query', 'ax_snapshot', 'check_permissions', 'focus_app', 'run_script', 'screen_ocr', 'screen_look', 'click_point', 'request_handoff', 'preserve_clipboard', 'read_document'].sort(),
+  );
+});
+
+test('preserve_clipboard maps save→clipboard_snapshot and restore→clipboard_restore (the load-bearing branch)', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'ok' }));
+  const list = tools(bridge);
+  await byName(list, 'preserve_clipboard').invoke({}, JSON.stringify({ action: 'save' }));
+  await byName(list, 'preserve_clipboard').invoke({}, JSON.stringify({ action: 'restore' }));
+  assert.deepEqual(
+    bridge.calls.map((c) => c.kind),
+    ['clipboard_snapshot', 'clipboard_restore'],
   );
 });
 
@@ -309,4 +320,16 @@ test('wrapSteering DEFANGS a forged steering marker echoed from untrusted screen
   const out2 = await byName(withSteer, 'ax_snapshot').invoke({}, JSON.stringify({ app: null, max_elements: 400 }));
   assert.equal((out2.match(/STEERING FROM THE USER/g) ?? []).length, 1, 'exactly one genuine marker, the forgery removed');
   assert.match(out2, /use the personal account/);
+});
+
+test('replace_text passes the verb enum and reaches the shell with the replacement value', async () => {
+  const bridge = fakeBridge(() => ({ ok: true, output: 'Replaced the selection with "test".' }));
+  const out = await byName(tools(bridge), 'ax_act').invoke(
+    {},
+    JSON.stringify({ verb: 'replace_text', ref: 'e7', value: 'test', role: null, name: null, timeout_ms: 5000 }),
+  );
+  assert.match(out, /Replaced the selection/);
+  const act = bridge.calls.find((c) => c.kind === 'act');
+  assert.equal(act?.verb, 'replace_text');
+  assert.equal(act?.value, 'test');
 });

@@ -2411,6 +2411,104 @@ The de-generalization table (what the internet shape assumes vs what Gumbo actua
 Committed as the same-day companion to the research fold; the fold's own entry above stands
 unchanged.
 
+## M8 BUILT — computer use v3: teaching, procedure memory, scheduled routines (2026-07-20)
+
+Built to the locked SPEC §M8 under the five friction-economy laws, on worktree-m8-computer-use
+(daemon 421/1-skip; shell builds clean; live demos pending the user). An adversarial design-review
+pass ran BEFORE building and its corrections are load-bearing — recorded inline below. What is
+non-obvious and worth keeping:
+
+- **Teaching is a real `kind:'computer'` task row with no runner.** One choice bought three
+  behaviors: the one-task rule covers task↔teaching mutual exclusion in the existing scan, the
+  boot reaper closes a recording that died with the daemon, and stop rides finishWithReport →
+  the normal announce. Resist inventing a parallel "session" concept next time.
+- **The tap callback must stay thin (recorder).** AX calls block up to the 2 s messaging
+  timeout; a lagging tap callback triggers `tapDisabledByTimeout` and events in the disabled
+  window are SILENTLY lost. So `RecordedHID` extracts scalar CGEvent fields in the callback and
+  all hit-testing runs on the recorder's serial queue. A vanished element degrades to a
+  low-fidelity step, never an error.
+- **`flagsChanged` stays exempt in record mode too**: keyDown events carry chord flags (⌘S is
+  recoverable without tapping modifiers), and the exemption is what lets the user hold ⌃⌥ to say
+  "done" mid-demo without polluting the recording.
+- **Flush-before-ack ordering is load-bearing:** the shell flushes its pending typing burst
+  synchronously BEFORE answering `record_stop`, both ride one socket (FIFO), so
+  `manager.stopTeaching` awaits the ack and only THEN closes the session. The `stopping` guard
+  must not drop steps arriving in that window — that window is the whole point (a test pins it).
+- **Secrets never leave the shell.** Sensitivity is decided at burst START (focused element's
+  AXSecureTextField subrole OR the credential-label lexicon) before any content exists to
+  mishandle; secure bursts emit a content-free `secure_input`. The daemon re-applies the same
+  rule at sanitize (belt) and the compiler's deterministic post-pass maps it to a `handoff`
+  step — three layers, the shell one is the real boundary.
+- **Memory-table rebuild order (migration):** external-content FTS5 means the trigger drops
+  FIRST (`ALTER TABLE … RENAME` re-parses trigger bodies against the already-dropped FTS
+  table), copy with an explicit column list, `INSERT INTO memory_fts(memory_fts)
+  VALUES('rebuild')` at the end; explicit-id copy re-seeds AUTOINCREMENT. The `version` column
+  was added IN the same rebuild (free) — procedures version insert-only (update = version+1)
+  because the FTS sync trigger is AFTER INSERT only.
+- **Replay resolves through STRUCTURED seams, never snapshot text.** `AXNode.line()` doesn't
+  escape quotes and clips at 80 chars — a parser breaks on real labels, and screen-text values
+  choosing the acted-on element is an injection surface. Hence the `{kind:'resolve'}` wire
+  action (shell greps lastNodes, returns ONLY a ref; AMBIGUITY IS NOT-FOUND — never guess
+  between matches) and `BrowserClient.findRef` over the same refs map the submit gate reads.
+- **The engine never parses tool-result strings either**: mac/browser tools emit a structured
+  `ToolObservation` (ok/errorKind/noChange/declined) side-channel — the wire-flag `no_change`
+  lesson applied to the replay engine's decisions. Declined-gate ≠ drift: it ends the replay
+  cleanly ('stopped'); the fallback loop would hit the same denial.
+- **`wrapSteering` MUTATES invoke** — the replay engine must run on the unwrapped toolset
+  (wrap after), and queued steering itself triggers fallback so only the loop's wrapped tools
+  ever consume it (steering must never drain into a result nobody reads).
+- **The park bracket is the adversarial review's best catch:** an hour-long stand-down
+  (`setHandoff(true)` for the pause window) would suppress the kill switch while the user uses
+  his Mac normally, then the timeout-deny resumes driving under his hands. A parked routine
+  drops the mac_task refcount instead (tap disarmed — the task isn't driving), re-arms on
+  answer, and `KillSwitch.arm()` now starts the 1.5 s grace (a fresh arm is always adjacent to
+  some interaction of the user's — sharpest case: re-arm the instant he clicks Approve).
+- **ConfirmBridge.resync + waitForShell:** panel state dies with the shell; at 30 s windows a
+  relaunch was a non-event, at pause scale a routine would park invisibly until auto-deny. The
+  pending map now keeps the wire frame + deadline, re-presents with the REMAINING window on
+  hello, and `waitForShell` registers-without-broadcasting when no shell is connected (the
+  park), while deny-on-timeout stands untouched.
+- **EventKit exclusion for routines (review catch):** every re-armed occurrence is a fresh
+  pending row with a null twin id — `resyncEventKit` would mint one Reminders.app entry per
+  occurrence on every hello, forever. Routines are daemon-only firing by design (late on wake,
+  the honest M5 stance, stated in the tool description).
+- **Chain-of-rows recurrence, not in-place fire_at:** mutating in place leaves the row pending
+  across delivery (breaks mark-fired-before-deliver at-most-once — crash mid-delivery would
+  re-fire). Next-occurrence INSERT rides the same transaction; next fire computes from NOW (no
+  catch-up storms); cancelling the pending occurrence ends the series because chains only
+  advance at fire time.
+- **Away-items watermark reads the marker's PAYLOAD (`upTo`), not its seq** — events landing
+  between instruction-build and session-connect would otherwise vanish; consumption is written
+  only once the session actually OPENS (a failed connect leaves items for the next attempt).
+- **Registry cost:** M8 added THREE realtime tools (teach_procedure with start/stop/cancel/
+  save_last_run as actions, run_procedure, schedule_routine) — registry now 23 against SPEC
+  §10's standing ≤~10 risk. Routing held in unit tests; watch it in the live demos.
+- **Suite/idioms:** the unattended end-to-end test runs the WHOLE pipeline through the real
+  tool invokes (fire → queue → replay → gated run_script → parked escalate → done) — the M6
+  "test through the tool" lesson at pipeline scale. `config.teach`/`config.routines` values are
+  mutated+restored in tests (no injectable-config idiom exists; keep the restore in finally).
+
+### M8 review flow — /review-2 → /address → /review-2 on the fix delta (2026-07-20)
+
+- First pass (2 Fable-run Opus agents): 1 🔴 + 5 🟡 + 4 🔵, all addressed. The 🔴 was
+  CORROBORATED and genuine: the recorder froze secure-field sensitivity at burst START, so a
+  programmatic mid-burst focus move (auto-advancing card→CVV forms) leaked content under the
+  old field's label — past BOTH the shell gate and the daemon belt. The debugger's other
+  standout: self-heal recompiled from a trace missing the deterministically-replayed prefix
+  (engine invokes bypass the Agent stream), so a healed procedure LOST its login/navigation
+  steps — fixed by having the engine write the same tool.call/tool.result events the runner
+  streams (dashboard replay visibility came free).
+- Second pass on the fix delta re-earned the discipline's keep A THIRD time: both agents
+  independently found that the 🔴 fix OVER-corrected — treating a transiently-nil AX focus
+  read as "secure" fragmented ordinary sentences and minted a phantom secure_input → bogus
+  handoff on replay. Refined: nil = UNCERTAIN (drop that keystroke's content, keep the burst;
+  fail closed on content, never on burst identity); only a RESOLVED secure field re-bursts.
+  Residual on record: an app whose focus NEVER resolves records no typing at all (honest gap,
+  never a leak). The recurring lesson, now three-for-three: the address pass's own fix is
+  where the next bug lives — always re-review the delta.
+- Final: daemon 426/1-skip, shell builds. Merge gate: the user's live demos
+  (teach → replay → schedule → unattended pause).
+
 ## Dashboard polish session — first-open scroll, seamless titlebar, notch re-focus (2026-07-21)
 
 Small live session with the user on main (dev servers + freshly rebuilt shell). Three UI fixes,
@@ -2699,3 +2797,232 @@ implied-but-unscheduled items, not missing machinery. the user approved applying
   shared recorder→http; deliberate success-only seams (runner abort, TTS stream error) now say
   so in a comment. Suite 373→384/0. Still live-check items: the modelUsage-fallback interplay
   on resume (verification #7) and the transport-seam branches.
+### M8 replay precondition resilience — auto-launch a closed target app (2026-07-21)
+
+the user's demo-prep question: a procedure shouldn't fail just because the world isn't in the exact
+state it was taught in (e.g. Notes was open at teach time, closed at replay time). The one broad
+DETERMINISTIC precondition gap was the target app not running: `ensureApp` only fronted a running
+app (focus_app → activate → Foreground.bringToFront is running-apps-only) and otherwise drifted the
+whole replay into the fallback loop on step 1 — functional but noisy, and it undercut the "look how
+clean this is" value. Fix: `ensureApp` now launches the app when focus fails — `run_script`
+osascript `tell application "X" to activate` (launches + fronts + opens a default window; one line,
+gate-auto) then polls focus_app for readiness (a cold app takes a beat) before proceeding. Scoped
+HARD to `procedure.apps`: never launch an arbitrary name a drifted target could smuggle, and the
+unattended app-boundary stays honest. The launch is recorded in the tool.call trace so a later
+self-heal keeps the precondition step. The full precondition taxonomy, recorded so the boundary is
+explicit: app-not-running → now self-repaired; app-running-but-not-frontmost → focus_app (already);
+browser page not open → compiler emits a goto-first step + BrowserClient.open adopts/creates a page
+(already); login required / app in a genuinely different sub-state → correctly DEGRADES to the
+intelligent fallback loop (not a failure — that's what the loop is for, and self-heal captures the
+improved path). So a faithful replay never hard-fails on an unmet precondition: it either
+self-repairs deterministically or degrades to intelligence. Daemon-only; 429/1-skip (+2 tests:
+closed-app self-launch stays deterministic, unknown app never launched → drifts).
+
+### M8 procedure adaptation — run a learned procedure as a TEMPLATE for a variation (2026-07-21)
+
+the user's ask: "do the packing list, but for a picnic instead" should use the learned procedure as a
+guide and adapt it, not reproduce the original. The capability already existed (the drift-fallback
+runs the intelligent loop seeded with the procedure skeleton); what was missing was ROUTING — a
+faithful `run_procedure` runs the DETERMINISTIC replay first, and when the UI cooperates that
+succeeds and reproduces exactly what was taught, so a variation never reaches the template path.
+Fix is the minimal routing signal, no engine change: `run_procedure` gains an optional `adapt`
+string. When present, it skips deterministic replay and spawns a NORMAL intelligent mac task
+(no replay opt → no self-heal of the original) whose brief is `templateBrief(procedure, adapt,
+notes)` — the demonstrated steps guide HOW (apps, sequence, layout), the adaptation changes WHAT.
+When `adapt` is null/blank it's the faithful fast path exactly as before. `notes` keeps its old
+meaning (run-specific VALUES of the same task → parameter-fill); `adapt` is a CHANGE to the task —
+the tool description draws that line for the voice model (the router). Edges covered + tested:
+blank/whitespace adapt = faithful; adapt + notes both fold into the brief; the corrupt-body and
+not-found refusals run BEFORE the adapt branch so neither path ever reaches the engine raw; the
+adapted task is titled "<name> (adapted)" (distinct in the task list, and if the user later says
+"save that as a procedure" it's a normal computer task — not a procedure.replay — so save_last_run
+picks it up as its own new procedure, which is the right emergent behavior). `adapt` is
+required-nullable like `notes` (the proven M5 shape); one adapt=null added to two pre-existing tests.
+Daemon-only; 431/1-skip (+2 tests: adapt routing all-edges, templateBrief HOW-vs-WHAT).
+
+### M8 live-demo failure sweep — app resolution, text fidelity, verification honesty, tenacity (2026-07-21)
+
+the user's demos surfaced five real gaps (logs referenced: mac-audit.jsonl, tasks 31307212/f1eee099):
+- **App-open brittleness.** "open ChatGPT" → the model opened chatgpt.com in Chrome, then
+  `tell application "ChatGPT" to activate` → script_error (the app is "ChatGPT Classic"). Fix: fuzzy
+  installed-app resolution — `Foreground.installedApp(named:)` (exact → prefix → shortest substring
+  over the standard app dirs) + `openOrFront` (front if running, else launch the resolved app via
+  openApplication + raise on the completion). `{kind:'activate'}` uses it, so focus_app now LAUNCHES
+  and resolves close names. The HOT lane bypassed all this (raw osascript), so `executeMacDo` now
+  routes a bare app-open idiom (`tell application "X" to activate` / `open -a "X"`, no URL) to the
+  same resolver (`pureAppOpenTarget`; a non-match runs verbatim — no regression). mac_do description:
+  prefer the installed APP over a website when the user names an app.
+- **set_value flattened formatting.** The replay bulk-wrote the whole note via `set_value` → title +
+  dash-bullets collapsed into one all-bold block (image). set_value is an AXValue write; the app's
+  live formatting only fires on real keystrokes. Compiler now: use `type` for typed content, NEVER
+  set_value; keep line breaks as separate `key`"return" steps; don't merge multi-line entry (the
+  returns ARE the structure).
+- **Spotlight → "activate Siri" garbage.** ⌘Space app-opens compiled to activating Siri. Compiler now
+  compiles any Spotlight/Launchpad/Dock/⌘Tab open to ONE clean `activate <app>` step naming the app
+  opened, never the launcher.
+- **FALSE SUCCESS (the worst).** A `type` that landed nowhere returned ok; the model then reported it
+  "created the note with the picnic items" — note was EMPTY. Loop instructions now: typing that
+  returns "(no observable change)" did NOT land; and REPORTING DONE IS A CLAIM — verify the intended
+  content is actually on screen (fresh snapshot/OCR) before claiming success; a truthful failure beats
+  a false success.
+- **Low tenacity.** The agent quit at the first failure instead of trying alternatives (the user: "it
+  needs to increase in tenacity"; vision-capture is one rung, not the whole ladder). New TENACITY
+  section: a failed attempt = a NEW approach, not a stop; ladders for open-app (focus_app → osascript
+  activate → open -a → Spotlight), enter-text (focus+click-into-body → AppleScript `make new note with
+  body` for scriptable apps → set_value last), and click (press → key/menu → vision). Only stop at
+  genuine exhaustion, a gate, or the budget. AppleScript-for-scriptable-apps is the key reliability
+  rung for the Notes case.
+Daemon hot-reloads; shell rebuilt. 432/1-skip (+1 app-open routing test). Honest residual: reliably
+typing into Notes' rich body is a hard AX target — the AppleScript rung + verify-before-done are the
+mitigation, but rich-text apps remain the stress case.
+
+### M8 formatting-replay forensics — the actuator tiers of macOS 26 SwiftUI surfaces (2026-07-21)
+
+The packing-list color exam (highlight colors on selected words) failed three runs in a row; a
+live-probe session (scratch Swift AX probes against Notes, terminal already AX-trusted) mapped WHY
+and produced the working ladder. The findings generalize; record them before they're re-derived
+the hard way:
+
+- **Three actuator tiers, measured.** (1) `AXPress` fires reliably on ordinary buttons AND menu-BAR
+  items (pressing `Format ▸ Font ▸ Highlight` applied instantly, no menu visually open). (2)
+  pid-targeted synthetic events (SyntheticInput's default) drive typing and keyboard selection fine
+  but NEVER reach menu tracking or SwiftUI popovers — a pid click on a toolbar button doesn't even
+  open its popover. (3) Global HID events (nil-pid post, the click_point path) are the ONLY input
+  SwiftUI popover controls and open tracking menus respond to.
+- **`AXEnabled` on SwiftUI popover controls is a permanent lie.** Notes' Format popover controls
+  read `(disabled)` ALWAYS — while demonstrably tracking the live selection (Bold flipped to
+  value=1 under a ⌘A) and while real clicks on them work. An `element_disabled` refusal added on
+  the strength of that attribute blocked the one working path and CAUSED a drift; reverted same
+  night. The disabled read is now the escalation TRIGGER instead: performPress global-clicks the
+  element's fresh AX frame when it reads disabled or sits inside an open `AXMenu`.
+- **Context menus opened by `AXShowMenu` are AX-readable but fully deaf**: AXPress, AXPick,
+  pid-keys, even global clicks at item frames all no-op (the menu may never visually open). Walk
+  them for structure, never for actuation. The menu BAR is the reliable menu surface (`menu_path`
+  verb, targetless form).
+- **Programmatic selection is engine-real but event-invisible.** `AXSelectedTextRange` writes land
+  in the text engine (menu-bar actions apply to the range) but fire no input events, so
+  event-driven UI state never hears about them. select_text now anchors the caret via AX and
+  extends with real shift+right keystrokes — readable back AND user-shaped.
+- **Formatting is invisible to value diffs; `AXAttributedStringForRange` → `AXStyleName` is the
+  verify channel** ("Heading, Pink highlight, Contains paragraphs"). menu_path echoes it in its
+  result so a color application is checkable without vision.
+- **Verified end-to-end** on the failed demo's note: keyboard-built selection → AXPress Format →
+  global click on the phantom-disabled color dot → global click on the Pink `AXMenuItem` (found
+  because snapshots now also walk app-level `AXMenu` children) → readback "Pink highlight".
+- Same session: step-0 cold-launch snapshot retry (focus_app answers ok mid-launch; the comment
+  promised slack the code didn't have), `activate`/selector-less steps satisfied by ensureApp
+  (resolve used to hard-fail them), a role-unique resolve rung (recorded `Note[id=<uuid>]`
+  identifiers can never match a fresh note), type-collapses-stale-selection unless straight after
+  select_text (a leftover selection let a `type` DELETE the selected entry), recorder emits
+  discrete `delete` key steps when backspacing already-flushed text (a swallowed backspace shipped
+  a deleted "d" into the compile), compiler collapses consecutive re-selections and drops
+  delete-corrected characters, and `MaxTurnsExceededError` ends as an honest partial report
+  instead of a raw task failure.
+
+### M8 replay architecture — container state and content become engine-owned (2026-07-21, late)
+
+Four demo-debug rounds on the formatting exam kept producing new micro-rules that each fixed one
+run and broke the next (popover "stays open" → wrong; "closes on pick" → also wrong; both directions
+observed live). The convergent lesson, folded into the design as two GENERAL mechanisms:
+
+- **Container visibility is a runtime precondition, never a compile-time prediction.** Whether a
+  recorded "open" click is needed again at replay depends on state that structurally differs
+  between demonstration and replay (hand clicks into a note dismiss a popover; programmatic
+  selections don't; a swatch pick sometimes closes it). The engine's resolve ladder gained a
+  final rung: target won't resolve → re-execute the nearest preceding Button-click step (the
+  gesture that revealed the target in the demo) → retry. Works for any disclosure UI; also makes
+  the engine tolerant of BOTH compile shapes (redundant re-open clicks self-correct, missing
+  ones get re-established). The two speculative popover compile rules from earlier the same
+  night were removed as wrong-signed.
+- **Typed content compiles from the demonstration's OUTCOME, not from keystroke archaeology.**
+  At teach-stop the daemon captures the app's dominant text document (new `document_state` wire
+  read: full text + styled ranges via AXAttributedStringForRange — style names, underline, font
+  bold/italic traits) and the compiler treats it as ground truth: type all lines in order first,
+  then one position-independent select_text+format sequence per styled range. Corrections, undos,
+  and caret wandering are already reflected in the final text — the returns+cmd+z+arrow dance
+  that previously compiled into mid-line text insertions simply stops mattering. Gesture steps
+  stay authoritative for app-level actions only (open, New Note, button clicks).
+- Same session: teaching completions announce as one confident save confirmation (summarizing
+  the raw step report invited "this looks fiddly, the replay may fail" forecasts).
+
+### M8 the loop closes — structure capture + acceptance diff + replace_text (2026-07-21, night's end)
+
+The near-perfect run missed only the dashed list and one bold — and the miss was SILENT. Root
+principle (now load-bearing): **the system reproduces only what its observation channel can
+represent, and only verifies what it re-reads.** Three additions complete the teach→replay loop:
+
+- `document_state` reads paragraph structure (`AXListItemPrefix`/`Level` → "dashed list item"
+  etc.) — a list's dash is formatting, not characters; the plain text reads back without it, so
+  without these keys the compiler literally cannot know a list existed.
+- Structure applies via the menu bar ("Format > Dashed List" over the selected lines), never by
+  typing "- " and hoping the auto-format conversion fires — it is context-dependent (an earlier
+  run turned "--" into an em-dash instead).
+- Procedures carry their captured outcome as an ACCEPTANCE TEST (`expect`, attached code-side):
+  after the last step the engine re-captures and diffs deterministically — text line-by-line
+  first, styles per-character (immune to attributed-run fragmentation), "Contains paragraphs"/
+  "Expanded" window noise normalized away. Divergences ride into the fallback as named deltas
+  with the fix recipe; `replace_text` (AXSelectedText write, zero keystrokes) repairs text/case
+  without re-triggering auto-capitalize — the "test"→"Test" class is unfixable by typing.
+- Also that session: the outcome had silently never reached the compiler (a 3-arg arrow on a
+  4-arg seam — TS allows it); select_text now verifies by RANGE (AXSelectedText reads empty on
+  unfocused fields → false "did not take" whenever a popover held focus) with an Escape rung.
+
+### M8 the AX channel can lie about itself — real-input selections + freshness discipline (2026-07-22, ~2 AM)
+
+Two replays failed under the previous fixes; the trace forensics found the causes OUTSIDE the
+places the fixes had looked, and both lessons generalize:
+
+- **A dev-loop process failure, not a code failure, sank run 1**: the value-matched paste
+  attach was correct on disk but the tsx-watch child had spawned the SAME SECOND as the final
+  save and loaded the pre-fix module — the 01:18 teach distilled under stale code, positional-
+  matched the styled paste to the earlier rtf-less recording, and the replay pasted plain text
+  (literal "- " dashes → every later select missed → drift). Rule going forward: after daemon
+  edits, verify child lstart vs newest RUNTIME source mtime (test files are not watched — tsx
+  restarts only on imported-graph changes), and when mtime==lstart to the second, prove content
+  identity instead (clean tree vs HEAD). The recording's clipboard payload is unrecoverable
+  (memory-only steps; pasteboard since overwritten) — that teach needs one re-demonstration.
+- **Run 2's mis-painted highlights survived every check because the anchor verification read
+  the same AX channel it wrote.** setCaretVerified wrote the caret and read it back — but an
+  app's AX layer can SHADOW range writes (reads reflect the write while the app's event-real
+  caret never moved), so shift+rights extended a wrong selection, and the final range read
+  still satisfied `tookRange`. Notes painted orange on one character ("C") and dropped mint
+  entirely. Fix: rung 1 of performSelectText is now a REAL click + shift+click at the range's
+  live character bounds (kAXBoundsForRange, read at act time — the no-recorded-coordinates
+  rule is about brittle recorded positions, not runtime-derived ones); the identity-gated
+  hit-test must climb back to the target element (same-pid is not enough — the app's OWN
+  popover over the text would swallow the click). The AX write is a LAST resort reported
+  structurally (`select_how` on the wire, the no_change idiom) and the engine drifts on it
+  unless the next step is replace_text/type (text edits ride the same AX channel; only
+  format actions target the event-real selection).
+- **diffOutcome's "text first, then styles" early-return hid the style deltas** — the fallback
+  was told about a dropped space and nothing else, "fixed" it, and the wrong highlights
+  shipped as done. Styles now compare per-character on every line whose text matches (each
+  side at its own offsets), and a diff-triggered fallback is RE-VERIFIED after it finishes
+  (verifyAgainstExpect appends the honest end state to the report — the fallback's word is
+  never the last word).
+- **The 88 s "hung" fallback was a stalled model call**: the Agents-SDK default client waits
+  ~10 min per request. setDefaultOpenAIClient now carries config.models.requestTimeoutMs
+  (120 s) + retries; get_task_status states the age of the newest event so "is it stuck?"
+  gets an honest answer (the voice model had read busy-LOOKING recent events as progress).
+- Tooling gotcha that cost a false alarm: Xcode debug builds are a 59 KB loader stub + the
+  real code in Contents/MacOS/Gumbo.debug.dylib, and BSD strings/grep miss Swift literals in
+  Mach-O sections — verify build freshness by byte-searching the debug dylib.
+
+### M8 close-out — all four live-demo gates passed (2026-07-22)
+
+- Gates verified live: watch-me teach → deterministic replay (typed and styled-paste variants,
+  acceptance diff green with zero divergences on the paste run); secret redaction (credential
+  entry recorded content-free, compiled to handoff steps, both handoffs re-fired and resumed on
+  replay); save-from-run (recency + ambiguity guards, source task named in the confirmation);
+  scheduled routines (first-Monday recurrence parse, near-now unattended fire with completion
+  announce, series cancel).
+- The demo-driven hardening arcs are documented in the dated 2026-07-22 entries above: real-input
+  selections with mechanism reporting, acceptance-diff completeness + post-fallback re-verify,
+  completion-state recognition, Format-popover styling, compiler mechanism fidelity,
+  case-insensitive selection fallback, read_document verification, sub-agent request timeouts,
+  required task_type routing, and the deep-research lane.
+- All branch commit messages were rewritten pre-merge into the impersonal technical voice
+  (message-only filter-branch passes; every tree verified unchanged).
+- Known post-merge operational note: debug rebuilds of the shell drop the Apple-events
+  (Automation) TCC grant — re-grant per app after a rebuild; a stable code-signing identity is
+  the durable fix and belongs to post-M8 work.

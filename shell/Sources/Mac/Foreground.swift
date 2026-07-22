@@ -32,6 +32,49 @@ enum Foreground {
         return true
     }
 
+    /// An INSTALLED app whose name best matches a spoken/approximate query — exact, then
+    /// prefix, then the SHORTEST substring match (closest fit). Scans the standard app
+    /// dirs. This is why "ChatGPT" resolves to the installed "ChatGPT Classic": raw
+    /// `tell application "ChatGPT"` / `open -a ChatGPT` need a near-exact name, but the user
+    /// says the everyday name.
+    static func installedApp(named query: String) -> URL? {
+        let fm = FileManager.default
+        let home = NSHomeDirectory()
+        let dirs = ["/Applications", "/Applications/Utilities", "/System/Applications", "/System/Applications/Utilities", "\(home)/Applications"]
+        var candidates: [(name: String, url: URL)] = []
+        for dir in dirs {
+            guard let items = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for item in items where item.hasSuffix(".app") {
+                candidates.append(((item as NSString).deletingPathExtension, URL(fileURLWithPath: dir).appendingPathComponent(item)))
+            }
+        }
+        let q = query.lowercased()
+        return candidates.first { $0.name.lowercased() == q }?.url
+            ?? candidates.first { $0.name.lowercased().hasPrefix(q) }?.url
+            ?? candidates.sorted { $0.name.count < $1.name.count }.first { $0.name.lowercased().contains(q) }?.url
+    }
+
+    /// Open OR focus an app by (possibly approximate) name: front it if already running,
+    /// else launch the best-matching installed app and front it once it's up. Returns the
+    /// RESOLVED app name (so the model learns what actually opened), or nil if nothing —
+    /// running or installed — matches. Launch is async (openApplication's completion
+    /// raises it), so this returns immediately and never blocks the main thread.
+    static func openOrFront(app name: String) -> String? {
+        if let proc = runningApp(named: name) {
+            raise(proc)
+            return proc.localizedName ?? name
+        }
+        guard let url = installedApp(named: name) else { return nil }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true // ask for foreground on launch…
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { app, _ in
+            // …and raise it ourselves when it's up (the user's Mac doesn't auto-foreground
+            // launched apps — the reason this whole file exists).
+            if let app { DispatchQueue.main.async { raise(app) } }
+        }
+        return url.deletingPathExtension().lastPathComponent
+    }
+
     /// Raise an already-resolved running app.
     static func raise(_ proc: NSRunningApplication) {
         // Rung 1 — Cocoa activation. On Sonoma+ a background app's activate() is often

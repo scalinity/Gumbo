@@ -15,6 +15,8 @@ import { applyFileContext, FileEditContext } from './files/context.ts';
 import { acceptFileEditRequest } from './files/edit.ts';
 import { shutdownBrowser } from './browser/client.ts';
 import { rememberHost } from './mac/hosts.ts';
+import { createProcedureService } from './agents/procedures.ts';
+import { ensureDashboardDevServer } from './dashboard-dev.ts';
 import { Orchestrator } from './realtime/session.ts';
 import { initUsageRecorder } from './usage/recorder.ts';
 
@@ -50,7 +52,7 @@ confirms.onRemember = rememberHost;
 const macBridge = new MacBridge(hub);
 const manager = new TaskManager(
   store,
-  (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal, req.timeoutMs, undefined, req.rememberHost, req.confirmLabel, req.denyLabel),
+  (taskId, taskTitle, req, signal) => confirms.request(taskId, taskTitle, req.title, req.detail, signal, req.timeoutMs, undefined, req.rememberHost, req.confirmLabel, req.denyLabel, req.waitForShell ? { waitForShell: true } : undefined),
   // Plan approval: a longer notch window. The one-line detail is a peek; the FULL plan
   // rides as `body`, which the shell renders behind a chevron as a scrollable view —
   // the user approves what he can actually read (live gap 2026-07-16: the prompt showed
@@ -72,14 +74,37 @@ const scheduler = new Scheduler(store, hub);
 const imageContext = new ImageEditContext();
 // The shell file viewer's open document — what an edit_file voice edit targets (2026-07-16).
 const fileContext = new FileEditContext();
-const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, fileContext, macBridge, confirms);
-scheduler.onFire = (row) =>
-  orchestrator.speakProactively(
+// M8 procedure memory: teaching stops distill through here (ONE announce carries the
+// result), and "save that as a procedure" distills a finished run's trace.
+const procedures = createProcedureService(store);
+manager.distillProcedure = (name, steps, taskId, outcome, signal) => procedures.distillTeaching(name, steps, taskId, outcome, signal);
+// Self-heal: a replay that drifted but whose fallback run succeeded becomes version+1.
+manager.healProcedure = (name, taskId) => procedures.saveFromTask(taskId, name, 'healed');
+const orchestrator = new Orchestrator(store, hub, manager, scheduler, imageContext, fileContext, macBridge, confirms, procedures);
+scheduler.onFire = (row) => {
+  // M8: routine rows spawn a computer task (queued/skipped-with-notice when the Mac is
+  // busy) — NEVER read aloud as a reminder (their text is a JSON payload).
+  if (row.kind === 'routine') {
+    manager.runRoutine(row);
+    return;
+  }
+  return orchestrator.speakProactively(
     // Cold TTS speaks the raw text verbatim; the LIVE instruction echo is defanged
     // (review 🔵 — the M3 neutralization precedent applied to short echoes).
     `the user, reminder: ${row.text}.`,
     `A reminder the user set has just come due: "${echoForInstructions(row.text, 200)}". Deliver it to him now — brief and direct, one sentence. Do not mention ids or the scheduler.`,
   );
+};
+// M8 Law 5 — a routine that can't run is a LOUD skip: spoken (or cold-TTS'd into the
+// room), pulsed, and already recorded as routine.skipped for the away-items catch-up.
+manager.onRoutineSkipped = (name, reason) => {
+  orchestrator.speakProactively(
+    `the user, the scheduled routine "${name}" was skipped: ${reason}.`,
+    `The scheduled routine "${echoForInstructions(name, 80)}" could not run (${echoForInstructions(reason, 160)}). Tell the user briefly.`,
+  ).catch((err: unknown) => {
+    store.addEvent(null, 'session.error', { message: `routine-skip announce: ${String(err)}` });
+  });
+};
 manager.onFinished = (task) => {
   // Floating promise: an unexpected sync throw (dead transport, store failure) would
   // otherwise become an unhandled rejection and take the whole daemon down.
@@ -121,6 +146,10 @@ store.onEvent((event) => {
     if (!task || (status !== 'running' && status !== 'needs_input')) return;
     hub.broadcast({ type: 'bubble_upsert', task_id: task.id, title: task.title, status }, 'shell');
     if (status === 'needs_input') {
+      // M8: pulse the notch too — a PAUSED unattended routine must be visible on the
+      // machine, not only spoken into a possibly-empty room (the reviewed gap: nothing
+      // pulsed on needs_input at all).
+      hub.broadcast({ type: 'notch_pulse', status: 'needs_input' }, 'shell');
       // Speak it — a paused task used to wait silently (live gap 2026-07-16: the plan
       // approval sat unnoticed for 5 minutes because the voice session had idle-closed).
       // Same delivery rules as every proactive path: live injection or cold TTS.
@@ -168,6 +197,10 @@ hub.onHello((role) => {
   // M6: a shell that (re)connects while a computer-use task runs must arm its kill
   // switch + ghost cursor immediately.
   macBridge.resync();
+  // M8: re-present still-pending confirms with their remaining window — the shell's
+  // panel state died with it, and an hour-scale unattended pause (or one parked waiting
+  // for a shell) would otherwise sit invisible until auto-deny.
+  confirms.resync();
 });
 
 hub.onMessage((msg, role) => {
@@ -202,6 +235,14 @@ hub.onMessage((msg, role) => {
     // M6 kill switch: the user touched the machine (or hit the hotkey) while a computer-use
     // task was driving it — cancel every running computer task, instantly and audibly.
     manager.cancelComputerTasks(String(msg.reason ?? 'human_input'));
+  } else if (msg.type === 'teach_event' && role === 'shell') {
+    // M8: one demonstration step from the record-mode tap — sanitized inside teachEvent.
+    manager.teachEvent((msg as { step?: unknown }).step);
+  } else if (msg.type === 'teach_finish' && role === 'shell') {
+    // M8: the user tapped the recording badge to end the demonstration (the notch's finish
+    // affordance) instead of saying "done". Same path as the voice tool; ignore if nothing is
+    // recording (a stray tap after it already stopped). The "Learned …" announce rides finish().
+    manager.stopTeaching().catch(() => {});
   } else if (msg.type === 'image_edit_request' && role === 'shell') {
     // M5.5: typed edit from the viewer panel — no realtime session involved; the
     // completion (or failure) is spoken through the same proactive announce path, and
@@ -232,6 +273,10 @@ hub.onClose((role) => {
     orchestrator.handlePlaybackState(false);
     imageContext.set(null);
     fileContext.set(null);
+    // M8: an active recording has no recorder anymore — die loudly (Law 5: a dead
+    // teaching session must never look like it's still recording). The shell stops its
+    // own side on socket drop; a reconnecting shell gets mac_teach:false via resync.
+    manager.cancelTeaching('the shell disconnected mid-recording');
   }
 });
 
@@ -281,4 +326,8 @@ if (reapedImages.length) {
 
 server.listen(config.port, config.host, () => {
   console.log(`gumbo daemon listening on http://${config.host}:${config.port} (ws: /ws)`);
+  // Clicking the notch opens a WKWebView on the Vite dev server — start it if it isn't
+  // already up so that always works with no manual `npm run dev:dashboard` (the user's
+  // friction ask). Best-effort; never blocks or crashes the daemon.
+  ensureDashboardDevServer();
 });

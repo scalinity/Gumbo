@@ -222,6 +222,14 @@ const Row = memo(function Row({ event }: { event: EventRow }) {
           {time}
         </div>
       );
+    case 'subagent.thought':
+      return (
+        <div className="machine" data-kind="thought">
+          <span className="tag">thought</span>
+          <span className="body">{chip}{String(p.text ?? '').slice(0, 400)}</span>
+          {time}
+        </div>
+      );
     // M4: Claude Code session stream.
     case 'claude.message':
       return (
@@ -282,7 +290,7 @@ const Row = memo(function Row({ event }: { event: EventRow }) {
       return (
         <div className="machine" data-kind="created">
           <span className="tag">task</span>
-          <span className="body">{chip}started — {String(p.title ?? '')}</span>
+          <span className="body">{chip}started — {String(p.title ?? '')}{p.brief ? `: ${String(p.brief)}` : ''}</span>
           {time}
         </div>
       );
@@ -409,16 +417,33 @@ function ReportPanel({ taskId }: { taskId: string }) {
   );
 }
 
-// Subscribes to streamingText alone, so per-token updates re-render only this line —
+// Subscribes to the streamed chunks alone, so per-token updates re-render only this line —
 // not the whole historical feed.
 function StreamingLine() {
-  const streamingText = useStore((s) => s.streamingText);
-  if (!streamingText) return null;
+  const chunks = useStore((s) => s.streamingChunks);
+  if (chunks.length === 0) return null;
   return (
-    <div className="say" data-who="gumbo">
+    <div
+      className="say"
+      data-who="gumbo"
+      // The Feed's stick sentinel only re-runs when Feed re-renders — this line grows on
+      // its OWN store slice, so while streaming it must keep itself in view (a growing
+      // reply was sliding half-hidden below the fold). Same near-bottom guard as the
+      // sentinel: never yank the view while history is being read.
+      ref={(el) => {
+        const feed = el?.closest('.feed');
+        if (!el || !feed) return;
+        const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 160;
+        if (nearBottom) el.scrollIntoView({ block: 'nearest' });
+      }}
+    >
       <span className="who">gumbo</span>
       <span className="text">
-        {streamingText}
+        {/* Position-keyed spans mount ONCE per chunk — the fade-in plays on arrival only,
+            never replaying across the already-visible text. */}
+        {chunks.map((c, i) => (
+          <span className="tok" key={i}>{c}</span>
+        ))}
         <span className="cursor" />
       </span>
       <span className="stamp" />
