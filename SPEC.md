@@ -466,7 +466,7 @@ generic primitives subsume the verbs anyway.
   state before the next; verify **states, not elements** ("am I on the compose window?" survives
   layout drift where element checks break). Every task *starts* with an observe-first
   "is it already done?" check (idempotency).
-- **Budgets, all of them:** max-steps (default ~50, hard cap 100) + wall-clock + a harness-side
+- **Budgets, all of them:** max-steps (100; exhaustion ends as an honest partial report) + wall-clock + a harness-side
   **repetition detector** — same action on same target ×3 injects a warning turn (redundant
   looping is a top-4 documented computer-use failure class; the detector is cheap).
 - **Recovery, layered:** unexpected-dialog check before acting (generic Escape/dismiss

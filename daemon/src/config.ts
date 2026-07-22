@@ -153,7 +153,7 @@ export const config = {
     scriptTimeoutMs: 60_000, // sub-agent run_script (osascript/shortcuts get more room than the hot path)
     confirmTimeoutMs: 30_000, // hot mac_do notch confirm — shorter than Claude's 60 s (a voice turn is waiting)
     snapshotMaxElements: 400, // interactive elements per compacted snapshot the model sees
-    maxTurns: 50, // computer-mode sub-agent step budget (SPEC §M6: default ~50)
+    maxTurns: 100, // computer-mode sub-agent step budget (SPEC §M6); exhaustion ends as an honest partial report, never a crash
     outputMaxChars: 262_144, // defensive cap on any single shell result payload
     // M7 vision lane: one-shot ScreenCaptureKit capture (+ Vision OCR) budgets. The
     // first capture triggers the Screen Recording TCC prompt, which can sit for a while —
