@@ -3,7 +3,9 @@ import Foundation
 /// Thin WebSocket client of the daemon (ws://127.0.0.1:8737/ws). Sends hello{role:shell}
 /// on open, auto-reconnects forever (the daemon restarts freely under tsx watch), and
 /// carries JSON text frames + binary audio frames. Native client sends no Origin, which
-/// the daemon's allowlist admits by design.
+/// the daemon's allowlist admits by design — but the privileged shell role must also prove
+/// it can read the daemon's 0600 token file (~/Gumbo/daemon.token), included in the hello,
+/// so an arbitrary same-machine process can't claim the shell role.
 final class WSClient: NSObject, URLSessionWebSocketDelegate {
     var onMessage: (([String: Any]) -> Void)?
     var onBinary: ((Data) -> Void)?
@@ -77,9 +79,21 @@ final class WSClient: NSObject, URLSessionWebSocketDelegate {
 
     // MARK: URLSessionWebSocketDelegate
 
+    /// The daemon's shell-auth token, read fresh each connect so a daemon restart that
+    /// re-minted it is picked up. Nil (file missing on an older daemon) sends no token —
+    /// a daemon without a configured token still admits the shell.
+    private func daemonToken() -> String? {
+        let path = ("~/Gumbo/daemon.token" as NSString).expandingTildeInPath
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
+
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didOpenWithProtocol protocol: String?) {
-        sendJSON(["type": "hello", "role": "shell"])
+        var hello: [String: Any] = ["type": "hello", "role": "shell"]
+        if let token = daemonToken() { hello["token"] = token }
+        sendJSON(hello)
         DispatchQueue.main.async { self.onConnect?() }
     }
 

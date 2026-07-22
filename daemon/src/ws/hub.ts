@@ -9,14 +9,22 @@ type HelloHandler = (role: ClientRole) => void;
 
 const ROLES: ReadonlySet<string> = new Set(['shell', 'dashboard']);
 
+export interface HubOptions {
+  /** When set, a hello claiming the privileged 'shell' role MUST carry a matching token
+   *  (the daemon's 0600 secret). Omitted in tests that don't exercise auth. */
+  shellToken?: string;
+}
+
 export class Hub {
   private clients = new Map<WebSocket, ClientRole>();
   private handlers: MessageHandler[] = [];
   private binaryHandlers: BinaryHandler[] = [];
   private helloHandlers: HelloHandler[] = [];
   private closeHandlers: HelloHandler[] = [];
+  private shellToken?: string;
 
-  constructor(server: Server) {
+  constructor(server: Server, opts: HubOptions = {}) {
+    this.shellToken = opts.shellToken;
     const wss = new WebSocketServer({
       server,
       path: '/ws',
@@ -57,10 +65,19 @@ export class Hub {
         }
         const msg = parsed as InboundMessage;
         if (msg.type === 'hello') {
-          if (ROLES.has(msg.role)) {
-            this.clients.set(socket, msg.role);
-            for (const handler of this.helloHandlers) handler(msg.role);
+          if (!ROLES.has(msg.role)) return;
+          // The privileged 'shell' role must prove it can read the daemon's 0600 token
+          // file — loopback + Origin gate a browser, but not a native no-Origin process
+          // claiming shell (which could approve confirms or forge Mac results). A bad or
+          // missing token closes the socket instead of silently admitting it. The browser
+          // 'dashboard' role has no file access, so it stays Origin-gated and token-free.
+          const helloToken = typeof (msg as { token?: unknown }).token === 'string' ? (msg as { token?: string }).token : undefined;
+          if (msg.role === 'shell' && this.shellToken && helloToken !== this.shellToken) {
+            socket.close(4001, 'unauthorized shell role');
+            return;
           }
+          this.clients.set(socket, msg.role);
+          for (const handler of this.helloHandlers) handler(msg.role);
           return;
         }
         const role = this.clients.get(socket);

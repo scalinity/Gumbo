@@ -10,9 +10,9 @@ process.env.GUMBO_HOME ??= mkdtempSync(join(tmpdir(), 'gumbo-test-'));
 const { Hub } = await import('./hub.ts');
 
 /** Boot a Hub on an ephemeral loopback port; returns the port + a teardown. */
-async function bootHub(): Promise<{ hub: InstanceType<typeof Hub>; port: number; server: Server }> {
+async function bootHub(opts: { shellToken?: string } = {}): Promise<{ hub: InstanceType<typeof Hub>; port: number; server: Server }> {
   const server = createServer();
-  const hub = new Hub(server);
+  const hub = new Hub(server, opts);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as { port: number }).port;
   return { hub, port, server };
@@ -52,5 +52,42 @@ test('a null/scalar/array JSON frame is ignored, not fatal; normal messages stil
   assert.equal((received[0] as { type: string }).type, 'debug_text');
 
   ws.close();
+  server.close();
+});
+
+// HIGH (2026-07-22): a native no-Origin process could claim the privileged shell role.
+test('shell role requires the token; a wrong/missing token is rejected, dashboard is token-free', async () => {
+  const TOKEN = 'a'.repeat(64);
+  const { hub, port, server } = await bootHub({ shellToken: TOKEN });
+  const roles: string[] = [];
+  hub.onHello((role) => roles.push(role));
+
+  // Wrong token → the socket is closed, no shell role granted.
+  const bad = await connect(port);
+  const badClosed = new Promise<number>((resolve) => bad.once('close', (code) => resolve(code)));
+  bad.send(JSON.stringify({ type: 'hello', role: 'shell', token: 'nope' }));
+  assert.equal(await badClosed, 4001, 'unauthorized shell hello is closed with 4001');
+
+  // Missing token → likewise rejected.
+  const none = await connect(port);
+  const noneClosed = new Promise<number>((resolve) => none.once('close', (code) => resolve(code)));
+  none.send(JSON.stringify({ type: 'hello', role: 'shell' }));
+  assert.equal(await noneClosed, 4001, 'a shell hello with no token is closed');
+
+  // Correct token → admitted as shell.
+  const good = await connect(port);
+  good.send(JSON.stringify({ type: 'hello', role: 'shell', token: TOKEN }));
+  await settle();
+  assert.ok(roles.includes('shell'), 'the right token admits the shell role');
+  assert.ok(hub.hasRole('shell'), 'shell is connected');
+
+  // Dashboard needs no token (it is Origin-gated at the handshake instead).
+  const dash = await connect(port);
+  dash.send(JSON.stringify({ type: 'hello', role: 'dashboard' }));
+  await settle();
+  assert.ok(roles.includes('dashboard'), 'dashboard admitted without a token');
+
+  good.close();
+  dash.close();
   server.close();
 });

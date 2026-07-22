@@ -91,7 +91,9 @@ export type MacActionResult = {
 
 // client → daemon
 export type InboundMessage =
-  | { type: 'hello'; role: ClientRole }
+  // token authenticates the privileged 'shell' role against the daemon's 0600 token file;
+  // the browser 'dashboard' role omits it and is gated by Origin instead.
+  | { type: 'hello'; role: ClientRole; token?: string }
   | { type: 'debug_text'; text: string }
   | { type: 'task_action'; task_id: string; action: 'cancel' }
   | { type: 'ptt_press' } // shell: ⌃⌥ went down — mic frames follow

@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { config } from './config.ts';
+import { config, loadDaemonToken } from './config.ts';
 import { echoForInstructions, needsInputAnnounce } from './audio/announce.ts';
 import { Store } from './events/store.ts';
 import { createHttpServer } from './http.ts';
@@ -41,7 +41,9 @@ const reapedImages = reapInterruptedImageWork(store);
 if (reapedImages.length) console.log(`failed ${reapedImages.length} image job(s) interrupted by the restart`);
 
 const server = createHttpServer(store);
-const hub = new Hub(server);
+// The shell authenticates its privileged role against this token (written 0600 to
+// ~/Gumbo/daemon.token, which the shell reads on connect). Home dirs exist by now.
+const hub = new Hub(server, { shellToken: loadDaemonToken() });
 // M4: supervisor escalations resolve through the notch (deny on timeout / no shell).
 const confirms = new ConfirmBridge(hub);
 // M7: an approved host confirm with "remember" writes through to the allowlist —

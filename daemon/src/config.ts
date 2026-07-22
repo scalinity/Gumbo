@@ -1,6 +1,8 @@
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomBytes } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 try {
@@ -69,6 +71,27 @@ export const secretEnvKeys = ['OPENAI_API_KEY', 'EXA_API_KEY', 'TAVILY_API_KEY',
 // the file TOOLS (protectedPathHit) — bash reads of ~/.claude are the accepted open-network
 // residual. Keep this list and `readDenied` in sync — both derive `.env` from here.
 export const secretFilePaths = [join(repoRoot, '.env'), join(homedir(), '.claude')] as const;
+
+// The privileged 'shell' WS role authenticates with this token. Loopback bind + the WS
+// Origin allowlist block browser drive-by, but NOT a native (no-Origin) local process
+// claiming role:shell — which could approve notch confirms, forge Mac results, or drive
+// privileged flows. The token is a high-entropy secret in a 0600 file both the daemon and
+// the shell (same user, same machine) can read; a process that can't read it can't take
+// the shell role. Persisted so the shell's re-read on reconnect stays valid across daemon
+// restarts. Called once at boot by index.ts (never at import — keeps config side-effect-free
+// for the test/sandbox lanes).
+export function loadDaemonToken(): string {
+  const tokenPath = join(agentHome, 'daemon.token');
+  try {
+    const existing = readFileSync(tokenPath, 'utf8').trim();
+    if (existing.length >= 32) return existing;
+  } catch {
+    // missing / unreadable → mint a fresh one below
+  }
+  const token = randomBytes(32).toString('hex');
+  writeFileSync(tokenPath, token, { mode: 0o600 });
+  return token;
+}
 
 // Home-relative credential stores every read-gate shares: the Seatbelt read-deny
 // (claude-runner), the mac_do/run_script confirm gate (mac/policy), and file presentation
