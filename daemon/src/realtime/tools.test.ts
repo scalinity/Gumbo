@@ -658,6 +658,50 @@ test('M8 fix: save_last_run skips replay/routine runs — "save that" means the 
   assert.deepEqual(saved, ['orig1'], 'the replay run must be skipped in favor of the original');
 });
 
+test('M8 fix: save_last_run refuses a STALE task without confirm_old, and names the source when it saves', async () => {
+  // "Save that" after a spoken lookup found a 6-hour-old Notes task and bottled it under
+  // a fresh name (live failure 2026-07-22) — a stale match needs the user's explicit word.
+  const saved: string[] = [];
+  const manager = { startTeaching: async () => ({}), stopTeaching: async () => ({ name: '', stepCount: 0 }), cancelTeaching: () => false };
+  const mkStore = (updatedAt: number) => ({
+    listTasks: () => [{ id: 't1', kind: 'computer', status: 'done', title: 'Update packing list procedure', updated_at: updatedAt }],
+    getLatestEventPayload: () => null,
+  });
+  const mkTeach = (store: unknown) => {
+    const tools = createOrchestratorTools(manager as never, store as never, {
+      scheduler: {} as never,
+      announce: async () => {},
+      imageContext: { get: () => null } as never,
+      fileContext: { get: () => null } as never,
+      presentFile: (() => true) as never,
+      openImage: (() => true) as never,
+      macBridge: {} as never,
+      confirmMacDo: (async () => false) as never,
+      procedures: {
+        saveFromTask: async (taskId: string, name: string) => { saved.push(taskId); return { name, version: 1, stepCount: 14 }; },
+      } as never,
+    });
+    return tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+      invoke: (ctx: unknown, args: string) => Promise<string>;
+    };
+  };
+
+  const staleTeach = mkTeach(mkStore(Date.now() - 6 * 60 * 60_000));
+  const refusal = await staleTeach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'AI headline' }));
+  assert.match(refusal, /NOT saved/, 'a stale task is never saved on a guess');
+  assert.match(refusal, /Update packing list procedure/, 'the refusal names the stale task so the user can decide');
+  assert.match(refusal, /hours ago/, 'the refusal states the age');
+  assert.equal(saved.length, 0, 'saveFromTask must not run');
+
+  const confirmed = await staleTeach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'AI headline', confirm_old: true }));
+  assert.match(confirmed, /Saved "AI headline"/, 'confirm_old saves the stale task the user confirmed');
+  assert.deepEqual(saved, ['t1']);
+
+  const freshTeach = mkTeach(mkStore(Date.now() - 30_000));
+  const fresh = await freshTeach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'AI headline' }));
+  assert.match(fresh, /distilled from the task "Update packing list procedure"/, 'the confirmation names its source so a mismatch is audible');
+});
+
 test('M8: teach_procedure list + delete manage saved procedures', async () => {
   const deleted: string[] = [];
   const store = {

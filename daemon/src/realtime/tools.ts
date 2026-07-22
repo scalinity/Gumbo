@@ -620,8 +620,13 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         .string()
         .nullable()
         .describe('Short procedure name — required for start and delete, optional for save_last_run (defaults to the task title); null for stop/cancel/list'),
+      confirm_old: z
+        .boolean()
+        .nullable()
+        .default(null)
+        .describe('save_last_run only: pass true ONLY after the user explicitly confirms he wants a task that finished a while ago (the tool refuses stale saves otherwise); null everywhere else'),
     }),
-    execute: async ({ action, name }) => {
+    execute: async ({ action, name, confirm_old }) => {
       try {
         if (action === 'list') {
           const rows = store.listProcedures();
@@ -669,8 +674,19 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
               t.kind === 'computer' && t.status === 'done' && !t.title.startsWith('Teaching:')
               && store.getLatestEventPayload(t.id, 'procedure.replay') === null);
           if (!last) return 'No finished computer task to save — Gumbo has to complete one first (replays of already-saved procedures don\'t count).';
+          // "That" means something Gumbo JUST did. A quick voice answer (x_lookup,
+          // web_quick_lookup) never becomes a task, so without a recency bound "save that"
+          // silently reaches back hours and bottles the wrong run under a fresh name (a
+          // live save stamped "AI headline" on a 6-hour-old Notes task this way). A stale
+          // match needs the user's explicit word, never a guess.
+          const age = Date.now() - (last.updated_at ?? Date.now());
+          if (age > config.procedures.saveLastRunMaxAgeMs && confirm_old !== true) {
+            const agoMin = Math.round(age / 60_000);
+            const ago = agoMin < 60 ? `${agoMin} minutes` : `${Math.round(agoMin / 6) / 10} hours`;
+            return `NOT saved — nothing recent qualifies. The newest finished computer task is "${last.title}", from ${ago} ago; quick spoken answers (news lookups, searches) are not replayable computer tasks and cannot be saved. Tell the user exactly that, name "${last.title}" and its age, and ask if that old task is really what he wants saved. ONLY if he says yes, call save_last_run again with confirm_old true.`;
+          }
           const saved = await deps.procedures.saveFromTask(last.id, name?.trim() || last.title);
-          return `Saved "${saved.name}" (version ${saved.version}, ${saved.stepCount} steps) as a reusable procedure.`;
+          return `Saved "${saved.name}" (version ${saved.version}, ${saved.stepCount} steps) as a reusable procedure — distilled from the task "${last.title}". SAY the source out loud (e.g. "Saved ${saved.name} — from the run that did ${last.title}") so a wrong source gets caught immediately.`;
         }
         return manager.cancelTeaching('cancelled by the user')
           ? 'Recording discarded — nothing was kept.'

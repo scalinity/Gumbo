@@ -186,6 +186,10 @@ export const config = {
   procedures: {
     compileTimeoutMs: 60_000,
     traceMaxChars: 24_000, // condensed tool.call/tool.result stream fed to the compiler
+    // "Save that as a procedure" binds to the newest finished computer task — but only a
+    // RECENT one without an explicit confirm (a stale match means "that" pointed at
+    // something that never became a task, e.g. a spoken lookup).
+    saveLastRunMaxAgeMs: 15 * 60_000,
     // Replay precondition resilience: if a step's target app isn't running (it was open
     // when taught, or a prior run left it closed), the engine launches it — a closed app
     // must never drift a faithful replay. Poll for readiness after the launch (a cold
