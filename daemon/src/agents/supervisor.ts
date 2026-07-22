@@ -28,11 +28,11 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 // M4.1 secret-path guard for the CLI file tools. Since the rebuild, the WHOLE CLI runs under
 // Seatbelt (claude-runner.ts), so the OS layer read-denies .env for BOTH bash and the file
 // tools — but it intentionally leaves ~/.claude readable (the CLI needs its own state). This
-// guard is the file-TOOL half for both paths: it hard-denies Read/Edit/Grep/Glob of .env
-// (belt-and-suspenders with the OS deny — gives a clean message not a raw EPERM) AND of
-// ~/.claude (the one the OS layer can't cover). It skips Bash (below): bash `cat .env` is
-// OS-denied, but bash `cat ~/.claude/...` is the accepted open-network residual (only the
-// network-deny proxy closes it — see IMPLEMENTATION_NOTES).
+// guard hard-denies Read/Edit/Grep/Glob of .env (belt-and-suspenders with the OS deny —
+// gives a clean message not a raw EPERM) AND of ~/.claude (the one the OS layer can't
+// cover). Bash gets the same protection through bashProtectedRef below — a conservative
+// string screen, since the OS layer can't distinguish the CLI's own ~/.claude access from
+// a spawned bash reading transcripts.
 const PROTECTED_PATHS = secretFilePaths.map((p) => resolve(p));
 
 // Plan-mode exemption under the ~/.claude deny: the CLI persists its plan to
@@ -65,6 +65,32 @@ function protectedPathHit(input: Record<string, unknown>, cwd: string): string |
       // search root that CONTAINS it (Grep/Glob rooted above .env would surface it).
       if (abs === secret || abs.startsWith(secret + sep) || secret.startsWith(abs + sep)) return raw;
     }
+  }
+  return null;
+}
+
+// Conservative Bash screen for the ~/.claude subtree + the repo .env by full path. The
+// Seatbelt read-denies .env for bash, but must leave ~/.claude readable for the CLI's own
+// state — which made a bash `cat ~/.claude/projects/….jsonl` the one policy-allowed read
+// of protected transcripts (scan HIGH). Still not a shell parser (that ceiling stands),
+// but the named store must not be trivially reachable: match ~ / $HOME / absolute-homedir
+// prefixes on a de-obfuscated shadow too (quote/escape folds, like the mac gate). An
+// over-deny (a grep that merely mentions the literal) costs one retry via the file tools —
+// the safe direction. A `cd ~ && cat .claude/...` composition remains the accepted ceiling
+// (bare `.claude` would break legitimate in-project .claude/settings reads).
+const CLAUDE_STATE_RE = /(?:~|\$\{?HOME\}?|\/Users\/[^\s/]+|\/home\/[^\s/]+)\/\.claude\b/i;
+
+function bashProtectedRef(command: string): string | null {
+  const shadow = command
+    .normalize('NFKC')
+    .replace(/[​‌‍﻿]/g, '') // zero-width space / ZWNJ / ZWJ / BOM
+    .replace(/\\([^\n])/g, '$1')
+    .replace(/''|""/g, '')
+    .replace(/['"]/g, '');
+  for (const s of [command, shadow]) {
+    const m = CLAUDE_STATE_RE.exec(s);
+    if (m) return m[0];
+    if (s.includes(PROTECTED_PATHS[0])) return PROTECTED_PATHS[0]; // repo .env — OS-denied anyway; clean message here
   }
   return null;
 }
@@ -164,17 +190,17 @@ function deleteOutsideCwd(command: string, cwd: string): string | null {
 export function policyDecision(toolName: string, input: Record<string, unknown>, cwd: string): PolicyResult {
   // Secret-path guard first, for every FILE TOOL: a coding session never has a legitimate
   // reason to read/edit the daemon's .env or Claude's ~/.claude state. Hard deny (not a
-  // confirm). Skips Bash: bash's access to .env is OS-denied by the Seatbelt profile
-  // (read-deny), so a command hitting .env fails at the OS layer anyway; bash's access to
-  // ~/.claude is the accepted open-network residual the OS layer can't cover (see
-  // PROTECTED_PATHS). Trying to parse ~/.claude out of an arbitrary shell string here would
-  // be the same losing regex-vs-shell game the delete-detector already caps.
+  // confirm). Bash gets its own conservative screen (bashProtectedRef): the OS layer
+  // read-denies .env for bash but leaves ~/.claude readable for the CLI itself, so the
+  // policy is the only gate on a bash read of protected transcripts/state.
   if (toolName !== 'Bash') {
     const secret = protectedPathHit(input, cwd);
     if (secret) return { route: 'deny', reason: `blocked: protected secret path (${secret})` };
   }
   if (toolName === 'Bash') {
     const command = String(input.command ?? '');
+    const protectedRef = bashProtectedRef(command);
+    if (protectedRef) return { route: 'deny', reason: `blocked: protected secret path (${protectedRef})` };
     for (const { pattern, reason } of ESCALATE_BASH) {
       if (pattern.test(command)) return { route: 'escalate', reason };
     }

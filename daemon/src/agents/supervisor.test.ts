@@ -89,11 +89,24 @@ test('policy: secret paths hard-deny for the CLI file tools', () => {
   assert.equal(policyDecision('Read', { file_path: '~/.claude/config' }, CWD).route, 'deny');
   // A search root that CONTAINS a secret (grep rooted at the repo, where .env lives) is denied.
   assert.equal(policyDecision('Grep', { path: ENV_PATH.replace(/\/\.env$/, '') }, CWD).route, 'deny');
-  // Bash is the sandbox's job, not this guard — .env in a command still routes by bash rules.
-  assert.equal(policyDecision('Bash', { command: `cat ${ENV_PATH}` }, CWD).route, 'allow');
+  // Bash referencing the full repo .env path gets the clean deny (the OS deny is the backstop).
+  assert.equal(policyDecision('Bash', { command: `cat ${ENV_PATH}` }, CWD).route, 'deny');
   // Non-secret reads/edits are unaffected.
   assert.equal(policyDecision('Read', { file_path: '/etc/hosts' }, CWD).route, 'allow');
   assert.equal(policyDecision('Read', { file_path: `${CWD}/src/a.ts` }, CWD).route, 'allow');
+});
+
+// Scan HIGH (2026-07-22): ~/.claude is OS-readable (the CLI needs its own state), so the
+// policy is the ONLY gate on a bash read of transcripts/settings — it must not exempt Bash.
+test('policy: bash reads of ~/.claude are denied — the file-tool guard cannot be dodged via Bash', () => {
+  assert.equal(policyDecision('Bash', { command: 'cat ~/.claude/projects/x/session.jsonl' }, CWD).route, 'deny');
+  assert.equal(policyDecision('Bash', { command: 'grep -r key $HOME/.claude/' }, CWD).route, 'deny', '$HOME form');
+  assert.equal(policyDecision('Bash', { command: 'cat ${HOME}/.claude/settings.json' }, CWD).route, 'deny', '${HOME} form');
+  assert.equal(policyDecision('Bash', { command: 'cat /Users/dev/.claude/settings.json' }, CWD).route, 'deny', 'absolute form');
+  assert.equal(policyDecision('Bash', { command: "cat ~/.cl''aude/settings.json" }, CWD).route, 'deny', 'quote-split evasion folds in the shadow');
+  // In-project .claude state and unrelated commands stay allowed.
+  assert.equal(policyDecision('Bash', { command: 'cat .claude/settings.json' }, CWD).route, 'allow', 'project-local .claude is not the protected store');
+  assert.equal(policyDecision('Bash', { command: 'npm test' }, CWD).route, 'allow');
 });
 
 // Plan-mode carve-out (2026-07-16): the CLI persists its plan to ~/.claude/plans BEFORE

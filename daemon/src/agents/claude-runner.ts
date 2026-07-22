@@ -205,8 +205,9 @@ export function buildSandboxProfile(cwd: string, taskId: string, proxyPort: numb
   // Re-deny the code-execution / persistence surfaces UNDER the (writable) ~/.claude, placed
   // AFTER the allow so SBPL last-match-wins takes them (verified: deny-after-allow works). A
   // bash-written hook/settings/plugin/skill here would run UNSANDBOXED in the user's next
-  // interactive session — arbitrary code + durable escape (review 🔴). protectedPathHit covers
-  // the file TOOLS on ~/.claude but deliberately skips Bash, so this is the bash half. The old
+  // interactive session — arbitrary code + durable escape (review 🔴). The supervisor policy
+  // screens both the file tools AND bash strings on ~/.claude; this OS deny is the backstop
+  // for what a string screen can't see. The old
   // `~/.claude.json` write-allow is dropped for the same reason (MCP/trust-injection surface).
   const claudeExecSurfaces = ['settings.json', 'settings.local.json', 'CLAUDE.md', 'plugins', 'agents', 'skills', 'commands', 'hooks'].map((name) =>
     join(claudeDir, name),
