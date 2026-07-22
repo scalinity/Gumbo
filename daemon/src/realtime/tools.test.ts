@@ -735,3 +735,42 @@ test('M8: teach_procedure list + delete manage saved procedures', async () => {
   assert.match(await teach.invoke({}, JSON.stringify({ action: 'delete', name: 'water the lawn' })), /No saved procedure matches/);
   assert.deepEqual(deleted, ['packing list'], 'a no-match never deletes');
 });
+
+test('M8 fix: save_last_run asks when SEVERAL runs just finished, then saves the task the user picked', async () => {
+  // A create-then-fix pair: newest-wins would save the fix-up, whose steps assume the
+  // broken state (live failure 2026-07-22) — ambiguity is the user's to resolve, once.
+  const saved: string[] = [];
+  const manager = { startTeaching: async () => ({}), stopTeaching: async () => ({ name: '', stepCount: 0 }), cancelTeaching: () => false };
+  const store = {
+    listTasks: () => [
+      { id: 'fixup', kind: 'computer', status: 'done', title: 'Fix Notes formatting', updated_at: Date.now() - 60_000 },
+      { id: 'orig', kind: 'computer', status: 'done', title: 'Create Groceries note', updated_at: Date.now() - 5 * 60_000 },
+    ],
+    getLatestEventPayload: () => null,
+  };
+  const tools = createOrchestratorTools(manager as never, store as never, {
+    scheduler: {} as never,
+    announce: async () => {},
+    imageContext: { get: () => null } as never,
+    fileContext: { get: () => null } as never,
+    presentFile: (() => true) as never,
+    openImage: (() => true) as never,
+    macBridge: {} as never,
+    confirmMacDo: (async () => false) as never,
+    procedures: {
+      saveFromTask: async (taskId: string, name: string) => { saved.push(taskId); return { name, version: 1, stepCount: 9 }; },
+    } as never,
+  });
+  const teach = tools.find((t) => (t as { name: string }).name === 'teach_procedure') as unknown as {
+    invoke: (ctx: unknown, args: string) => Promise<string>;
+  };
+  const ask = await teach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'groceries note' }));
+  assert.match(ask, /NOT saved/, 'nothing saved on an ambiguous "that"');
+  assert.match(ask, /Fix Notes formatting/);
+  assert.match(ask, /Create Groceries note/);
+  assert.equal(saved.length, 0);
+  const chosen = await teach.invoke({}, JSON.stringify({ action: 'save_last_run', name: 'groceries note', task_id: 'orig' }));
+  assert.match(chosen, /Saved "groceries note"/);
+  assert.match(chosen, /Create Groceries note/, 'the confirmation names the chosen source');
+  assert.deepEqual(saved, ['orig'], 'the task the user picked is the one distilled — not the newest');
+});

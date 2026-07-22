@@ -629,8 +629,13 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         .nullable()
         .default(null)
         .describe('save_last_run only: pass true ONLY after the user explicitly confirms he wants a task that finished a while ago (the tool refuses stale saves otherwise); null everywhere else'),
+      task_id: z
+        .string()
+        .nullable()
+        .default(null)
+        .describe('save_last_run only: the internal id of the run the user chose, ONLY after the tool listed several recent candidates and he picked one; null everywhere else'),
     }),
-    execute: async ({ action, name, confirm_old }) => {
+    execute: async ({ action, name, confirm_old, task_id }) => {
       try {
         if (action === 'list') {
           const rows = store.listProcedures();
@@ -672,19 +677,37 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
           // Replay/routine runs are excluded (review 🔵): "save that" means the ORIGINAL
           // run, not a re-distillation of a replay's own trace (they carry a
           // procedure.replay event; teaching sessions are excluded by title).
-          const last = store
+          const eligible = store
             .listTasks(50)
-            .find((t) =>
+            .filter((t) =>
               t.kind === 'computer' && t.status === 'done' && !t.title.startsWith('Teaching:')
               && store.getLatestEventPayload(t.id, 'procedure.replay') === null);
+          const last = task_id ? eligible.find((t) => t.id === task_id) : eligible[0];
           if (!last) return 'No finished computer task to save — Gumbo has to complete one first (replays of already-saved procedures don\'t count).';
+          // SEVERAL runs just finished → "that" is ambiguous, and newest-wins picks wrong
+          // exactly when it matters most: a create-then-fix pair saves the FIX-UP — a
+          // state-repair whose steps assume the broken state and corrupt a correct one on
+          // replay (live failure 2026-07-22). Ask; never guess between candidates.
+          if (!task_id) {
+            const recent = eligible
+              .filter((t) => Date.now() - (t.updated_at ?? 0) <= config.procedures.saveLastRunMaxAgeMs)
+              .slice(0, 3);
+            if (recent.length > 1) {
+              const listed = recent
+                .map((t) => `"${t.title}" (internal id ${t.id}, ${Math.max(1, Math.round((Date.now() - t.updated_at) / 60_000))} min ago)`)
+                .join('; ');
+              return `NOT saved — several computer tasks just finished and "that" is ambiguous: ${listed}. A follow-up fix/repair run is usually NOT the procedure the user means (its steps assume the broken state). Ask him WHICH run to save — name them naturally, never say the ids aloud — then call save_last_run again with task_id set to his choice.`;
+            }
+          }
           // "That" means something Gumbo JUST did. A quick voice answer (x_lookup,
           // web_quick_lookup) never becomes a task, so without a recency bound "save that"
           // silently reaches back hours and bottles the wrong run under a fresh name (a
           // live save stamped "AI headline" on a 6-hour-old Notes task this way). A stale
           // match needs the user's explicit word, never a guess.
           const age = Date.now() - (last.updated_at ?? Date.now());
-          if (age > config.procedures.saveLastRunMaxAgeMs && confirm_old !== true) {
+          // An explicit task_id IS the user's confirmation — the stale guard applies only
+          // to the implicit newest-wins pick.
+          if (!task_id && age > config.procedures.saveLastRunMaxAgeMs && confirm_old !== true) {
             const agoMin = Math.round(age / 60_000);
             const ago = agoMin < 60 ? `${agoMin} minutes` : `${Math.round(agoMin / 6) / 10} hours`;
             return `NOT saved — nothing recent qualifies. The newest finished computer task is "${last.title}", from ${ago} ago; quick spoken answers (news lookups, searches) are not replayable computer tasks and cannot be saved. Tell the user exactly that, name "${last.title}" and its age, and ask if that old task is really what he wants saved. ONLY if he says yes, call save_last_run again with confirm_old true.`;
