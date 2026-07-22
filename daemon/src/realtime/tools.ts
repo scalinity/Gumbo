@@ -78,12 +78,16 @@ export function createOrchestratorTools(manager: TaskManager, store: Store, deps
         .enum(['research', 'mac'])
         .default('research')
         .describe('"mac" ONLY for clicking/typing/navigating INSIDE an app — never for merely opening an app or loading a URL (that is mac_do); "research" for everything web/writing'),
+      depth: z
+        .enum(['standard', 'deep'])
+        .default('standard')
+        .describe('"deep" when the user asks for DEEP/comprehensive research ("deep research", "deep dive", "go deep", "be thorough/comprehensive") — a long run (5–15 min) that reads dozens-to-hundreds of sources and compiles a fully sourced report. "standard" for normal background research. Never "deep" for mac tasks.'),
     }),
-    execute: async ({ title, brief, task_type }) => {
+    execute: async ({ title, brief, task_type, depth }) => {
       // The voice model tends to echo tool results verbatim — keep the id clearly
       // marked as internal so it isn't read aloud.
       try {
-        const task = manager.spawnSubagent(title, brief, task_type);
+        const task = manager.spawnSubagent(title, brief, task_type, undefined, depth);
         return `Started "${title}" in the background (internal task_id ${task.id} — never say it aloud). You will be told when it finishes — no need to wait.`;
       } catch (err) {
         return `Could not start that: ${err instanceof Error ? err.message : String(err)}`;

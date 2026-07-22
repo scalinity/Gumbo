@@ -85,6 +85,7 @@ export class TaskManager {
     brief: string,
     taskType: SubagentKind = 'research',
     replay?: { procedure: Procedure; notes: string | null; unattended?: boolean },
+    depth?: 'standard' | 'deep',
   ): TaskRow {
     if (taskType === 'mac' && !this.macBridge) throw new Error('Mac control is unavailable (no shell bridge wired).');
     if (taskType === 'mac') this.assertMacFree();
@@ -181,7 +182,7 @@ export class TaskManager {
     // Two-arg then(): the rejection handler sees ONLY runSubagent errors, so a failure
     // while writing the report (success path) can't be mislabeled 'cancelled'/'failed'.
     runSubagent({
-      taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType,
+      taskId: id, brief, store: this.store, signal: abort.signal, kind: taskType, depth,
       macBridge: this.macBridge, confirmScript, requestHandoff,
       takeSteering: taskType === 'mac' ? () => this.takeSteering(id) : undefined,
       procedure: replay

@@ -183,6 +183,16 @@ export const config = {
   },
   // M8 procedure memory: the one-shot compile (recording/trace → replayable procedure)
   // and its trace-condensation budget. Background work — generous like other one-shots.
+  research: {
+    // Deep mode is a different SHAPE, not just a bigger budget: search results come back
+    // as a skim (no page bodies in the loop) and reads go through the note extractor, so
+    // the orchestrating context holds evidence, never raw pages — that is what makes
+    // reading 100+ sources reachable (full-text searches saturate a loop in ~4 turns).
+    standardMaxTurns: 25,
+    deepMaxTurns: 60,
+    readBatchMax: 8, // pages per read_and_extract call (schema allows more; extras are named, never silently dropped)
+    extractInputMaxChars: 60_000, // per-page window fed to the extractor; the note states when a page exceeded it
+  },
   procedures: {
     compileTimeoutMs: 60_000,
     traceMaxChars: 24_000, // condensed tool.call/tool.result stream fed to the compiler
