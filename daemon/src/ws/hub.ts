@@ -42,12 +42,20 @@ export class Hub {
           for (const handler of this.binaryHandlers) handler(frame, role);
           return;
         }
-        let msg: InboundMessage;
+        let parsed: unknown;
         try {
-          msg = JSON.parse(data.toString());
+          parsed = JSON.parse(data.toString());
         } catch {
           return;
         }
+        // A text frame of `null`, a scalar, or an array all parse cleanly — reading
+        // `.type` off `null` then throws a TypeError out of this handler (uncaught → the
+        // whole daemon dies on one malformed frame). Require a plain object with a string
+        // `type` before dispatch; anything else is silently ignored.
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || typeof (parsed as { type?: unknown }).type !== 'string') {
+          return;
+        }
+        const msg = parsed as InboundMessage;
         if (msg.type === 'hello') {
           if (ROLES.has(msg.role)) {
             this.clients.set(socket, msg.role);
