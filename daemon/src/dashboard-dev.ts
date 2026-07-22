@@ -3,6 +3,7 @@ import { connect } from 'node:net';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { secretEnvKeys } from './config.ts';
 
 // The shell's notch/status-item click opens a WKWebView pointed at the Vite dev server.
 // If nobody started it, that window is a blank white screen. Rather than make the user run
@@ -42,12 +43,16 @@ function startVite(): void {
   try {
     // The exact invocation the dev:dashboard script uses; npm is on the daemon's PATH
     // because npm launched the daemon. Detached + ignored stdio + unref so the daemon
-    // neither waits on it nor kills it on a tsx reload.
+    // neither waits on it nor kills it on a tsx reload. Provider keys stay daemon-only:
+    // the Vite/npm process (and every plugin and lifecycle script it runs) has no use for
+    // them, so they're scrubbed before the spawn.
+    const env = { ...process.env };
+    for (const key of secretEnvKeys) delete env[key];
     const child = spawn('npm', ['run', 'dev', '--workspace', 'dashboard'], {
       cwd: repoRoot,
       detached: true,
       stdio: 'ignore',
-      env: process.env,
+      env,
     });
     child.once('error', () => {}); // npm missing / spawn failure — stay best-effort
     child.unref();
