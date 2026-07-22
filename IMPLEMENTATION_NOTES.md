@@ -2699,3 +2699,25 @@ observed live). The convergent lesson, folded into the design as two GENERAL mec
   stay authoritative for app-level actions only (open, New Note, button clicks).
 - Same session: teaching completions announce as one confident save confirmation (summarizing
   the raw step report invited "this looks fiddly, the replay may fail" forecasts).
+
+### M8 the loop closes — structure capture + acceptance diff + replace_text (2026-07-21, night's end)
+
+The near-perfect run missed only the dashed list and one bold — and the miss was SILENT. Root
+principle (now load-bearing): **the system reproduces only what its observation channel can
+represent, and only verifies what it re-reads.** Three additions complete the teach→replay loop:
+
+- `document_state` reads paragraph structure (`AXListItemPrefix`/`Level` → "dashed list item"
+  etc.) — a list's dash is formatting, not characters; the plain text reads back without it, so
+  without these keys the compiler literally cannot know a list existed.
+- Structure applies via the menu bar ("Format > Dashed List" over the selected lines), never by
+  typing "- " and hoping the auto-format conversion fires — it is context-dependent (an earlier
+  run turned "--" into an em-dash instead).
+- Procedures carry their captured outcome as an ACCEPTANCE TEST (`expect`, attached code-side):
+  after the last step the engine re-captures and diffs deterministically — text line-by-line
+  first, styles per-character (immune to attributed-run fragmentation), "Contains paragraphs"/
+  "Expanded" window noise normalized away. Divergences ride into the fallback as named deltas
+  with the fix recipe; `replace_text` (AXSelectedText write, zero keystrokes) repairs text/case
+  without re-triggering auto-capitalize — the "test"→"Test" class is unfixable by typing.
+- Also that session: the outcome had silently never reached the compiler (a 3-arg arrow on a
+  4-arg seam — TS allows it); select_text now verifies by RANGE (AXSelectedText reads empty on
+  unfocused fields → false "did not take" whenever a popover held focus) with an Escape rung.
