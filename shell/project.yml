@@ -2,6 +2,9 @@
 # WKWebView dashboard window. Generated project + DerivedData are gitignored; regenerate with
 # `xcodegen generate` from this directory.
 name: Gumbo
+include:
+  - path: signing.local.yml
+    optional: true
 options:
   bundleIdPrefix: ai.Gumbo
   deploymentTarget:
@@ -15,20 +18,12 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     # Stable bundle id from day one — TCC grants (mic, Accessibility) attach to it.
-    PRODUCT_BUNDLE_IDENTIFIER: ai.Gumbo.app
+    PRODUCT_BUNDLE_IDENTIFIER: ai.scalinity.Gumbo
     MARKETING_VERSION: "0.1"
     CURRENT_PROJECT_VERSION: "1"
-    # Local self-signed cert, no Apple Developer account needed (this app never ships to the
-    # App Store). A stable local identity + stable bundle id is what makes TCC grants (mic,
-    # Accessibility, Reminders) survive rebuilds — an ad-hoc identity (`-`) does NOT: it
-    # re-prompts every rebuild because the signature hash changes each build. One-time setup:
-    # Keychain Access → Certificate Assistant → Create a Certificate… → name it exactly
-    # "Gumbo Local Signing" → Identity Type: Self Signed Root → Certificate Type: Code Signing
-    # → Create; then open the new cert's info, expand Trust, set "Code Signing" to Always
-    # Trust. CODE_SIGN_STYLE Manual then signs straight from that keychain identity — no
-    # portal/team lookup, no DEVELOPMENT_TEAM key needed.
+    # Keep the installed app identity pinned in ignored signing.local.yml.
+    # Never switch certificates or bundle IDs during routine rebuilds.
     CODE_SIGN_STYLE: Manual
-    CODE_SIGN_IDENTITY: "Gumbo Local Signing"
     ENABLE_HARDENED_RUNTIME: NO
 targets:
   Gumbo:

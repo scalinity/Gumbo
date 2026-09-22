@@ -6,8 +6,8 @@ efficiency, and presence are the product. Its gating stack (policy table + Seatb
 proxy + notch confirms) exists to make MORE autonomy safe to ship — safety machinery here buys
 autonomy, it never spends it on governance for its own sake.
 
-Design source-of-truth is [`SPEC.md`](./SPEC.md) (M1–M7 built and merged; M8 built on a worktree,
-pending live demos + merge; M9–M17 planned); running build log + field notes live in
+Design source-of-truth is [`SPEC.md`](./SPEC.md) (M1–M8 built and merged; M8 live demos passed;
+later milestones planned, M9 not started); running build log + field notes live in
 [`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md) —
 **read it before building anything**, and append dated bullets there when you learn something
 non-obvious (record *why*, not just *what*).
@@ -188,6 +188,11 @@ conventions generalized past their assumptions.
   gate.
 
 ## Working rules
+
+- Shell rebuilds must preserve `ai.scalinity.Gumbo` and the installed signing certificate.
+  Keep its exact fingerprint/team in ignored `shell/signing.local.yml`, following
+  `shell/README.md`. Compare designated signing requirements before replacing the installed
+  app at `~/Applications/Gumbo.app`; never substitute ad-hoc signing or reset TCC routinely.
 
 - Dev only: `npm run dev` (daemon: `tsx watch`; dashboard: Vite). Don't run build/compile
   commands (`tsc`, `vite build`, `xcodebuild`) unless the user asks — exception: they authorized

@@ -6,3 +6,10 @@ shell/**/DerivedData/
 xcuserdata/
 .DS_Store
 .claude/worktrees/
+
+# Private local tooling, captured UI, and signing configuration
+.deepsec/
+.playwright-mcp/
+shell/signing.local.yml
+.env.*
+!.env.example

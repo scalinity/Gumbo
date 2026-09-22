@@ -12,25 +12,30 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 
 ## Status
 
-- **M1 — Brain, text-driven:** ✅ complete and verified end-to-end.
-- **M2 — Swift shell + voice:** ✅ complete — live-validated with the user (voice round-trips
-  through the signed shell). Two follow-ups to observe in daily use: voice-exercised barge-in
-  and the TCC rebuild-persistence check.
-- **M3 — Completion presence:** ✅ complete — live-validated with the user, review+address pass
-  done, merged to main (see §M3 below).
-- **Web search providers (side feature, merged from `worktree-web-search-providers`):** ✅ built +
-  verified — Tavily on the voice hot path (`web_quick_lookup`), Exa for background sub-agents,
-  FTS5 memory persistence, JSONL search audit log. See §Web search providers below.
-- **Grok (xAI) live X search (side feature, `feat/grok-x-search`):** ✅ built + tested (180/180,
-  live smoke opt-in) — hot-path `x_lookup` + background `x_search`, X+web sources, X-first routing.
-  See §Grok below. Not yet live-demoed with the user; `/review-2` → `/address` pending before merge.
-- **M4 — Claude Code + supervisor (+ M4.1 OS sandbox):** ✅ built + review-hardened + smoked
-  (see §M4) — live voice demo with the user pending.
-- **M5 — Images + Gumbo-owned scheduler:** ✅ built + smoked end-to-end on an isolated daemon
-  (see §M5) — live voice demo with the user pending (incl. the first-run Reminders TCC prompt).
-- **M6:** not started. See SPEC §9.
+- **M1–M8:** built and merged, including the voice shell, completion presence, supervised
+  Claude Code, sandbox and egress proxy, search, images, reminders, computer use, teaching,
+  procedure replay, and scheduled routines.
+- **M8 acceptance:** all four live-demo gates passed on 2026-07-22; merged the same day.
+  See the dated M8 close-out at the end of this log.
+- **M9 and later roadmap work:** not started. Core M1–M8 completion does not imply that
+  the later memory, connectors, or login/startup persistence roadmap is implemented.
 
 ---
+
+## 2026-09-21 — Desktop build recovery
+
+- Spotlight indexed three obsolete Debug bundles. All predated the shell-authentication change,
+  so the current daemon rejected their hello with close code 4001. Rebuilt the existing shell
+  implementation and installed one canonical app at `~/Applications/Gumbo.app`.
+- Preserve `ai.scalinity.Gumbo` and the installed Apple Development certificate on every rebuild.
+  The certificate fingerprint and team live in ignored `shell/signing.local.yml`; XcodeGen
+  includes it. The old and rebuilt apps have identical designated signing requirements.
+  See `shell/README.md` for the rebuild convention. Never reset TCC as a routine build step.
+- M8 merged after all four live-demo gates passed on 2026-07-22. The opening status summaries
+  had not been updated; M9 remains unstarted.
+- Run daemon tests without a shared GUMBO_HOME override: each test process creates its own
+  temporary home. A shared override caused fixture collisions; the isolated run passed
+  529 tests, with one intentional skip and no failures.
 
 ## Environment facts (verified)
 
@@ -38,8 +43,6 @@ and anything that would surprise the next person. Keep it honest (note what's ve
   (`DatabaseSync`), `process.loadEnvFile`, and a global `WebSocket`.
 - This Mac runs a **macOS 27.0 beta** — spike DynamicNotchKit + TCC behavior early (M2 risk).
 - `.env` at repo root holds `OPENAI_API_KEY`, `EXA_API_KEY`, and `TAVILY_API_KEY`.
-- **No git repo** yet — fixes are applied without commits (matches the user's "don't commit unless
-  asked" rule). Initialize git when the user asks.
 - **Sandbox note:** automated/sandboxed dev runs can't write to `~/Gumbo`; use
   `GUMBO_HOME=<scratchpad>` to run the daemon in those contexts. The user created the real `~/Gumbo`.
 

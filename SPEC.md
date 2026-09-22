@@ -8,8 +8,8 @@
 > **Personal use only. Local machine only. Single user.** No auth, analytics, telemetry,
 > CI/CD, or deployment infra beyond what local development needs.
 
-This is the source-of-truth spec. It is organized by build phase (M1–M17; M1–M7 built and merged,
-M8 built on a worktree and pending live demos + merge, M9–M17 are the personal-capability roadmap).
+This is the source-of-truth spec. M1–M8 are built and merged; M8 passed all four live-demo gates
+on 2026-07-22. Later milestones are the personal-capability roadmap; M9 has not started.
 A companion running log lives in
 [`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md). The original approved plan is at
 `~/.claude/plans/<local-plan>.md`.
