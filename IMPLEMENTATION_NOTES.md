@@ -24,6 +24,8 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 
 ## 2026-09-21 — Desktop build recovery
 
+- Owner verified the rebuilt canonical app: Control–Option voice round-trip works, with no
+  macOS permission prompts. This closes the live microphone/playback and permission-retention check.
 - Spotlight indexed three obsolete Debug bundles. All predated the shell-authentication change,
   so the current daemon rejected their hello with close code 4001. Rebuilt the existing shell
   implementation and installed one canonical app at `~/Applications/Gumbo.app`.
