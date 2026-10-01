@@ -13,3 +13,4 @@ xcuserdata/
 shell/signing.local.yml
 .env.*
 !.env.example
+.claude/
