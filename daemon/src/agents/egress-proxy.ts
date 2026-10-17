@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type RequestListener } from 'node:http';
 import { connect, isIP, type Socket } from 'node:net';
 import { lookup } from 'node:dns/promises';
 
@@ -130,6 +130,7 @@ export async function startEgressProxy(
   onUnknown: (host: string) => Promise<boolean>,
   bindHost = '127.0.0.1', // loopback in prod; a unit test passes an unbindable address to exercise fail-closed
   resolveTarget: ResolveTarget = defaultResolveTarget, // injectable so tests can point a fake hostname at a loopback echo server
+  localRequest?: RequestListener,
 ): Promise<EgressProxy> {
   // Only non-allowlisted hosts land here (allowlisted ones short-circuit). Stores the
   // in-flight promise so two concurrent connects can't spawn two notch confirms.
@@ -142,12 +143,12 @@ export async function startEgressProxy(
     s.on('close', () => liveSockets.delete(s));
   };
 
-  const proxy: Server = createServer((_req, res) => {
+  const proxy: Server = createServer(localRequest ?? ((_req, res) => {
     // Plain HTTP (non-CONNECT). Everything real is HTTPS/CONNECT; refuse plain HTTP with a
     // clear 405 rather than build a second forwarding path (minimal — revisit if a tool needs it).
     res.writeHead(405, { 'content-type': 'text/plain' });
     res.end('egress proxy: only HTTPS (CONNECT) is supported');
-  });
+  }));
 
   proxy.on('connect', (req, clientSock: Socket, head) => {
     // Attach the error handler FIRST — a client RST before we finish setup would otherwise

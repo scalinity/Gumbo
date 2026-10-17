@@ -8,7 +8,8 @@ import { startEgressProxy, type EgressProxy } from './egress-proxy.ts';
 import type { Store } from '../events/store.ts';
 import type { Supervisor, GateResult } from './supervisor.ts';
 import { recordUsage } from '../usage/recorder.ts';
-import { priceClaudeEquivalent } from '../usage/pricing.ts';
+import { priceClaudeEquivalent, priceOpusUsage } from '../usage/pricing.ts';
+import { createAnthropicRelay } from './anthropic-relay.ts';
 
 // The usage slice of the SDK's result message (sdk.d.ts: modelUsage entries carry
 // inputTokens/outputTokens/cacheReadInputTokens/cacheCreationInputTokens/costUSD;
@@ -78,7 +79,7 @@ export function claudeUsageDeltas(
 // the risk-#2 spike, where a bad env produced a 'success' result whose text was the login
 // error). Turned into a clear, actionable failure instead of a cryptic SDK error.
 const AUTH_MARKER = /not logged in|please run\s*\/login|authentication_failed|oauth[^.]*\b(expired|invalid|revoked)\b/i;
-export const CLAUDE_AUTH_ERROR = 'auth: Claude Code needs you to log in again — run `claude` in a terminal, then `/login`.';
+export const CLAUDE_AUTH_ERROR = 'auth: the Anthropic API key was rejected; check the daemon provider configuration.';
 
 // Result subtypes that mean "ran out of room," not "failed": the work is on disk and the
 // session resumes with send_to_session, so the task parks for the user rather than failing.
@@ -291,10 +292,9 @@ export function subprocessEnv(): Record<string, string | undefined> {
   return env;
 }
 
-// M4: one Claude Code session per task, on subscription auth (spike-verified 2026-07-15):
-// the subprocess env must keep USER (keychain credential lookup resolves the login item by
-// account name) and must NOT carry ANTHROPIC_API_KEY (it silently outranks the claude.ai
-// login). Streaming input keeps the session open for supervisor answers and the user's
+// One Claude Code session per task, using a daemon-owned API relay. The subprocess
+// receives a session credential, never the Anthropic provider key.
+// Streaming input keeps the session open for supervisor answers and the user's
 // mid-run redirects; the session id is persisted so send_to_session can resume after a
 // daemon restart.
 
@@ -410,6 +410,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
   private firstUserMessageId: string | null = null; // rewind target for undo() (checkpointing)
   private planRejected = false; // the user declined the plan → park, don't fail
   private authFailed = false; // an assistant message reported an auth error
+  private apiFailure: string | null = null;
   // Per-model totals already recorded for this session run — result messages within one
   // query() report CUMULATIVE session usage, so each result records only the delta.
   private recordedModelUsage = new Map<string, { in: number; out: number; read: number; write: number; cost: number }>();
@@ -444,6 +445,8 @@ export class ClaudeRunner implements ClaudeSessionRunner {
     // unfiltered) rather than silently dropping containment.
     let spawnClaudeCodeProcess: ((opts: SpawnOptions) => SpawnedProcess) | undefined;
     let proxy: EgressProxy | undefined;
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error(CLAUDE_AUTH_ERROR);
+    const relay = createAnthropicRelay();
     let proxyEnv: Record<string, string> = {};
     if (config.claude.sandbox.enabled) {
       const reason = sandboxUnavailableReason();
@@ -458,7 +461,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         // the sandbox-forced egress lands on it. A proxy that won't bind means unfiltered
         // network, so fail closed (matches the sandbox-unavailable throw above).
         try {
-          proxy = await startEgressProxy(egressAllowlist(), (host) => supervisor.escalateHost(host, this.abort.signal));
+          proxy = await startEgressProxy(egressAllowlist(), (host) => supervisor.escalateHost(host, this.abort.signal), '127.0.0.1', undefined, relay.handle);
         } catch (err) {
           throw new Error(`${CLAUDE_PROXY_ERROR} (${String(err)})`);
         }
@@ -476,9 +479,19 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         // Clear any inherited NO_PROXY/no_proxy: a match there makes the CLI attempt a DIRECT
         // connect (Seatbelt-denied, no escalation), and NO_PROXY=* would cut it off from Anthropic
         // entirely — either way a cryptic failure instead of routing through the proxy (review 🟡).
-        proxyEnv = { HTTPS_PROXY: url, HTTP_PROXY: url, https_proxy: url, http_proxy: url, NO_PROXY: '', no_proxy: '' };
+        proxyEnv = { HTTPS_PROXY: url, HTTP_PROXY: url, https_proxy: url, http_proxy: url, NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1' };
       }
     }
+    // Even an explicitly unconfined development run uses the same short-lived API relay.
+    if (!proxy) proxy = await startEgressProxy(egressAllowlist(), (host) => supervisor.escalateHost(host, this.abort.signal), '127.0.0.1', undefined, relay.handle);
+    const apiEnv = {
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxy.port}/anthropic`,
+      ANTHROPIC_AUTH_TOKEN: relay.token, ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '',
+      ANTHROPIC_MODEL: config.models.worker, ANTHROPIC_SMALL_FAST_MODEL: config.models.worker,
+      ANTHROPIC_DEFAULT_OPUS_MODEL: config.models.worker, ANTHROPIC_DEFAULT_SONNET_MODEL: config.models.worker,
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: config.models.worker, CLAUDE_CODE_SUBAGENT_MODEL: config.models.worker,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    };
 
     const initialPrompt = this.opts.resumeSessionId ? brief : composePrompt(brief, cwd, this.planning);
     this.input.push(initialPrompt);
@@ -487,13 +500,15 @@ export class ClaudeRunner implements ClaudeSessionRunner {
     // the very thing Claude was responding to (live finding 2026-07-16).
     store.addEvent(taskId, 'claude.prompt', { text: initialPrompt.slice(0, PROMPT_LOG_MAX_CHARS) });
 
-    const session = query({
+    let session: Query;
+    try { session = query({
       prompt: this.input,
       options: {
         cwd,
         resume: this.opts.resumeSessionId,
         abortController: this.abort,
         maxTurns: config.claude.maxTurns,
+        model: config.models.worker,
         // Plan-then-execute for fresh sessions: start read-only in plan mode; approving
         // the plan flips to 'auto' (handlePlan). Resumes are direct instructions → straight
         // to 'auto'. In 'auto' the CLI classifier auto-runs safe actions — but it BYPASSES
@@ -521,9 +536,10 @@ export class ClaudeRunner implements ClaudeSessionRunner {
         mcpServers: config.claude.mcpServers,
         // Least-privilege env MINUS provider secrets, PLUS the proxy vars so the CLI (and any
         // bash it spawns) routes egress through the filtering proxy the sandbox forces it onto.
-        env: { ...subprocessEnv(), ...proxyEnv },
+        env: { ...subprocessEnv(), ...proxyEnv, ...apiEnv },
       },
     });
+    } catch (error) { relay.close(); proxy.close(); throw error; }
     this.query = session;
 
     let report = '';
@@ -539,6 +555,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           store.saveClaudeSession(taskId, { sessionId: msg.session_id, cwd, brief: this.opts.persistBrief });
         } else if (msg.type === 'assistant' && !msg.parent_tool_use_id) {
           if (msg.error === 'authentication_failed') this.authFailed = true;
+          if (msg.error) this.apiFailure = `Anthropic coding request failed: ${msg.error}`;
           for (const block of msg.message.content as ContentBlock[]) {
             if (block.type === 'text' && block.text) {
               store.addEvent(taskId, 'claude.message', { text: block.text });
@@ -574,9 +591,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           }
         } else if (msg.type === 'result') {
           // Record BEFORE the park/throw exits below — a failed or parked run still burned
-          // tokens. billed=0: subscription auth, so costUSD is the SDK's client-side
-          // estimate at API list prices — exactly the "equivalent value" the usage view
-          // labels it as. Falls back to our own rate table when the SDK reports 0.
+          // tokens. These are billed API calls; SDK totals remain estimates of the bill.
           this.recordClaudeUsage(msg as unknown as ResultUsageMessage, taskId);
           this.turnsResolved += 1;
           if (supervisor.capHit) return this.park(report, 'reached the supervisor question limit — needs your input');
@@ -594,6 +609,7 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           }
           // Success — but the assistant may still have flagged an auth error mid-turn.
           if (this.authFailed) throw new Error(CLAUDE_AUTH_ERROR);
+          if (this.apiFailure) throw new Error(this.apiFailure);
           report = msg.result || report;
           if (this.turnsResolved >= this.turnsSent) {
             this.input.close();
@@ -605,11 +621,12 @@ export class ClaudeRunner implements ClaudeSessionRunner {
       throw new Error('Claude session closed before finishing');
     } finally {
       this.input.close();
+      relay.close();
       proxy?.close(); // the session owns the proxy — stop listening when it ends
     }
   }
 
-  /** One equivalent-value row per model from the result's cumulative modelUsage, recording
+  /** One billed row per model from the result's cumulative modelUsage, recording
    *  only the delta since the last result. SDK ModelUsage carries costUSD (its own
    *  API-list-price estimate — preferred); our rate table covers a zero/missing one. */
   private recordClaudeUsage(msg: ResultUsageMessage, taskId: string) {
@@ -619,9 +636,9 @@ export class ClaudeRunner implements ClaudeSessionRunner {
     try {
       for (const { model, delta: d } of claudeUsageDeltas(msg, this.recordedModelUsage)) {
         if (d.in === 0 && d.out === 0 && d.read === 0 && d.write === 0) continue;
-        const equivalent = d.cost > 0
-          ? d.cost
-          : priceClaudeEquivalent(model, { input: d.in, output: d.out, cacheRead: d.read, cacheWrite: d.write });
+        const equivalent = model === config.models.worker
+          ? priceOpusUsage({ input_tokens: d.in, output_tokens: d.out, cache_read_input_tokens: d.read, cache_creation_input_tokens: d.write })
+          : d.cost > 0 ? d.cost : priceClaudeEquivalent(model, { input: d.in, output: d.out, cacheRead: d.read, cacheWrite: d.write });
         recordUsage({
           provider: 'anthropic',
           model,
@@ -632,7 +649,8 @@ export class ClaudeRunner implements ClaudeSessionRunner {
           cachedTokens: d.read,
           cacheWriteTokens: d.write,
           costUsd: equivalent ?? 0,
-          billed: false,
+          billed: true,
+          estimated: true,
           detail: equivalent == null ? { unpriced: true } : undefined,
         });
       }
