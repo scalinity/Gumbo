@@ -93,7 +93,7 @@ function vadHarness(over: { responding?: boolean; shellDraining?: boolean }) {
     armed: true,
     responding: over.responding ?? false,
     shellDraining: over.shellDraining ?? false,
-    session: { sendAudio: () => {}, interrupt: () => { interrupts += 1; }, close: () => {} },
+    session: { setInput: () => {}, sendAudio: () => {}, interrupt: () => { interrupts += 1; }, close: () => {} },
   });
   const opened = orchestrator as unknown as {
     handleMicFrame(f: Buffer): void;
@@ -145,86 +145,42 @@ test('local VAD: speech while Gumbo is NOT talking sets the commit gate but neve
   opened.shutdown();
 });
 
-// Commit gates (review 🟡): finishTurn decides whether a released window is worth a
-// commit + response. localHadSpeech latches at 90 ms (minSpeechMs) but the API rejects
-// commits under ~100 ms (minPttAudioBytes) — the local-only path must respect the byte
-// floor, same as the pendingRelease fork already does.
-
-/** Orchestrator opened at the finishTurn seam: a fake session whose transport records
- *  every commit/clear/response so the gates are assertable. */
-function commitHarness(over: { hadSpeech?: boolean; localHadSpeech?: boolean; armedBytes?: number }) {
-  const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-commit-')), 'gumbo.db'));
-  const hub = { broadcast: () => {}, hasRole: () => true, sendBinary: () => {} };
-  // manager stub carries hasActiveTasks — the idle-timer callback (resetIdleTimer) calls it, so a
-  // future fake-timer test would TypeError on a bare {} (DB1 review 🔵).
-  const orchestrator = new Orchestrator(store, hub as never, { hasActiveTasks: () => false } as never, {} as never, {} as never, {} as never);
-  const events: string[] = [];
-  let responses = 0;
-  const transport = {
-    sendEvent: (e: { type: string }) => events.push(e.type),
-    updateSessionConfig: () => {},
-    requestResponse: () => { responses += 1; },
-  };
+// GPT-Live PTT releases use input muting after paced audio, never legacy commit events.
+function releaseHarness(speech: boolean, bytes: number, connected = true) {
+  const { orchestrator } = harness(false);
+  const controls: boolean[] = [];
   Object.assign(orchestrator, {
-    armed: true,
-    hadSpeech: over.hadSpeech ?? false,
-    localHadSpeech: over.localHadSpeech ?? false,
-    armedBytes: over.armedBytes ?? 0,
-    session: { transport, sendAudio: () => {}, interrupt: () => {}, close: () => {} },
+    armed: true, localHadSpeech: speech, armedBytes: bytes,
+    session: connected ? { setInput: (active: boolean) => controls.push(active), close: () => {} } : null,
+    connecting: connected ? null : Promise.resolve(null),
   });
-  const opened = orchestrator as unknown as { handlePttRelease(): void; shutdown(): void };
-  return { opened, events, responses: () => responses };
+  return { orchestrator, controls };
 }
 
-test('finishTurn: server-VAD speech commits and requests a response', () => {
-  const { opened, events, responses } = commitHarness({ hadSpeech: true });
-  opened.handlePttRelease();
-  assert.deepEqual(events, ['input_audio_buffer.commit', 'input_audio_buffer.clear']);
-  assert.equal(responses(), 1);
-  opened.shutdown();
+test('PTT release drains real speech before muting input', () => {
+  const { orchestrator, controls } = releaseHarness(true, config.minPttAudioBytes);
+  orchestrator.handlePttRelease();
+  assert.deepEqual(controls, [false]);
+  assert.equal((orchestrator as any).state, 'thinking');
+  orchestrator.shutdown();
 });
 
-test('finishTurn: local-only speech with enough audio commits too', () => {
-  const { opened, events, responses } = commitHarness({ localHadSpeech: true, armedBytes: config.minPttAudioBytes });
-  opened.handlePttRelease();
-  assert.deepEqual(events, ['input_audio_buffer.commit', 'input_audio_buffer.clear']);
-  assert.equal(responses(), 1);
-  opened.shutdown();
+test('silent and short PTT windows never unmute or request an answer', () => {
+  for (const [speech, bytes] of [[false, 9600], [true, 2000]] as const) {
+    const { orchestrator, controls } = releaseHarness(speech, bytes);
+    orchestrator.handlePttRelease();
+    assert.deepEqual(controls, []);
+    assert.equal((orchestrator as any).state, 'idle');
+    orchestrator.shutdown();
+  }
 });
 
-test('finishTurn: local-only speech under the byte floor is cleared, never answered', () => {
-  // localHadSpeech latches at 90 ms but a commit needs ~100 ms — a sub-floor window used
-  // to commit anyway and the API rejected it (or the model answered near-silence).
-  const { opened, events, responses } = commitHarness({ localHadSpeech: true, armedBytes: config.minPttAudioBytes - 1 });
-  opened.handlePttRelease();
-  assert.deepEqual(events, ['input_audio_buffer.clear'], 'no commit on a sub-floor buffer');
-  assert.equal(responses(), 0, 'a silence-floor window must not request a response');
-  opened.shutdown();
-});
-
-test('finishTurn: a window with no speech at all clears and stays silent', () => {
-  const { opened, events, responses } = commitHarness({});
-  opened.handlePttRelease();
-  assert.deepEqual(events, ['input_audio_buffer.clear']);
-  assert.equal(responses(), 0);
-  opened.shutdown();
-});
-
-test('a release that beats the connect stashes the window bytes for the deferred commit', () => {
-  const store = new Store(join(mkdtempSync(join(tmpdir(), 'gumbo-commit-')), 'gumbo.db'));
-  const hub = { broadcast: () => {}, hasRole: () => true, sendBinary: () => {} };
-  // manager stub carries hasActiveTasks — the idle-timer callback (resetIdleTimer) calls it, so a
-  // future fake-timer test would TypeError on a bare {} (DB1 review 🔵).
-  const orchestrator = new Orchestrator(store, hub as never, { hasActiveTasks: () => false } as never, {} as never, {} as never, {} as never);
-  // Mid-connect: no session yet, ensureSession's promise pending — the shape the
-  // pendingRelease fork keys on. The commit decision itself runs after connect resolves
-  // (needs a real RealtimeSession) and stays covered by the smokes.
-  Object.assign(orchestrator, { armed: true, armedBytes: 9600, connecting: Promise.resolve(null), session: null });
-  const opened = orchestrator as unknown as { handlePttRelease(): void; shutdown(): void; pendingRelease: number | null; armedBytes: number };
-  opened.handlePttRelease();
-  assert.equal(opened.pendingRelease, 9600, 'the window byte count survives the release');
-  assert.equal(opened.armedBytes, 0, 'zeroed only after the stash');
-  opened.shutdown();
+test('release while connecting preserves the real speech window', () => {
+  const { orchestrator } = releaseHarness(true, 9600, false);
+  orchestrator.handlePttRelease();
+  assert.equal((orchestrator as any).pendingRelease, 9600);
+  assert.equal((orchestrator as any).armedBytes, 0);
+  orchestrator.shutdown();
 });
 
 // Continuity (2026-07-16): sessions are short-lived (idle close, tsx-watch restarts) but

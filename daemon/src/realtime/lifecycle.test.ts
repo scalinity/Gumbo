@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 process.env.GUMBO_HOME = mkdtempSync(join(tmpdir(), 'gumbo-lifecycle-'));
 const { Orchestrator } = await import('./session.ts');
-const { RealtimeSession } = await import('@openai/agents/realtime');
+const { LiveSession } = await import('./live.ts');
 const { Store } = await import('../events/store.ts');
 
 function harness() {
@@ -47,11 +47,11 @@ test('native audio failure records the failing stage and cancels the voice turn'
 });
 
 test('a connection completing after shell loss cannot reopen or emit old audio', async () => {
-  const connect = RealtimeSession.prototype.connect;
-  const close = RealtimeSession.prototype.close;
+  const connect = LiveSession.prototype.connect;
+  const close = LiveSession.prototype.close;
   let finish!: () => void;
-  RealtimeSession.prototype.connect = async () => new Promise<void>(resolve => { finish = resolve; });
-  RealtimeSession.prototype.close = () => {};
+  LiveSession.prototype.connect = async () => new Promise<void>(resolve => { finish = resolve; });
+  LiveSession.prototype.close = () => {};
   const { orchestrator, store, messages } = harness();
   try {
     orchestrator.handlePttPress();
@@ -60,15 +60,15 @@ test('a connection completing after shell loss cannot reopen or emit old audio',
     orchestrator.handleShellDisconnected();
     finish();
     await new Promise(resolve => setImmediate(resolve));
-    oldSession.emit('agent_start', {});
-    oldSession.emit('audio', { data: new ArrayBuffer(2) });
+    oldSession.emit('event', { type: 'session.output_transcript.delta', delta: 'stale' });
+    oldSession.emit('audio', Buffer.alloc(2));
     assert.equal((orchestrator as any).session, null);
     assert.equal((orchestrator as any).state, 'idle');
     assert.equal(messages.at(-1)?.state, 'idle');
     assert.ok(!store.listEvents({ limit: 20 }).some(e => e.type === 'session.opened'));
   } finally {
     orchestrator.shutdown();
-    RealtimeSession.prototype.connect = connect;
-    RealtimeSession.prototype.close = close;
+    LiveSession.prototype.connect = connect;
+    LiveSession.prototype.close = close;
   }
 });

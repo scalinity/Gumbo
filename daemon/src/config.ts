@@ -113,7 +113,7 @@ export const config = {
   models: {
     worker: 'claude-opus-5-5',
     workerMaxOutputTokens: 32_768, // includes adaptive thinking and the final report
-    realtime: 'gpt-realtime-2.1',
+    live: 'gpt-live-1',
     // Hard per-request ceiling for model calls (the SDK default is ~10 min —
     // a stalled call read as a silent hang on a live fallback run). Generous enough for
     // long reasoning turns; the client retries what the timeout exposes.
@@ -128,39 +128,11 @@ export const config = {
     // as long as width and height are divisible by 16 (probed via the API's own error).
     image: 'gpt-image-2',
   },
-  // M2: the orchestrator speaks. Typed dashboard input still works — replies are spoken
-  // and the transcript still streams to the dashboard via output_audio_transcript deltas.
-  outputModalities: ['audio'] as ('text' | 'audio')[],
+  // Live uses raw 24 kHz mono PCM16. The shell owns push-to-talk and playback truth.
   voice: 'marin',
-  // PTT turn model: the server VAD never auto-responds (createResponse: false — commit and
-  // response are driven by ⌃⌥ release), but it DOES cut Gumbo off the moment the user actually
-  // speaks while armed (interruptResponse: true → audio_interrupted → shell playback flush).
-  // Input transcription is on so voice turns land in the store/dashboard with real user text.
-  realtimeAudio: {
-    input: {
-      format: 'pcm16' as const, // 24 kHz mono pcm16 — the shell's exact wire format
-      transcription: { model: 'gpt-4o-mini-transcribe' },
-      turnDetection: { type: 'server_vad' as const, createResponse: false, interruptResponse: true },
-    },
-    output: { format: 'pcm16' as const },
-  },
-  // A ⌃⌥ tap shorter than this has no usable audio — the API rejects commits under ~100 ms.
-  minPttAudioBytes: 4800, // 100 ms @ 24 kHz mono 16-bit (48 bytes/ms)
+  minPttAudioBytes: 4800,
   sessionIdleMs: 60_000,
-  // Local (daemon-side) speech-energy gate on the armed mic stream (2026-07-16). Two jobs:
-  // 1. INSTANT barge-in. The SDK clears its interrupt tracking the moment audio GENERATION
-  //    completes (response.output_audio.done → #resetAudioPlaybackState), but the shell
-  //    drains the buffered audio for far longer — during that window the server-VAD
-  //    barge-in path (speech_started → interrupt()) is a silent no-op, measured live as
-  //    seconds of talking over Gumbo. The daemon detects speech energy on the armed mic
-  //    frames itself and flushes shell playback immediately; it also covers cold TTS
-  //    announcements, which have no session to interrupt at all.
-  // 2. Silence gate. A PTT window with no speech-like energy is cleared, never committed —
-  //    a silent ⌃⌥ hold used to commit an empty buffer and the model answered it with a
-  //    generic "what can I do for you?" (live bug, seen twice).
-  // Frames are post-AEC (the shell taps VPIO-processed input), so Gumbo's own speaker
-  // output does not read as speech. RMS is over pcm16 (±32767): AGC'd speech lands around
-  // 2000–4000; AEC residue and room noise sit well under 500.
+  // Post-AEC local speech gate: reject silent presses and flush playback on barge-in.
   localVad: {
     rmsThreshold: 900,
     minSpeechMs: 90, // sustained AND consecutive — debounces keyboard clicks and breaths
