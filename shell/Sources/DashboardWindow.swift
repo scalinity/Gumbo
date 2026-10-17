@@ -2,7 +2,7 @@ import AppKit
 import WebKit
 
 /// The activity center: a plain window hosting the React dashboard. Loads exactly
-/// http://localhost:5173 — never any subdomain — and survives close (hidden, re-shown).
+/// http://127.0.0.1:5173 — the launcher's loopback endpoint — and survives close (hidden, re-shown).
 final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
     private var window: NSWindow?
     private var webView: WKWebView?
@@ -60,7 +60,7 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
     private func build() {
         let webView = WKWebView(frame: .zero)
         webView.navigationDelegate = self
-        webView.load(URLRequest(url: URL(string: "http://localhost:5173")!))
+        webView.load(URLRequest(url: URL(string: "http://127.0.0.1:5173")!))
         self.webView = webView
 
         let window = NSWindow(
@@ -85,7 +85,7 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
 
     private func reload() {
         loadFailed = false
-        webView?.load(URLRequest(url: URL(string: "http://localhost:5173")!))
+        webView?.load(URLRequest(url: URL(string: "http://127.0.0.1:5173")!))
     }
 
     private func scheduleRetry() {
