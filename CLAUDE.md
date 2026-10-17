@@ -12,6 +12,14 @@ later milestones planned, M9 not started); running build log + field notes live 
 **read it before building anything**, and append dated bullets there when you learn something
 non-obvious (record *why*, not just *what*).
 
+## Current runtime and provider boundaries
+
+- Voice uses **`gpt-live-1`** through `realtime/live.ts`, a dedicated Live WebSocket transport with client delegation. The `realtime/` directory name and tool-registry helpers do not imply the legacy Realtime API. Live receives concise context; the Opus backend executes tools and owns confirmations.
+- Research, Mac workers, voice/text tool routing, supervisor inference, procedures, vision and file rewrites use **`claude-opus-5-5`** through `agents/anthropic.ts` and the official Messages SDK. `agents/openai-runner.ts` retains its filename and tool definitions but runs the Anthropic loop.
+- Coding uses Claude Agent SDK **0.3.302** with API authentication through `agents/anthropic-relay.ts`. The daemon injects the real key; child sessions receive a scoped local token. Preserve secret stripping, Seatbelt, the egress proxy and hook gates. Configured HTTP MCP servers work through the proxy; inherited claude.ai connectors require separate API-compatible configuration.
+- The explicit computer-task stop shortcut is **Control–Shift–Escape**. Ordinary keyboard/mouse use must not cancel background work. Shared foreground UI still requires post-action observation.
+- See [RESTORATION_REPORT.md](./RESTORATION_REPORT.md) for the current verification limits and [SPEC.md](./SPEC.md) for the design. M9 and later work remains outside the restoration.
+
 ## What this is — and what it must never become
 
 One principal, one machine, ~five action channels, ~five egress sinks, a voice surface, cheap

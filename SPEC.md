@@ -39,14 +39,14 @@ A voice-first personal agent that feels alive and present without a window open:
 
 | Area | Decision |
 |---|---|
-| Orchestrator | The **voice model itself** (`gpt-realtime-2.1`) calls tools directly. Heavy planning is delegated *into* sub-agents, not done by the voice loop. |
-| Cloud processing | **Accepted** for the Realtime orchestrator under a one-time standing grant per connector/data class. The daemon minimizes every connector result before model ingress; raw media still needs its own explicit release. No second local orchestrator. |
-| Generic sub-agents | OpenAI Agents SDK agents on **`gpt-5.6-terra`**, with **Exa** web search (`exa-js`) + hosted code interpreter. |
+| Orchestrator | **GPT-Live-1** handles speech and delegates to a daemon-owned **Claude Opus 5.5** backend. The backend owns tools, task routing and permissions; heavy work runs in background workers. |
+| Cloud processing | **Accepted** for the cloud voice/backend path under a one-time standing grant per connector/data class. The daemon minimizes every connector result before model ingress; raw media still needs its own explicit release. No second local orchestrator. |
+| Generic sub-agents | Anthropic Messages workers on **`claude-opus-5-5`**, with **Exa** web search (`exa-js`) + Anthropic hosted code execution. |
 | Code/file/shell tasks | Full **Claude Code** sessions via `@anthropic-ai/claude-agent-sdk`, one workspace (`cwd`) per session. |
-| Claude Code supervision | Each interactive Claude Code session is paired with a dedicated **supervisor agent** (`gpt-5.6-terra`) that answers its questions, gates permissions per policy, and escalates. |
-| Claude billing | **Subscription auth** (the Claude Code CLI login). No `ANTHROPIC_API_KEY` in the daemon env. |
+| Claude Code supervision | Each interactive Claude Code session is paired with a dedicated **supervisor agent** (`claude-opus-5-5`) that answers its questions, gates permissions per policy, and escalates. |
+| Claude billing | **Anthropic API auth.** The daemon holds `ANTHROPIC_API_KEY`; coding CLIs receive a short-lived local relay token, never the provider key. |
 | Activation | Global hotkey / click-the-notch **push-to-talk**. The hotkey is **Control + Option held together** (a modifier-only chord). Session opens on demand, stays warm briefly, idle-closes. **Wake word is v2** (audio path reserves the seam). |
-| Computer-use guardrails | Free navigation/typing/drafting. **Gate irreversible acts** — sending (message/email/post), deleting, paying, or acting in an app not on the allowlist requires a notch confirmation. **Kill switch** = hotkey or moving the real mouse. |
+| Computer-use guardrails | Free navigation/typing/drafting. **Gate irreversible acts** — sending (message/email/post), deleting, paying, or acting in an app not on the allowlist requires a notch confirmation. **Kill switch** = **Control–Shift–Escape**. Ordinary keyboard/mouse use leaves background tasks running. |
 | Completions | When a sub-agent finishes: bubble flips to done + notch pulses + `report.md` written + dashboard entry + a **brief spoken announcement** ("your sub-agent finished the X task"). Inject into a live session if one is open, else one-shot TTS — **never open a realtime session just to announce**. |
 | Shell | Native **Swift/SwiftUI** app owns the notch, bubbles, agent cursor, audio, macOS automation, and all TCC permissions. Dashboard is a **React** app in a `WKWebView` window. Brain is a **Node/TypeScript** daemon. |
 | User's name | The agent addresses the user by name, via a configurable `USER_NAME` setting — never hardcoded. |
@@ -59,9 +59,9 @@ A voice-first personal agent that feels alive and present without a window open:
 ```
 ┌────────────────────────────┐        WS :8737 (JSON + binary audio)      ┌──────────────────────────┐
 │  Swift shell  (Gumbo.app)  │  ◀──────────────────────────────────────▶  │  Node daemon  (the brain) │
-│  · notch (DynamicNotchKit) │                                            │  · OpenAI Realtime session │
+│  · notch (DynamicNotchKit) │                                            │  · GPT-Live + Opus backend │
 │  · bubbles (upper-right)   │                                            │  · task manager            │
-│  · agent-cursor overlay    │        WKWebView → http://localhost:5173   │  · sub-agent runners       │
+│  · agent-cursor overlay    │        WKWebView → http://127.0.0.1:5173   │  · sub-agent runners       │
 │  · AVAudioEngine mic/spkr  │  ◀──────────────────────────────────────▶  │  · Claude Code runner (M4) │
 │  · hotkey (⌃⌥)             │                                            │  · supervisor (M4)         │
 │  · AX / CGEvent / EventKit │                                            │  · image gen (M5)          │
@@ -71,20 +71,20 @@ A voice-first personal agent that feels alive and present without a window open:
         ┌───────────────────────────┐                                     └────────────┬──────────────┘
         │  React dashboard          │   WS live-tail  +  /api history                  │
         │  "activity center"        │  ◀───────────────────────────────────────────────┘
-        │  zustand, NO useEffect    │              OpenAI Realtime / Agents / Images · Claude Agent SDK · Exa
+        │  zustand, NO useEffect    │              OpenAI Live / Images · Anthropic Messages / Claude Agent SDK · Exa
         └───────────────────────────┘
 ```
 
 **Why this split:** every polished notch/overlay app is native Swift, and macOS attributes TCC
 permissions (mic, Accessibility, Screen Recording, Reminders) to one signed app bundle — so the
-native surfaces live in Swift. The agent logic and both SDKs are TypeScript, so the brain is a Node
+native surfaces live in Swift. The agent logic and provider integrations are TypeScript, so the brain is a Node
 daemon. The dashboard is web tech (fast to build a rich activity center) rendered in a WKWebView the
 Swift shell owns. The three talk over a local WebSocket + HTTP.
 
 ### Component responsibilities
 
 - **Daemon (`daemon/`)** — the only component that holds API keys and talks to model providers. Owns
-  the Realtime orchestrator session, the tool registry, the task manager, sub-agent runners, the
+  the Live voice session, the Opus tool backend, the tool registry, the task manager, sub-agent runners, the
   event store, and the WS/HTTP servers. Bound to **loopback only**.
 - **Shell (`shell/`, M2+)** — native macOS surfaces + audio + automation. A thin WS client of the
   daemon. Holds no secrets.
@@ -100,12 +100,12 @@ Confirm exact IDs against the live API at implementation time; all live in `daem
 
 | Purpose | Model / package | Notes |
 |---|---|---|
-| Voice orchestrator | `gpt-realtime-2.1` | via `@openai/agents/realtime`, **websocket** transport from Node. Swap point for future GPT-Live is this one constant. |
-| Generic sub-agents + supervisor | `gpt-5.6-terra` | via `@openai/agents` `run()` (streaming). |
+| Voice | `gpt-live-1` | Dedicated `ws` transport to `/v1/live/sessions`, client delegation, 24 kHz PCM16 and Marin. |
+| Tool backend, research, Mac workers + supervisor | `claude-opus-5-5` | Official `@anthropic-ai/sdk` **0.135.0**, streaming Messages, adaptive thinking and native tool-use blocks. |
 | Web search | **Exa** `exa-js` | custom `tool()` wrapping `searchAndContents`. `EXA_API_KEY` in `.env`. |
 | Images (M5) | `gpt-image-2` | Images API, base64 → `~/Gumbo/images/`. |
-| Code/file/shell tasks (M4) | Claude Code | `@anthropic-ai/claude-agent-sdk` `query()` streaming input, subscription auth. |
-| Realtime SDK | `@openai/agents` ≥ 0.13 | requires **zod v4**. |
+| Code/file/shell tasks (M4) | `claude-opus-5-5` | `@anthropic-ai/claude-agent-sdk` **0.3.302**, `query()` streaming input, API auth through the daemon relay. |
+| Tool schemas | `@openai/agents` **0.13.3** + zod v4 | Existing function schemas/invokers retained; execution uses the Anthropic adapter. |
 | Event store | Node built-in `node:sqlite` | no native module; Node 26+. |
 | Dashboard | React 19 + zustand 5 + Vite 6 | no `useEffect`. |
 
@@ -170,11 +170,19 @@ the event stream; edits add `edited_from` lineage + `selection`) and the schedul
 ## 7. Audio path (M2)
 
 - **Capture:** `AVAudioEngine` tap (48 kHz float32) → `AVAudioConverter` → **24 kHz mono pcm16** (the
-  Realtime default input format, so the daemon transcodes nothing) → 20 ms binary WS frames →
-  `session.sendAudio()` verbatim.
+  configured Live format) → 20 ms binary WS frames. The daemon buffers first words until unmute
+  is acknowledged and maintains a paced Live clock with silence while PTT is released.
 - **Playback:** daemon relays `session.on('audio')` pcm16 → shell schedules on `AVAudioPlayerNode`.
-- **Turn-taking:** server-side semantic VAD. **Barge-in:** SDK `audio_interrupted` → daemon forwards
-  → shell stops playback + drops queued buffers.
+- **Turn-taking:** local speech gating preserves short/silent-press behavior; Live interprets the
+  continuous input stream. **Barge-in:** actual speech flushes local playback, cancels foreground
+  backend work and redirects Live. Old audio/captions are suppressed until an acoustic gap.
+- **Playback truth:** the native queue drives speaking state. Live has no output-done event.
+  Continuous output silence is gated before scheduling, and queue/device failures settle visibly.
+- **Delegation:** accumulated transcripts and task state feed Opus; the original delegation ID
+  accompanies context updates. A settled unanswered request has one backend fallback. Typed input
+  goes directly to Opus without opening a voice session.
+- **Economics:** idle voice sessions close even while background tasks run. Duration is recorded
+  once from final cumulative usage; transport loss is explicitly marked estimated.
 - **Wake-word seam (v2):** `AudioEngine.start(reason:)` — a future `.wakeWord` reason runs the tap
   into a local detector before any cloud traffic. Nothing downstream changes.
 - **Position:** browser-WebRTC voice is explicitly **not** used; M1 drives the whole loop via the
@@ -210,11 +218,11 @@ not final code.
 
 - Daemon: config, `node:sqlite` event store (tasks + events, WAL, status `CHECK`, restart reaper),
   WS hub (role-tagged, Origin allowlist), HTTP (`/api/tasks`, `/api/events`, `/files/*`).
-- Realtime orchestrator (`gpt-realtime-2.1`, text output) driven by dashboard `debug_text`; lazy
-  connect, 60 s idle-close, tool-call + transcript persistence.
+- Dashboard `debug_text` drives the Opus backend directly, with tool-call and transcript
+  persistence; microphone activation is independent of typed interaction.
 - Tools: `spawn_subagent`, `list_tasks`, `get_task_status`, `cancel_task`, `read_report`,
   `save_note`.
-- Generic sub-agent runner (`gpt-5.6-terra` + Exa web search + hosted code interpreter), streamed
+- Generic sub-agent runner (`claude-opus-5-5` + Exa web search + hosted code execution), streamed
   events, `report.md` per task, cancellation via `AbortSignal`.
 - Completion pipeline: status update + `task.finished` + spoken announcement (inject if live, else
   `announce.pending`).
@@ -281,8 +289,8 @@ IMPLEMENTATION_NOTES §M3). TCC risk #3 closed.
 
 - `claude-runner`: `@anthropic-ai/claude-agent-sdk` `query()` streaming input, one `cwd` per session
   (the named `project_dir` when the user gave one, else the task workspace — report.md +
-  supervisor.md always land in the workspace), **subscription auth** (no `ANTHROPIC_API_KEY` in
-  env; `USER` required for the keychain lookup), resume by persisted session id across daemon
+  supervisor.md always land in the workspace), **Anthropic API auth** through a per-session
+  daemon relay (the real key remains stripped from the child env), resume by persisted session id across daemon
   restarts via `send_to_session`.
 - New tools: `spawn_claude_session` (title, brief, nullable `project_dir`), `send_to_session`.
 - **Plan-then-execute** (the user, 2026-07-16): a fresh session runs read-only in `permissionMode:
@@ -295,12 +303,12 @@ IMPLEMENTATION_NOTES §M3). TCC risk #3 closed.
   table** decides: safe ops **defer** to the classifier; the **hard-escalate class** — `git push`,
   `sudo`, deletes outside `cwd`, network sends (curl/wget uploads, `gh` writes, mail) — routes to a
   notch confirm, deny on timeout. Every escalation/answer logs `supervisor.decision`.
-- **Supervisor** (`gpt-5.6-terra`) holds the task brief and is invoked **only** when Claude asks
+- **Supervisor** (`claude-opus-5-5`) holds the task brief and is invoked **only** when Claude asks
   (AskUserQuestion → answered on the user's behalf), capped per session (`maxInterventions`, default
   5) — past the cap the run interrupts and the task parks `needs_input`.
 - **Resilience:** a supervisor-model outage degrades to a safe default instead of killing the run;
   hitting the turn/budget limit **parks** (resumable) rather than failing; an auth-expired session
-  reports "log in again"; file checkpointing backs up edits so a live session can be undone
+  reports the provider authentication error; file checkpointing backs up edits so a live session can be undone
   (`undo_session`); a second session on the same `project_dir` is refused (concurrent-edit guard).
 - `needs_input` is first-class: task.status events, gold beacon orb, dashboard rail state.
 - Dashboard: Claude stream + supervisor-decision + plan feeds.
@@ -624,7 +632,7 @@ report" runs as a learned procedure (visibly faster, near-zero model chatter in 
 "do that every first Monday at 9" → a scheduled routine that runs unattended and pauses only at
 the confirm-gated submit until the user taps.
 
-**Deferred (post-M8):** wake word; GPT-Live model swap; launchd auto-start; deeper agent
+**Deferred (post-M8):** wake word; launchd auto-start; deeper agent
 self-organization (archiving / reorganizing its home).
 
 ---
@@ -1251,8 +1259,8 @@ disabled and greedy decoding — chosen by a task-shaped bake-off on this machin
 prefill / 86 tok/s decode / 21.6 GB peak, a full 14-item inbox digest in 13 s cold (~9 s warm) and
 a thread redaction in 7 s — inside the voice budget. It runs subprocess-per-job (zero resident
 memory between jobs; the ~4 s load tax is already inside those numbers); a resident `mlx_lm.server`
-is a grow-on-need upgrade if job cadence ever makes the load tax felt. Realtime remains the sole
-orchestrator, so local output still returns to the cloud and M15 is a disclosure REDUCER, never a
+is a grow-on-need upgrade if job cadence ever makes the load tax felt. The cloud backend remains the sole
+tool orchestrator, so local output still returns to the cloud and M15 is a disclosure REDUCER, never a
 privacy boundary or offline conversational lane.
 
 - **One local worker, one proven job at a time — no router fabric.** The daemon owns the worker
@@ -1291,7 +1299,7 @@ base-model update; structured memory + routing + policy get the personalization 
 maintenance risk); token-level speculative decoding (measured 2026-07-21: a trained DFlash draft
 lands 0.96× on the deploy quant — a loss — and only 1.09× on its own training target); a learned
 router (eligibility is deterministic, forever); a
-local-private ORCHESTRATION lane that bypasses Realtime (it would be a second brain — §2 locks
+local-private ORCHESTRATION lane that bypasses the cloud backend (it would be a second brain — §2 locks
 sole-orchestrator — and the user accepted cloud processing, so the lane has no requirement to serve);
 "inference fabric" as a platform (one worker for one job, grown on need).
 
@@ -1396,9 +1404,7 @@ observation last, no timestamp/task id before the cache break, prefix pinned acr
 and cache-read tokens recorded in the relevant provider audit when the SDK exposes them.
 
 **Deferred (post-M17):** wake word (a hands-free *input* convenience, unrelated to proactivity — PTT
-stays the consent boundary); a full-duplex GPT-Live model swap (Moshi-class models trail frontier
-models on reasoning/tool-use, and the production realtime stack is itself still half-duplex — revisit
-when a frontier-quality full-duplex API ships); deeper agent self-organization;
+stays the consent boundary); deeper agent self-organization;
 **a local-only MCP boundary** (deferred until a concrete local client needs bounded Gumbo services;
 if built: stdio/Unix-socket only, capability-leased, effect-proposal-only through the normal notch
 flow, never a new safety principal, never remote); Live Activities-style progress on other devices
@@ -1423,10 +1429,10 @@ injection-regression suite is the right weight).
 
 ## 10. Risks & de-risking spikes
 
-1. **Swift → WS → Realtime audio pipe** — ½-day throwaway echo spike (mic → 24 kHz pcm16 → WS → echo
-   back → play) before any notch UI.
-2. **Claude subscription auth from a daemon context** — 15-line `query()` script under `env -i`;
-   confirm it answers on subscription auth; note `pathToClaudeCodeExecutable` fallback.
+1. **Swift → WS → Live audio pipe** — verify physical capture, paced 24 kHz PCM16,
+   interruption and playback drain after changes to either transport or audio graph.
+2. **Claude API auth from the sandboxed CLI** — verify the scoped relay, configured model,
+   protected environment and configured HTTP MCP path after SDK/CLI upgrades.
 3. **TCC persistence across dev rebuilds** — sign with a real Apple Development cert + stable bundle
    id from day one; verify mic + Accessibility grants survive a rebuild.
 4. **Supervisor ↔ Claude loop stability** — canned-event harness (2 questions + 1 dangerous
@@ -1435,9 +1441,10 @@ injection-regression suite is the right weight).
    it's MIT, vendor it if broken. (This Mac runs a macOS 27.0 beta — notch geometry, ScreenCaptureKit,
    and TCC behavior all churn on betas.)
 
-**Standing risk:** a realtime voice model as sole orchestrator is the design's weakest link.
-Mitigations: ≤ ~10 forgiving tools (single free-text `brief` params), spawn tools return task ids
-instantly, planning pushed into sub-agents. Expect iteration on the orchestrator instructions.
+**Standing risk:** Live delegation and backend latency can leave a spoken request unanswered.
+The daemon retains the request, dispatches one fallback if needed, rejects stale results after
+interruption and reports persistent failure visibly. Spawn tools return task ids promptly; long
+planning remains in background workers.
 
 ---
 
@@ -1460,15 +1467,15 @@ Gumbo/
 - **No build commands** on the JS side (dev servers only, per user rules). The Swift app is built/run
   from Xcode (unavoidable; flag at M2).
 - `GUMBO_HOME` overrides the agent home (used for isolated/sandboxed runs).
-- Requirements: OpenAI + Exa keys in `.env`; (M2) `brew install xcodegen` + an Apple Development cert;
-  (M4) a logged-in Claude Code CLI.
+- Requirements: OpenAI, Anthropic and configured search-provider keys in `.env`;
+  `brew install xcodegen` + the installed Apple Development signing identity for native builds.
 
 ---
 
 ## 12. Glossary
 
-- **Orchestrator** — the live `gpt-realtime-2.1` session; the voice brain that calls tools.
-- **Sub-agent** — a spawned background worker. Generic = OpenAI `gpt-5.6-terra`; code = Claude Code.
+- **Orchestrator** — the daemon controller joining GPT-Live speech to the Opus tool backend.
+- **Sub-agent** — a spawned background worker. Generic = Anthropic `claude-opus-5-5`; code = API-backed Claude Code on the same model.
 - **Supervisor** — the per-Claude-Code agent that answers questions and gates permissions (M4).
 - **Task** — one unit of delegated work with a workspace, status, and event stream.
 - **Bubble** — an upper-right screen panel representing one running task (M3).
