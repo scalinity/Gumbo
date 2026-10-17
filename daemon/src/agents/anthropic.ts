@@ -92,7 +92,7 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeResult> {
       const stream = client.beta.messages.stream({
         betas: ['thinking-display-updates-2026-08-18'],
         model: opts.model ?? config.models.worker,
-        max_tokens: opts.maxTokens ?? 8192,
+        max_tokens: opts.maxTokens ?? config.models.workerMaxOutputTokens,
         output_config: { effort: opts.effort ?? 'high' },
         thinking: { type: 'adaptive', display: 'updates' },
         system: opts.instructions,

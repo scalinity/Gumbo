@@ -112,10 +112,9 @@ export const config = {
   dbPath: join(home.db, 'gumbo.db'),
   models: {
     worker: 'claude-opus-5-5',
+    workerMaxOutputTokens: 32_768, // includes adaptive thinking and the final report
     realtime: 'gpt-realtime-2.1',
-    subagent: 'gpt-5.6-terra',
-    supervisor: 'gpt-5.6-terra',
-    // Hard per-request ceiling for Agents-SDK model calls (the SDK default is ~10 min —
+    // Hard per-request ceiling for model calls (the SDK default is ~10 min —
     // a stalled call read as a silent hang on a live fallback run). Generous enough for
     // long reasoning turns; the client retries what the timeout exposes.
     requestTimeoutMs: 120_000,
@@ -322,7 +321,7 @@ export const config = {
     // hook mid-confirm and the escalate-class action could slip. Seconds at the SDK boundary.
     hookTimeoutMs: 120_000,
     // Per-call budget for the supervisor model answering a Claude question. Must sit
-    // comfortably BELOW hookTimeoutMs so a hung gpt-5.6-terra degrades to the safe default
+    // comfortably BELOW hookTimeoutMs so a hung worker model degrades to the safe default
     // (and releases nothing it shouldn't) before the CLI force-kills the whole hook.
     supervisorTimeoutMs: 90_000,
     maxTurns: 100, // runaway backstop, not a working budget

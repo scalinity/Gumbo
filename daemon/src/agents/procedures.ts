@@ -1,3 +1,4 @@
+import { claudeText } from './anthropic.ts';
 // M8 procedure memory: the compiler that distills a recording (or a successful run's
 // action trace) into a REPLAYABLE procedure, the pure schema guard that validates what
 // the model returns, and the deterministic redaction post-pass that runs REGARDLESS of
@@ -236,43 +237,13 @@ export function procedureSummary(procedure: Procedure, version: number, provider
 
 // ——— the compile call ———
 
-/** Injectable one-shot completion (tests swap it; prod = /v1/responses like vision.ts). */
+/** Injectable one-shot completion (tests swap it; production uses Anthropic Messages). */
 export type CompleteFn = (instructions: string, input: string, signal?: AbortSignal) => Promise<string>;
 
-interface ResponsesPayload {
-  output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
-}
-
-/** The daemon's one-shot text completion (/v1/responses, the vision.ts idiom). Exported
- *  for the replay engine's checkpoint/parameter calls — one client shape, one place. */
+/** Shared one-shot completion for procedure compilation, checkpoints and research notes. */
 export const completeOnce: CompleteFn = async (instructions, input, signal) => {
   const timeout = AbortSignal.timeout(config.procedures.compileTimeoutMs);
-  const res = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: config.models.subagent,
-      instructions,
-      input: [{ role: 'user', content: [{ type: 'input_text', text: input }] }],
-    }),
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`procedure compile failed: HTTP ${res.status} ${body.slice(0, 200)}`);
-  }
-  const data = (await res.json()) as ResponsesPayload;
-  const message = [...(data.output ?? [])].reverse().find((item) => item.type === 'message');
-  const text = (message?.content ?? [])
-    .filter((part) => part.type === 'output_text')
-    .map((part) => part.text ?? '')
-    .join('')
-    .trim();
-  if (!text) throw new Error('procedure compile returned no text');
-  return text;
+  return claudeText(instructions, input, signal ? AbortSignal.any([signal, timeout]) : timeout, 'procedure_completion');
 };
 
 const COMPILE_INSTRUCTIONS = `You distill a recorded Mac demonstration (or the action trace of a successful computer task) into a REPLAYABLE procedure. Output STRICT JSON only — no markdown fences, no prose — matching:

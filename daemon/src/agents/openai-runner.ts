@@ -1,5 +1,6 @@
-import { Agent, run, tool, codeInterpreterTool, MaxTurnsExceededError, setDefaultOpenAIClient } from '@openai/agents';
-import OpenAI from 'openai';
+import { tool, codeInterpreterTool } from '@openai/agents';
+import type Anthropic from '@anthropic-ai/sdk';
+import { runClaude } from './anthropic.ts';
 import { z } from 'zod';
 import { config, todayLabel } from '../config.ts';
 import type { Store } from '../events/store.ts';
@@ -12,25 +13,12 @@ import { createBrowserTools } from './browser-tools.ts';
 import { getBrowserClient } from '../browser/client.ts';
 import { wrapSteering } from './steering.ts';
 import { visionQuery } from './vision.ts';
-import { recordAgentsRunUsage } from '../usage/recorder.ts';
 import { fallbackBrief, replayProcedure, verifyAgainstExpect } from './procedure-runner.ts';
 import { createUnattendedWrapper } from './unattended.ts';
 import { completeOnce, type CompleteFn, type Procedure } from './procedures.ts';
 import type { MacBridge } from '../ws/mac.ts';
 
 export type SubagentKind = 'research' | 'mac';
-
-// A stalled model call must FAIL, not hang the loop (a live fallback run sat 88 s doing
-// nothing — no tool calls, no events — until the user hit the kill switch; the SDK's default
-// client waits ~10 min per request). Every Agents-SDK request gets a hard per-request
-// timeout; the client's own retries absorb the transient stalls that timeout exposes.
-// The 'unset' fallback keeps import-time construction from throwing under the test suite
-// (boot validation still refuses to run the real daemon without the key).
-setDefaultOpenAIClient(new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY ?? 'unset',
-  timeout: config.models.requestTimeoutMs,
-  maxRetries: 2,
-}));
 
 // Rebuilt per run so the date is always current — without it the model assumes its
 // training-data "today" and returns stale results for time-sensitive briefs.
@@ -800,16 +788,6 @@ export function createSubagentTools(
   ];
 }
 
-function itemText(item: unknown): string {
-  const raw = (item as { rawItem?: { content?: unknown } }).rawItem;
-  const content = raw?.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.map((p) => p?.text ?? p?.transcript ?? '').join('');
-  }
-  return '';
-}
-
 /** Login-shaped INABILITY ending — the handoff-bounce trigger. Two independent signals
  *  must BOTH be present so success reports can't false-positive: a sign-in word ("signed
  *  out", "log in", "password", …) AND an inability word ("needs", "must", "cannot", …).
@@ -822,6 +800,7 @@ export function needsHandoffBounce(finalOutput: string): boolean {
 }
 
 export async function runSubagent(opts: {
+  client?: Anthropic;
   taskId: string;
   brief: string;
   store: Store;
@@ -935,43 +914,17 @@ export async function runSubagent(opts: {
     // Steering wraps EVERY computer tool — guidance lands at the model's next attention
     // point no matter which lane it is working in.
     const steered = macToolset && takeSteering ? macToolset.map((t) => wrapSteering(t, takeSteering)) : macToolset;
-    const agent = new Agent({
-      name: `subagent-${taskId}`,
+    const runOptions = {
       instructions: isMac ? computerInstructions() : depth === 'deep' ? deepResearchInstructions() : instructions(),
-      model: config.models.subagent,
-      // Reasoning summaries stream as run items → subagent.thought events, so the
-      // activity feed shows WHY alongside each tool call (the transcript ask).
-      modelSettings: { reasoning: { summary: 'auto' } },
+      model: config.models.worker,
       tools: steered ?? createSubagentTools(taskId, store, signal, depth),
-    });
-
-    // Pass the signal so the SDK aborts the underlying model/tool request promptly on cancel;
-    // the in-loop check below stays as a belt-and-suspenders guard between stream events.
-    const limit = config.activityLogMaxChars;
-    const consume = async (s: Awaited<ReturnType<typeof run>>) => {
-      for await (const event of s) {
-        if (signal.aborted) {
-          throw new Error('cancelled');
-        }
-        if (event.type !== 'run_item_stream_event') continue;
-        const item = event.item;
-        if (item.type === 'tool_call_item') {
-          const raw = item.rawItem as { name?: string; arguments?: string; type?: string };
-          store.addEvent(taskId, 'tool.call', { name: raw.name ?? raw.type, args: raw.arguments?.slice(0, limit) });
-        } else if (item.type === 'tool_call_output_item') {
-          store.addEvent(taskId, 'tool.result', { output: String((item as { output?: unknown }).output ?? '').slice(0, limit) });
-        } else if (item.type === 'message_output_item') {
-          store.addEvent(taskId, 'subagent.message', { text: itemText(item) });
-        } else if (item.type === 'reasoning_item') {
-          // The model's reasoning SUMMARY (requested via modelSettings reasoning.summary)
-          // — interleaved with tool calls it makes the activity feed an actual transcript:
-          // WHY it searched what it searched, not just the calls.
-          const raw = item.rawItem as { content?: Array<{ text?: string }> };
-          const thought = (raw.content ?? []).map((c) => c.text ?? '').join('\n').trim();
-          if (thought) store.addEvent(taskId, 'subagent.thought', { text: thought.slice(0, limit) });
-        }
-      }
-      await s.completed;
+      signal, taskId, client: opts.client,
+      maxTurns: isMac ? config.mac.maxTurns : depth === 'deep' ? config.research.deepMaxTurns : config.research.standardMaxTurns,
+      onEvent: (type: string, payload: Record<string, unknown>) => {
+        const limit = config.activityLogMaxChars;
+        store.addEvent(taskId, type, Object.fromEntries(Object.entries(payload).map(([key, value]) =>
+          [key, typeof value === 'string' && type !== 'subagent.message' ? value.slice(0, limit) : value])));
+      },
     };
     // A run that exhausts its turn budget is a PARTIAL RESULT, not a crash: the work done
     // so far is real (and visible on screen for a computer task) — surface it as an honest
@@ -984,36 +937,23 @@ export async function runSubagent(opts: {
         'which part is not, and offer to continue in a fresh task.'
       );
     };
-    const stream = await run(agent, brief, {
-      stream: true,
-      maxTurns: isMac ? config.mac.maxTurns : depth === 'deep' ? config.research.deepMaxTurns : config.research.standardMaxTurns,
-      signal,
-    });
-    let maxTurnsHit = false;
-    try {
-      await consume(stream);
-    } catch (err) {
-      if (err instanceof MaxTurnsExceededError) maxTurnsHit = true;
-      else throw err;
-    }
-    // Deliberate: an aborted/failed run records nothing — rawResponses may be mid-flight
-    // and a cancelled task's partial spend isn't worth a misleading half-row. A max-turns
-    // ending is a real (partial) result, so its spend records before the early return.
-    recordAgentsRunUsage(stream.rawResponses, { kind: 'subagent_run', model: config.models.subagent, taskId });
-    if (maxTurnsHit) return partialReport();
-    const final = String(stream.finalOutput ?? '');
+    const result = await runClaude({ ...runOptions, input: brief });
+    signal.throwIfAborted();
+    if (result.exhausted) return partialReport();
+    const final = result.text;
     // Deterministic backstop (live demo 2026-07-20, THREE different path shapes to the same
     // dead end): the model keeps ENDING computer tasks with "the user needs to sign in"
     // without ever calling request_handoff — prompt rules and even a tool-result nudge
     // didn't reliably fire (the nudge needs a login-looking URL; GitHub's signed-out
     // HOMEPAGE has none). So the exit itself is guarded: a login-shaped inability ending
-    // with no handoff asked gets bounced ONCE with an explicit order. history-concat is
-    // the SDK's documented multi-turn continuation.
+    // with no handoff asked gets bounced ONCE with an explicit order. native Messages history preserves
+    // tool correlation and thinking signatures during the retry.
     if (isMac && trackedHandoff && !handoffAsked && !opts.procedure?.unattended && needsHandoffBounce(final)) {
       store.addEvent(taskId, 'subagent.message', { text: '[bounce] login-shaped ending without request_handoff — ordering the handoff' });
-      const retry = await run(
-        agent,
-        stream.history.concat([{
+      const retry = await runClaude({
+        ...runOptions,
+        container: result.container,
+        input: result.history.concat([{
           role: 'user',
           content:
             'You are ending with a sign-in problem but you NEVER called request_handoff — that is not a valid ' +
@@ -1021,18 +961,10 @@ export async function runSubagent(opts: {
             'not already showing, call request_handoff telling them exactly what to log into, wait for done, ' +
             'VERIFY the login landed with a fresh snapshot, then finish the ORIGINAL task.',
         }]),
-        { stream: true, maxTurns: config.mac.maxTurns, signal },
-      );
-      let retryMaxTurnsHit = false;
-      try {
-        await consume(retry);
-      } catch (err) {
-        if (err instanceof MaxTurnsExceededError) retryMaxTurnsHit = true;
-        else throw err;
-      }
-      recordAgentsRunUsage(retry.rawResponses, { kind: 'subagent_run', model: config.models.subagent, taskId });
-      if (retryMaxTurnsHit) return partialReport();
-      return withReplayVerify(String(retry.finalOutput ?? ''));
+      });
+      signal.throwIfAborted();
+      if (retry.exhausted) return partialReport();
+      return withReplayVerify(retry.text);
     }
     return withReplayVerify(final);
   } finally {
