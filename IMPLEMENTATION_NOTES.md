@@ -3124,3 +3124,5 @@ places the fixes had looked, and both lessons generalize:
 
 - First presses could appear ignored because the shell required both local capture and a daemon “listening” acknowledgment before opening the notch. Local capture now takes immediate display priority, and its UI update is queued before cold audio startup. Releasing the chord restores the actual daemon/playback state. This fixes a demonstrated state-merge defect; physical first-press acceptance is checked separately.
 - Verification: eleven native tests passed, including a real notch-window assertion while daemon state remains idle and release-state regressions. The signed bundle matched the installed designated requirement and passed strict verification before installation.
+
+- The tool backend now states the explicit stop rule directly. A retry had repeated the old “avoid keyboard/mouse” advice from conversation history even after automatic cancellation was removed. Current instructions prevent that stale advice. The tool-registry tests passed.
