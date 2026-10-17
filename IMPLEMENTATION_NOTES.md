@@ -3102,3 +3102,8 @@ places the fixes had looked, and both lessons generalize:
 
 - Native interaction exposed reused caption IDs across spoken turns. Live captions now include the input generation so the notch resets its reveal baseline for each new utterance or typed request. Backend results remain in a dedicated event instead of duplicating the spoken answer as a second main-feed message. Provider connection failures also produce the existing failed notch pulse.
 - Verification: all 59 focused realtime, delegation and tool-registry tests passed. Physical speech reached Live and produced input/output transcripts during the installed-app check; speaker speed and subjective sound quality still require a direct listening result.
+
+### Transient output-device recovery (2026-10-17)
+
+- A real installed-app interaction reported no usable output device after the VPIO graph stopped. A zero hardware sample rate now starts a bounded 250 ms retry sequence while retaining queued PCM, rather than immediately cancelling the voice turn. Stops invalidate pending retries; a new press determines whether the recovered graph needs the microphone. Persistent device loss still produces the existing visible error.
+- Verification: a native regression forced two zero-rate probes, then verified queued audio played and drained; stopping during the retry prevented a later graph restart. All nine native tests passed. Direct listening confirmed audible replies at normal speed and the notch returning to rest. The retry itself was validated with the controlled zero-rate seam; another physical route-loss event has not been reproduced after the fix.

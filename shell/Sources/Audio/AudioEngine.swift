@@ -59,6 +59,9 @@ final class AudioEngine {
     private var micPermission = false
     private var running = false
     private var lastStartFailure: Date?
+    private var startRetry: DispatchWorkItem?
+    // Device formats can briefly be zero while VPIO releases/reacquires the output.
+    var outputSampleRate: (AVAudioEngine) -> Double = { $0.outputNode.outputFormat(forBus: 0).sampleRate }
     private var captureRequest = 0
     private var configurationObserver: NSObjectProtocol?
     private var playbackWatchdog: Timer?
@@ -129,6 +132,8 @@ final class AudioEngine {
     }
 
     private func stopEngine(keepQueue: Bool) {
+        startRetry?.cancel()
+        startRetry = nil
         playbackWatchdog?.invalidate()
         playbackWatchdog = nil
         if let configurationObserver {
@@ -343,8 +348,8 @@ final class AudioEngine {
 
     // MARK: engine graph
 
-    private func setupAndStart(_ target: Mode) {
-        guard !running else { return }
+    private func setupAndStart(_ target: Mode, attempt: Int = 0) {
+        guard !running, startRetry == nil else { return }
         if let last = lastStartFailure, Date().timeIntervalSince(last) < 3 { return } // no retry storms
         let engine = AVAudioEngine()
 
@@ -355,7 +360,19 @@ final class AudioEngine {
         engine.attach(player)
         // Keep the connection in a native-rate format (mono float at the output hardware rate);
         // a 24 kHz connection here is the exact -10851 trap from the spike.
-        let hwRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+        let hwRate = outputSampleRate(engine)
+        if hwRate <= 0 && attempt < 6 {
+            let startGeneration = generation
+            let retry = DispatchWorkItem { [weak self] in
+                guard let self, self.generation == startGeneration else { return }
+                self.startRetry = nil
+                let nextMode: Mode = self.armed && self.micPermission ? .duplex : .playbackOnly
+                self.setupAndStart(nextMode, attempt: attempt + 1)
+            }
+            startRetry = retry
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: retry)
+            return
+        }
         guard hwRate > 0,
               let playFormat = AVAudioFormat(standardFormatWithSampleRate: hwRate, channels: 1),
               let outputConverter = AVAudioConverter(from: wireFormat, to: playFormat) else {

@@ -4,6 +4,33 @@ import AVFoundation
 
 final class AudioLifecycleTests: XCTestCase {
     @MainActor
+    func testTransientOutputFormatRetainsQueuedAudioAndStopCancelsRetry() async throws {
+        let audio = AudioEngine()
+        var probes = 0
+        var states: [Bool] = []
+        var failure: String?
+        audio.outputSampleRate = { engine in
+            probes += 1
+            return probes < 3 ? 0 : engine.outputNode.outputFormat(forBus: 0).sampleRate
+        }
+        audio.onPlaybackStateChange = { states.append($0) }
+        audio.onError = { failure = $0 }
+        audio.start(reason: .playback)
+        audio.playChunk(Data(repeating: 0, count: 4800))
+        try await Task.sleep(for: .milliseconds(1100))
+        XCTAssertEqual(probes, 3)
+        XCTAssertTrue(states.contains(true))
+        XCTAssertEqual(states.last, false)
+        XCTAssertNil(failure)
+        audio.stop()
+        probes = 0
+        audio.start(reason: .playback)
+        audio.stop()
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(probes, 1, "A cancelled retry must not restart the graph")
+    }
+
+    @MainActor
     func testStopDiscardsAudioQueuedBeforeStartup() async throws {
         let audio = AudioEngine()
         var active = 0
