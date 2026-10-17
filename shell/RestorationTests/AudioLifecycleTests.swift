@@ -83,11 +83,13 @@ final class AudioLifecycleTests: XCTestCase {
     func testTransientOutputFormatRetainsQueuedAudioAndStopCancelsRetry() async throws {
         let audio = AudioEngine()
         var probes = 0
+        var onFirstProbe: (() -> Void)?
         var states: [Bool] = []
         var failure: String?
         let drained = expectation(description: "Retried audio drains after a playback flush")
         audio.outputSampleRate = { engine in
             probes += 1
+            if probes == 1 { onFirstProbe?() }
             return probes < 3 ? 0 : engine.outputNode.outputFormat(forBus: 0).sampleRate
         }
         audio.onPlaybackStateChange = {
@@ -108,8 +110,10 @@ final class AudioLifecycleTests: XCTestCase {
         audio.onPlaybackStateChange = { states.append($0) }
         audio.stop()
         probes = 0
+        let retryStarted = expectation(description: "Device retry is pending before cancellation")
+        onFirstProbe = { retryStarted.fulfill() }
         audio.start(reason: .playback)
-        try await Task.sleep(for: .milliseconds(50))
+        await fulfillment(of: [retryStarted], timeout: 2)
         audio.stop()
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(probes, 1, "A cancelled retry must not restart the graph")
