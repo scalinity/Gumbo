@@ -297,6 +297,7 @@ struct NotchContentView: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
+        .background(NotchWindowTransparency())
         .contentShape(Rectangle())
         .onTapGesture { model.onTap?() }
     }
@@ -319,6 +320,20 @@ struct NotchContentView: View {
         case .thinking: return "Thinking…"
         case .speaking: return "Gumbo"
         }
+    }
+}
+
+/// DynamicNotchKit's clear panel still defaults to an opaque AppKit window. Declare
+/// its transparent backing before drawing so the compositor preserves the cutout.
+private struct NotchWindowTransparency: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { TransparentNotchAttachment() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class TransparentNotchAttachment: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.isOpaque = false
     }
 }
 
