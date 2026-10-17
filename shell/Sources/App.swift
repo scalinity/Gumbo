@@ -196,7 +196,10 @@ final class GumboController {
         // M8: the watch-me recorder pins a persistent "Watching…" badge on the notch,
         // and a dropped daemon socket stops an active recording loudly.
         mac.onRecordingChanged = { [weak self] active in self?.notch.setRecording(active) }
-        ws.onDisconnect = { [weak self] in self?.mac.handleSocketDropped() }
+        ws.onDisconnect = { [weak self] in
+            self?.mac.handleSocketDropped()
+            self?.resetVoice()
+        }
         ws.connect()
     }
 
@@ -213,9 +216,9 @@ final class GumboController {
         hotkeys.onPress = { [weak self] in
             guard let self else { return }
             self.armed = true
-            self.audio.start(reason: .ptt) // idempotent; also triggers the one-time mic prompt
             self.audio.setArmed(true)
             self.ws.sendJSON(["type": "ptt_press"])
+            self.audio.start(reason: .ptt)
             self.refreshState()
         }
         hotkeys.onRelease = { [weak self] in
@@ -242,16 +245,17 @@ final class GumboController {
             self?.notch.setLevel(level)
         }
         audio.onPlaybackStateChange = { [weak self] draining in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.playbackDraining = draining
-                // The daemon needs the truth about audible playback: generation ends long
-                // before the speaker drains, and both the dashboard's session state and
-                // the session idle-close must track what the user actually hears.
-                self.ws.sendJSON(["type": "playback_state", "draining": draining])
-                self.notch.setPacing(draining)
-                self.refreshState()
-            }
+            guard let self else { return }
+            self.playbackDraining = draining
+            self.ws.sendJSON(["type": "playback_state", "draining": draining])
+            self.notch.setPacing(draining)
+            self.refreshState()
+        }
+        audio.onError = { [weak self] message in
+            guard let self else { return }
+            self.ws.sendJSON(["type": "audio_error", "message": message])
+            self.resetVoice()
+            self.notch.pulse(status: "failed")
         }
         audio.onPlaybackProgress = { [weak self] played, enqueued in
             self?.notch.setPlaybackProgress(played: played, enqueued: enqueued)
@@ -396,6 +400,18 @@ final class GumboController {
     }
 
     // MARK: state merge
+
+    private func resetVoice() {
+        armed = false
+        daemonState = "idle"
+        playbackDraining = false
+        engineIdleTimer?.invalidate()
+        engineIdleTimer = nil
+        audio.stop()
+        notch.setPacing(false)
+        notch.setLevel(0)
+        refreshState()
+    }
 
     /// The daemon's 'speaking' tracks generation, which finishes seconds before playback —
     /// so the shell holds 'speaking' while its own queue drains. While armed, listening wins.

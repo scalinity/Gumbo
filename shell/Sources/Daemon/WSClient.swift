@@ -45,23 +45,25 @@ final class WSClient: NSObject, URLSessionWebSocketDelegate {
 
     private func receiveLoop(_ task: URLSessionWebSocketTask) {
         task.receive { [weak self] result in
-            guard let self, task === self.task else { return }
-            switch result {
-            case .failure:
-                self.scheduleReconnect()
-            case .success(let message):
-                switch message {
-                case .data(let data):
-                    DispatchQueue.main.async { self.onBinary?(data) }
-                case .string(let text):
-                    if let data = text.data(using: .utf8),
-                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        DispatchQueue.main.async { self.onMessage?(obj) }
+            DispatchQueue.main.async {
+                guard let self, task === self.task, !self.closed else { return }
+                switch result {
+                case .failure:
+                    self.scheduleReconnect()
+                case .success(let message):
+                    switch message {
+                    case .data(let data):
+                        self.onBinary?(data)
+                    case .string(let text):
+                        if let data = text.data(using: .utf8),
+                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            self.onMessage?(obj)
+                        }
+                    @unknown default:
+                        break
                     }
-                @unknown default:
-                    break
+                    self.receiveLoop(task)
                 }
-                self.receiveLoop(task)
             }
         }
     }
@@ -69,11 +71,15 @@ final class WSClient: NSObject, URLSessionWebSocketDelegate {
     private func scheduleReconnect() {
         guard !closed else { return }
         closed = true
-        task?.cancel(with: .goingAway, reason: nil)
+        let oldTask = task
         task = nil
-        DispatchQueue.main.async { self.onDisconnect?() } // once per drop (the guard above)
+        oldTask?.cancel(with: .goingAway, reason: nil)
+        session?.invalidateAndCancel()
+        session = nil
+        onDisconnect?()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.connect()
+            guard let self, self.closed else { return }
+            self.connect()
         }
     }
 
@@ -91,18 +97,29 @@ final class WSClient: NSObject, URLSessionWebSocketDelegate {
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didOpenWithProtocol protocol: String?) {
-        var hello: [String: Any] = ["type": "hello", "role": "shell"]
-        if let token = daemonToken() { hello["token"] = token }
-        sendJSON(hello)
-        DispatchQueue.main.async { self.onConnect?() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, webSocketTask === self.task, !self.closed else { return }
+            var hello: [String: Any] = ["type": "hello", "role": "shell"]
+            if let token = self.daemonToken() { hello["token"] = token }
+            self.sendJSON(hello)
+            self.onConnect?()
+        }
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        scheduleReconnect()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, webSocketTask === self.task else { return }
+            NSLog("[ws] shell connection closed (%ld)", closeCode.rawValue)
+            self.scheduleReconnect()
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if error != nil { scheduleReconnect() }
+        guard error != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, task === self.task else { return }
+            self.scheduleReconnect()
+        }
     }
 }

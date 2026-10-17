@@ -42,3 +42,8 @@ in the `ai.scalinity.Gumbo` defaults domain.
 Check that the shell keeps its daemon WebSocket connection, then hold Control–Option, speak,
 and release. Verify a spoken response and that existing permissions remain granted. Persistent
 login/startup behavior belongs to later roadmap work and is not part of this repair.
+
+For native restoration regressions, generate with `xcodegen generate --spec tests.yml`,
+then use `xcodebuild -project Gumbo.xcodeproj -scheme GumboRestorationTests -configuration Debug
+-derivedDataPath "$HOME/Library/Caches/Gumbo/Build.noindex" test`. These tests exercise the
+real playback engine with silent PCM and require an available audio output device.

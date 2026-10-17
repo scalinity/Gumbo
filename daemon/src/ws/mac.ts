@@ -68,6 +68,12 @@ export class MacBridge {
     });
   }
 
+  handleDisconnected() {
+    for (const settle of [...this.pending.values()]) {
+      settle(failure('ax_unavailable', 'Gumbo disconnected before the action result arrived. Check the current Mac state before retrying.'));
+    }
+  }
+
   /** Wire-facing: the shell's payload is untrusted-shaped (hand-built [String: Any]
    *  JSON), so coerce it into the typed contract before it reaches a caller. */
   handleResult(id: string, raw: unknown) {

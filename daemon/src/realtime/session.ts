@@ -197,6 +197,8 @@ const MAX_PENDING_MIC_FRAMES = 500;
 export class Orchestrator {
   private session: RealtimeSession | null = null;
   private connecting: Promise<RealtimeSession> | null = null;
+  private openingSession: RealtimeSession | null = null;
+  private connectionGeneration = 0;
   private idleTimer: NodeJS.Timeout | null = null;
   private persisted = new Set<string>();
   private state: SessionState = 'idle';
@@ -374,20 +376,37 @@ export class Orchestrator {
   private pendingAwayUpTo = 0;
 
   private closeSession() {
-    if (!this.session) return;
-    const session = this.session;
-    this.session = null; // null first so connection_change sees an intentional close
-    session.close();
+    this.connectionGeneration += 1;
+    const session = this.session ?? this.openingSession;
+    this.session = null;
+    this.openingSession = null;
+    this.connecting = null;
+    this.pendingAnnounce = null;
+    session?.close();
     this.resetPtt();
     this.responding = false;
     this.persisted.clear();
-    this.store.addEvent(null, 'session.closed', {});
+    if (session) this.store.addEvent(null, 'session.closed', {});
     this.setState('idle');
+  }
+
+  handleShellDisconnected() {
+    this.shellDraining = false;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.closeSession();
+  }
+
+  handleAudioError(message: string) {
+    this.store.addEvent(null, 'session.error', { stage: 'native_audio', message: message.slice(0, 300) });
+    this.hub.broadcast({ type: 'playback_flush' }, 'shell');
+    this.handleShellDisconnected();
   }
 
   private async ensureSession(): Promise<RealtimeSession> {
     if (this.session) return this.session;
     if (this.connecting) return this.connecting;
+    const generation = ++this.connectionGeneration;
+    const current = () => generation === this.connectionGeneration;
     this.connecting = (async () => {
       try {
         const agent = new RealtimeAgent({
@@ -426,6 +445,7 @@ export class Orchestrator {
         });
 
         session.on('history_updated', (history) => {
+          if (!current()) return;
           for (const item of history as unknown as HistoryItemLike[]) {
             if (item.type !== 'message' || item.status !== 'completed') continue;
             if (this.persisted.has(item.itemId)) continue;
@@ -436,6 +456,7 @@ export class Orchestrator {
           }
         });
         session.transport.on('*', (event: { type: string; delta?: string; item_id?: string }) => {
+          if (!current()) return;
           switch (event.type) {
             case 'response.output_text.delta':
             case 'response.output_audio_transcript.delta':
@@ -490,25 +511,30 @@ export class Orchestrator {
           }
         });
         session.transport.on('function_call', (call: { name?: string; arguments?: string }) => {
+          if (!current()) return;
           this.store.addEvent(null, 'tool.call', { name: call.name, args: call.arguments?.slice(0, 500) });
         });
         session.on('audio', (event) => {
+          if (!current()) return;
           this.hub.sendBinary(Buffer.concat([REALTIME_HEADER, toBuffer(event.data)]), 'shell');
           // While armed, 'listening' wins the display — the user's intent is to talk.
           if (!this.armed) this.setState('speaking');
           this.resetIdleTimer(); // a long spoken reply must not be torn down mid-sentence
         });
         session.on('audio_interrupted', () => {
+          if (!current()) return;
           // Barge-in: the server truncated the response; the shell must drop queued audio NOW.
           this.hub.broadcast({ type: 'playback_flush' }, 'shell');
           if (this.armed) this.setState('listening');
         });
         session.on('agent_start', () => {
+          if (!current()) return;
           this.responding = true;
           if (!this.armed) this.setState('thinking');
           this.resetIdleTimer(); // keep a long, legitimate turn from being torn down mid-response
         });
         session.transport.on('turn_done', () => {
+          if (!current()) return;
           this.responding = false;
           // Generation is done, but the shell may still be playing buffered audio —
           // hold 'speaking' until it reports its queue drained (playback_state).
@@ -523,6 +549,7 @@ export class Orchestrator {
           }
         });
         session.transport.on('connection_change', (status) => {
+          if (!current()) return;
           if (status === 'disconnected' && this.session === session) {
             // Unexpected drop (network/server) — clean up so the next press or message
             // opens a fresh session instead of throwing on a dead transport.
@@ -530,6 +557,8 @@ export class Orchestrator {
             this.resetPtt();
             this.responding = false;
             this.pendingAnnounce = null;
+            this.shellDraining = false;
+            this.hub.broadcast({ type: 'playback_flush' }, 'shell');
             this.persisted.clear();
             if (this.idleTimer) clearTimeout(this.idleTimer);
             this.store.addEvent(null, 'session.closed', { reason: 'transport_disconnected' });
@@ -537,6 +566,7 @@ export class Orchestrator {
           }
         });
         session.on('error', (err) => {
+          if (!current()) return;
           // SDK errors are nested objects; String() flattens them to "[object Object]"
           // and loses the actual failure (seen repeatedly in the live event log).
           const detail = (err as { error?: unknown }).error ?? err;
@@ -551,9 +581,17 @@ export class Orchestrator {
             }
           }
           this.store.addEvent(null, 'session.error', { message });
+          this.responding = false;
+          this.setState(this.armed ? 'listening' : this.shellDraining ? 'speaking' : 'idle');
         });
 
+        this.openingSession = session;
         await session.connect({ apiKey: process.env.OPENAI_API_KEY! });
+        if (!current()) {
+          session.close();
+          throw new Error('Voice connection cancelled.');
+        }
+        this.openingSession = null;
         this.store.addEvent(null, 'session.opened', { model: config.models.realtime });
         // M8: the away-items included in this session's instructions are now genuinely
         // surfaced — mark them consumed (once the session actually OPENED; a failed
@@ -590,9 +628,11 @@ export class Orchestrator {
         this.resetIdleTimer();
         return session;
       } finally {
-        // Clear on BOTH success and failure, so a transient connect error doesn't
-        // wedge every future message on a permanently-rejected promise.
-        this.connecting = null;
+        if (current()) {
+          this.connecting = null;
+          if (!this.session) this.openingSession?.close();
+          this.openingSession = null;
+        }
       }
     })();
     return this.connecting;
@@ -631,6 +671,7 @@ export class Orchestrator {
     // changes when the server actually hears speech (audio_interrupted).
     if (this.state !== 'speaking') this.setState('listening');
     this.ensureSession().catch((err: unknown) => {
+      if (this.connectionGeneration !== this.connectionGeneration) return;
       this.resetPtt();
       this.setState('idle');
       this.store.addEvent(null, 'session.error', { message: String(err) });

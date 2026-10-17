@@ -98,6 +98,7 @@ export type InboundMessage =
   | { type: 'task_action'; task_id: string; action: 'cancel' }
   | { type: 'ptt_press' } // shell: ⌃⌥ went down — mic frames follow
   | { type: 'ptt_release' } // shell: ⌃⌥ lifted — commit the turn
+  | { type: 'audio_error'; message: string } // native capture/playback failed; cancel the voice turn
   // shell: speaker queue state. Generation finishes long before audible playback, so the
   // daemon needs this to keep session_state 'speaking' (and the session alive) until
   // the user actually stops hearing Gumbo.

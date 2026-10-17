@@ -1,0 +1,13 @@
+include:
+  - project.yml
+targets:
+  GumboRestorationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - RestorationTests
+    dependencies:
+      - target: Gumbo
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES

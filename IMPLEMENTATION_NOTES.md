@@ -20,6 +20,28 @@ and anything that would surprise the next person. Keep it honest (note what's ve
 - **M9 and later roadmap work:** not started. Core M1–M8 completion does not imply that
   the later memory, connectors, or login/startup persistence roadmap is implemented.
 
+## 2026-10-17 — Voice and native connection recovery
+
+- The installed shell authenticated successfully; a live text request reached
+  `gpt-realtime-2.1`, returned the requested transcript, and a `mac_do` Finder action
+  returned a window name confirmed independently through Accessibility. These checks do
+  not establish physical microphone or audible-speaker acceptance.
+- Shell loss now cancels the voice turn and pending native requests. Connection generations
+  discard late provider callbacks and a connect that finishes after cancellation. Native
+  WebSocket callbacks are serialized and checked against the current socket.
+- Audio completion accounting runs on the playback pump; obsolete callbacks cannot update
+  a replacement stream. Stop clears pre-start audio too. Device reconfiguration rebuilds
+  the graph while retaining unscheduled audio; a duration-based watchdog reports stalled
+  playback instead of holding speaking indefinitely. Hardware-rate graph ordering and
+  channel-zero VPIO capture remain intact. Late microphone permission callbacks cannot
+  restart capture after release or disconnect.
+- Verification: 535 daemon tests passed, one skipped; three native lifecycle tests passed
+  on the real output device. Xcode required its missing Metal toolchain before the native
+  test build could succeed. The existing dashboard is blank under a WebKit URL-filter
+  failure (`NSURLErrorDomain -1008`); the local Vite server itself responds. No system
+  filter or permission settings were changed.
+
+
 ---
 
 ## 2026-09-21 — Desktop build recovery

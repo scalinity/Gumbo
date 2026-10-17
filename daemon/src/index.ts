@@ -265,6 +265,8 @@ hub.onMessage((msg, role) => {
       (doc) => orchestrator.presentFileToShell(doc),
       (cold, live) => orchestrator.speakProactively(cold, live),
     );
+  } else if (msg.type === 'audio_error' && role === 'shell' && typeof msg.message === 'string') {
+    orchestrator.handleAudioError(msg.message);
   }
 });
 
@@ -272,7 +274,8 @@ hub.onMessage((msg, role) => {
 // nor a stale image armed for voice edits (M5.5: the viewer died with the shell).
 hub.onClose((role) => {
   if (role === 'shell' && !hub.hasRole('shell')) {
-    orchestrator.handlePlaybackState(false);
+    orchestrator.handleShellDisconnected();
+    macBridge.handleDisconnected();
     imageContext.set(null);
     fileContext.set(null);
     // M8: an active recording has no recorder anymore — die loudly (Law 5: a dead

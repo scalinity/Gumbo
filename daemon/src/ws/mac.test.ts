@@ -166,3 +166,16 @@ test('M8: setTeaching is edge-triggered and resync always states teach state (bo
   bridge.resync();
   assert.deepEqual(sent.filter((m) => m.type === 'mac_teach').at(-1), { type: 'mac_teach', active: false, task_id: null });
 });
+
+test('shell disconnect settles all requests before their timeout and ignores late results', async () => {
+  const { hub, sent } = fakeHub(true);
+  const bridge = new MacBridge(hub, 60_000);
+  const pending = [bridge.request(SNAPSHOT), bridge.request({ kind: 'health' })];
+  bridge.handleDisconnected();
+  for (const result of await Promise.all(pending)) {
+    assert.equal(result.error_kind, 'ax_unavailable');
+    assert.match(result.output, /before retrying/);
+  }
+  bridge.handleResult(sent[0].id!, { ok: true, output: 'stale' });
+  bridge.handleDisconnected();
+});

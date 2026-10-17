@@ -31,6 +31,7 @@ final class AudioEngine {
     // "transcript lags behind" bug, 2026-07-16). Counters reset to 0 on full drain/flush —
     // callers detect the reset by the counts going backwards.
     var onPlaybackProgress: ((Int, Int) -> Void)?
+    var onError: ((String) -> Void)?
 
     /// 24 kHz mono interleaved Int16 — the Realtime API wire format both directions.
     private let wireFormat = AVAudioFormat(
@@ -58,6 +59,11 @@ final class AudioEngine {
     private var micPermission = false
     private var running = false
     private var lastStartFailure: Date?
+    private var captureRequest = 0
+    private var configurationObserver: NSObjectProtocol?
+    private var playbackWatchdog: Timer?
+    private var inFlightFrames = 0
+    private var playbackDeadline: Date?
     // Unscheduled pcm chunks. Also the pre-start queue (spoken reply with no prior press)
     // and what carries playback across a live playbackOnly → duplex graph switch.
     // Cap sized for multi-minute report reads: 4096 × ~200 ms chunks ≫ any real reply
@@ -89,18 +95,28 @@ final class AudioEngine {
                 switchTo(.duplex)
                 return
             }
+            captureRequest += 1
+            let request = captureRequest
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                guard let self, granted else {
-                    NSLog("[audio] microphone denied — enable Gumbo in System Settings > Privacy & Security")
-                    return
+                DispatchQueue.main.async {
+                    guard let self, request == self.captureRequest else { return }
+                    self.micPermission = granted
+                    guard granted else {
+                        self.onError?("Microphone access is unavailable. Enable Gumbo in Privacy & Security.")
+                        return
+                    }
+                    self.lock.lock()
+                    let stillArmed = self.armed
+                    self.lock.unlock()
+                    if stillArmed { self.switchTo(.duplex) }
                 }
-                self.micPermission = true
-                DispatchQueue.main.async { self.switchTo(.duplex) }
             }
         }
     }
 
     func stop() {
+        captureRequest += 1
+        setArmed(false)
         stopEngine(keepQueue: false)
     }
 
@@ -113,20 +129,32 @@ final class AudioEngine {
     }
 
     private func stopEngine(keepQueue: Bool) {
+        playbackWatchdog?.invalidate()
+        playbackWatchdog = nil
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
         lock.lock()
-        guard running else { lock.unlock(); return }
         running = false
-        generation += 1 // completion handlers of dying buffers become stale
+        generation += 1
         inFlight = 0
+        inFlightFrames = 0
+        playbackDeadline = nil
         if !keepQueue {
             playbackQueue = []
             queueHead = 0
             framesEnqueued = 0
             framesPlayed = 0
+        } else {
+            // Scheduled buffers are lost with the old graph. Count only retained audio
+            // in the new stream so transcript pacing cannot wait for discarded frames.
+            framesPlayed = 0
+            framesEnqueued = playbackQueue.dropFirst(queueHead).reduce(0) { $0 + $1.count / 2 }
         }
         let queueEmpty = queueIsEmpty
         lock.unlock()
-        pumpQueue.sync {} // fence: no pump body is mid-flight while the graph is torn down
+        pumpQueue.sync {}
         if mode == .duplex { engine?.inputNode.removeTap(onBus: 0) }
         player?.stop()
         engine?.stop()
@@ -142,6 +170,7 @@ final class AudioEngine {
     }
 
     func setArmed(_ value: Bool) {
+        if !value { captureRequest += 1 }
         lock.lock()
         armed = value
         lock.unlock()
@@ -153,6 +182,8 @@ final class AudioEngine {
     /// Incoming speaker pcm16 (arbitrary chunk sizes) → queue → player. Chunks arriving
     /// before any engine is up wait in the queue and drain on the next start.
     func playChunk(_ pcm: Data) {
+        guard !pcm.isEmpty, pcm.count.isMultiple(of: 2) else { return }
+        if !running && lastStartFailure != nil { return }
         lock.lock()
         playbackQueue.append(pcm)
         if playbackQueue.count - queueHead > 4096 { queueHead += 1 } // drop-oldest cap
@@ -189,8 +220,10 @@ final class AudioEngine {
 
             guard let outBuf = convertForPlayback(pcm, converter: converter, to: playFormat) else {
                 lock.lock()
-                if gen == generation { inFlight -= 1 }
+                if gen == generation { inFlight -= 1; framesEnqueued -= wireFrames }
+                let drained = gen == generation && inFlight == 0 && queueIsEmpty
                 lock.unlock()
+                if drained { setDraining(false) }
                 continue
             }
             if let ch = outBuf.floatChannelData?[0] {
@@ -203,32 +236,38 @@ final class AudioEngine {
             // during the convert must drop this buffer, never schedule it stale.
             lock.lock()
             let stillLive = gen == generation && running
+            if stillLive {
+                inFlightFrames += wireFrames
+                playbackDeadline = Date().addingTimeInterval(Double(inFlightFrames) / 24_000 + 3)
+            }
             lock.unlock()
             if !stillLive { continue }
 
             player.scheduleBuffer(outBuf, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 guard let self else { return }
-                self.lock.lock()
-                let live = gen == self.generation
-                var progress: (played: Int, enqueued: Int)? = nil
-                if live {
+                // All queue consumption and completion decisions share one ordering.
+                self.pumpQueue.async { [weak self] in
+                    guard let self else { return }
+                    self.lock.lock()
+                    guard gen == self.generation else { self.lock.unlock(); return }
                     self.inFlight -= 1
+                    self.inFlightFrames -= wireFrames
+                    self.playbackDeadline = self.inFlight > 0
+                        ? Date().addingTimeInterval(Double(self.inFlightFrames) / 24_000 + 3) : nil
                     self.framesPlayed += wireFrames
-                    if self.framesEnqueued > 0 {
-                        progress = (self.framesPlayed, self.framesEnqueued)
+                    let progress = (self.framesPlayed, self.framesEnqueued)
+                    let drained = self.inFlight == 0 && self.queueIsEmpty
+                    if drained { self.framesEnqueued = 0; self.framesPlayed = 0 }
+                    self.lock.unlock()
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.lock.lock()
+                        let live = gen == self.generation
+                        self.lock.unlock()
+                        if live { self.onPlaybackProgress?(progress.0, progress.1) }
                     }
-                }
-                let drained = live && self.inFlight == 0 && self.queueIsEmpty
-                if drained { // stream over — next playback stream starts its own counters
-                    self.framesEnqueued = 0
-                    self.framesPlayed = 0
-                }
-                self.lock.unlock()
-                if let progress { self.onPlaybackProgress?(progress.played, progress.enqueued) }
-                if drained {
-                    self.setDraining(false)
-                } else if live {
-                    self.pumpPlayback()
+                    if drained { self.setDraining(false) }
+                    else { self.pumpNow() }
                 }
             }
             setDraining(true)
@@ -266,6 +305,8 @@ final class AudioEngine {
         lock.lock()
         generation += 1
         inFlight = 0
+        inFlightFrames = 0
+        playbackDeadline = nil
         playbackQueue = []
         queueHead = 0
         framesEnqueued = 0
@@ -286,10 +327,18 @@ final class AudioEngine {
         lock.lock()
         let changed = drainingActive != value
         drainingActive = value
+        let gen = generation
         lock.unlock()
         guard changed else { return }
-        if value { NSLog("[audio] playback active") }
-        onPlaybackStateChange?(value)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let current = self.generation == gen && self.drainingActive == value
+            self.lock.unlock()
+            guard current else { return }
+            NSLog("[audio] playback %@", value ? "active" : "drained")
+            self.onPlaybackStateChange?(value)
+        }
     }
 
     // MARK: engine graph
@@ -307,10 +356,15 @@ final class AudioEngine {
         // Keep the connection in a native-rate format (mono float at the output hardware rate);
         // a 24 kHz connection here is the exact -10851 trap from the spike.
         let hwRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
-        let playFormat = AVAudioFormat(standardFormatWithSampleRate: hwRate, channels: 1)!
+        guard hwRate > 0,
+              let playFormat = AVAudioFormat(standardFormatWithSampleRate: hwRate, channels: 1),
+              let outputConverter = AVAudioConverter(from: wireFormat, to: playFormat) else {
+            failStart("No usable audio output device is available.")
+            return
+        }
         engine.connect(player, to: engine.mainMixerNode, format: playFormat)
         self.playFormat = playFormat
-        playbackConverter = AVAudioConverter(from: wireFormat, to: playFormat)
+        playbackConverter = outputConverter
 
         var inDescription = "none (playback-only, mic untouched)"
         if target == .duplex {
@@ -327,9 +381,14 @@ final class AudioEngine {
             // finding); the voice-processed signal is on channel 0, so captureTapped extracts
             // ch0 into a mono buffer and the converter only ever does mono float → mono int16.
             let hwInFormat = input.outputFormat(forBus: 0)
-            let monoIn = AVAudioFormat(standardFormatWithSampleRate: hwInFormat.sampleRate, channels: 1)!
+            guard hwInFormat.sampleRate > 0, hwInFormat.channelCount > 0,
+                  let monoIn = AVAudioFormat(standardFormatWithSampleRate: hwInFormat.sampleRate, channels: 1),
+                  let inputConverter = AVAudioConverter(from: monoIn, to: wireFormat) else {
+                failStart("No usable microphone input device is available.")
+                return
+            }
             captureMonoFormat = monoIn
-            captureConverter = AVAudioConverter(from: monoIn, to: wireFormat)
+            captureConverter = inputConverter
             loggedChannelPeaks = false
 
             input.installTap(onBus: 0, bufferSize: 1024, format: hwInFormat) { [weak self] buffer, _ in
@@ -351,16 +410,41 @@ final class AudioEngine {
             running = true
             lock.unlock()
             lastStartFailure = nil
+            let watchdog = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                self.lock.lock()
+                let stalled = self.playbackDeadline.map { $0 < Date() } ?? false
+                self.lock.unlock()
+                if stalled {
+                    self.stopEngine(keepQueue: false)
+                    self.onError?("Audio playback stopped responding. Try speaking again.")
+                }
+            }
+            playbackWatchdog = watchdog
+            RunLoop.main.add(watchdog, forMode: .common)
+            configurationObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+            ) { [weak self, weak engine] _ in
+                guard let self, let engine, engine === self.engine else { return }
+                self.configurationChanged()
+            }
             NSLog("[audio] engine started (%@) — in %@, out %.0f Hz",
                   target == .duplex ? "duplex" : "playback-only", inDescription, hwRate)
             pumpPlayback() // drain anything queued before/across the start
         } catch {
-            NSLog("[audio] engine start failed: \(error)")
-            lastStartFailure = Date()
             if target == .duplex { engine.inputNode.removeTap(onBus: 0) }
-            captureConverter = nil
-            playbackConverter = nil
+            failStart("Audio engine could not start (\((error as NSError).code)).")
         }
+    }
+
+    func configurationChanged() {
+        guard let currentMode = mode else { return }
+        lock.lock()
+        let needsMic = armed
+        lock.unlock()
+        stopEngine(keepQueue: true)
+        lastStartFailure = nil
+        setupAndStart(needsMic && currentMode == .duplex ? .duplex : .playbackOnly)
     }
 
     private func captureTapped(_ buffer: AVAudioPCMBuffer) {
@@ -409,5 +493,14 @@ final class AudioEngine {
         guard out.frameLength > 0, let samples = out.int16ChannelData else { return }
         let data = Data(bytes: samples[0], count: Int(out.frameLength) * MemoryLayout<Int16>.size)
         onMicFrame?(data)
+    }
+
+    private func failStart(_ message: String) {
+        lastStartFailure = Date()
+        captureConverter = nil
+        playbackConverter = nil
+        flushPlayback()
+        NSLog("[audio] %@", message)
+        onError?(message)
     }
 }
