@@ -219,12 +219,7 @@ final class GumboController {
             self.audio.setArmed(true)
             self.refreshState()
             self.ws.sendJSON(["type": "ptt_press"])
-            // Let the local notch update enter the main queue before starting the
-            // cold audio graph, which may briefly block while the device starts.
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.armed else { return }
-                self.audio.start(reason: .ptt)
-            }
+            self.audio.start(reason: .ptt) // graph startup runs off the UI thread
         }
         hotkeys.onRelease = { [weak self] in
             guard let self else { return }

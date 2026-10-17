@@ -47,6 +47,9 @@ final class AudioEngine {
     private var loggedChannelPeaks = false
 
     private let lock = NSLock()
+    // Device activation can block for seconds on a cold VPIO graph. Keep every graph
+    // mutation on this queue so neither notch animation nor key releases wait for it.
+    private let graphQueue = DispatchQueue(label: "ai.Gumbo.app.audio.graph", qos: .userInitiated)
     // All pop→convert→schedule work is serialized here. playChunk (main) and buffer
     // completion handlers (audio thread) both used to run the pump concurrently, which
     // could schedule chunks out of order, schedule a stale buffer after a barge-in
@@ -63,8 +66,9 @@ final class AudioEngine {
     // Device formats can briefly be zero while VPIO releases/reacquires the output.
     var outputSampleRate: (AVAudioEngine) -> Double = { $0.outputNode.outputFormat(forBus: 0).sampleRate }
     private var captureRequest = 0
+    private var lifecycleVersion = 0
     private var configurationObserver: NSObjectProtocol?
-    private var playbackWatchdog: Timer?
+    private var playbackWatchdog: DispatchSourceTimer?
     private var inFlightFrames = 0
     private var playbackDeadline: Date?
     // Unscheduled pcm chunks. Also the pre-start queue (spoken reply with no prior press)
@@ -87,25 +91,48 @@ final class AudioEngine {
     // MARK: lifecycle
 
     func start(reason: StartReason) {
+        lock.lock()
+        let version = lifecycleVersion
+        lock.unlock()
+        graphQueue.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let current = version == self.lifecycleVersion
+            self.lock.unlock()
+            if current { self.startNow(reason: reason) }
+        }
+    }
+
+    private func startNow(reason: StartReason) {
         switch reason {
         case .playback:
             // Playback never needs the mic. If a duplex engine is already up (armed
             // conversation), play through it — VPIO's echo cancellation even helps.
             if !running { setupAndStart(.playbackOnly) }
         case .ptt:
+            lock.lock()
+            let needsCapture = armed
+            lock.unlock()
+            guard needsCapture else { return }
             if running && mode == .duplex { return }
             if micPermission {
                 switchTo(.duplex)
                 return
             }
+            lock.lock()
             captureRequest += 1
             let request = captureRequest
+            lock.unlock()
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                DispatchQueue.main.async {
-                    guard let self, request == self.captureRequest else { return }
+                self?.graphQueue.async { [weak self] in
+                    guard let self else { return }
+                    self.lock.lock()
+                    let current = request == self.captureRequest && self.armed
+                    self.lock.unlock()
+                    guard current else { return }
                     self.micPermission = granted
                     guard granted else {
-                        self.onError?("Microphone access is unavailable. Enable Gumbo in Privacy & Security.")
+                        self.reportError("Microphone access is unavailable. Enable Gumbo in Privacy & Security.")
                         return
                     }
                     self.lock.lock()
@@ -118,9 +145,11 @@ final class AudioEngine {
     }
 
     func stop() {
-        captureRequest += 1
         setArmed(false)
-        stopEngine(keepQueue: false)
+        lock.lock()
+        lifecycleVersion += 1
+        lock.unlock()
+        graphQueue.async { self.stopEngine(keepQueue: false) }
     }
 
     private func switchTo(_ target: Mode) {
@@ -134,7 +163,7 @@ final class AudioEngine {
     private func stopEngine(keepQueue: Bool) {
         startRetry?.cancel()
         startRetry = nil
-        playbackWatchdog?.invalidate()
+        playbackWatchdog?.cancel()
         playbackWatchdog = nil
         if let configurationObserver {
             NotificationCenter.default.removeObserver(configurationObserver)
@@ -175,8 +204,8 @@ final class AudioEngine {
     }
 
     func setArmed(_ value: Bool) {
-        if !value { captureRequest += 1 }
         lock.lock()
+        if !value { captureRequest += 1 }
         armed = value
         lock.unlock()
         if !value { onMicLevel?(0) }
@@ -188,8 +217,12 @@ final class AudioEngine {
     /// before any engine is up wait in the queue and drain on the next start.
     func playChunk(_ pcm: Data) {
         guard !pcm.isEmpty, pcm.count.isMultiple(of: 2) else { return }
-        if !running && lastStartFailure != nil { return }
+        graphQueue.async { [weak self] in self?.enqueuePlayback(pcm) }
+    }
+
+    private func enqueuePlayback(_ pcm: Data) {
         lock.lock()
+        if !running && lastStartFailure != nil { lock.unlock(); return }
         playbackQueue.append(pcm)
         if playbackQueue.count - queueHead > 4096 { queueHead += 1 } // drop-oldest cap
         if queueHead > 1024 { // compact consumed prefix
@@ -307,6 +340,10 @@ final class AudioEngine {
 
     /// Barge-in: drop everything queued, immediately.
     func flushPlayback() {
+        graphQueue.async { [weak self] in self?.flushPlaybackNow() }
+    }
+
+    private func flushPlaybackNow() {
         lock.lock()
         generation += 1
         inFlight = 0
@@ -351,6 +388,9 @@ final class AudioEngine {
     private func setupAndStart(_ target: Mode, attempt: Int = 0) {
         guard !running, startRetry == nil else { return }
         if let last = lastStartFailure, Date().timeIntervalSince(last) < 3 { return } // no retry storms
+        lock.lock()
+        let startVersion = lifecycleVersion
+        lock.unlock()
         let engine = AVAudioEngine()
 
         // Order is load-bearing (probed on this macOS 27 beta): materialize the playback
@@ -366,11 +406,14 @@ final class AudioEngine {
             let retry = DispatchWorkItem { [weak self] in
                 guard let self, self.generation == startGeneration else { return }
                 self.startRetry = nil
-                let nextMode: Mode = self.armed && self.micPermission ? .duplex : .playbackOnly
+                self.lock.lock()
+                let needsMic = self.armed
+                self.lock.unlock()
+                let nextMode: Mode = needsMic && self.micPermission ? .duplex : .playbackOnly
                 self.setupAndStart(nextMode, attempt: attempt + 1)
             }
             startRetry = retry
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: retry)
+            graphQueue.asyncAfter(deadline: .now() + 0.25, execute: retry)
             return
         }
         guard hwRate > 0,
@@ -417,33 +460,50 @@ final class AudioEngine {
 
         engine.prepare()
         do {
+            lock.lock()
+            let startStillWanted = startVersion == lifecycleVersion
+            lock.unlock()
+            guard startStillWanted else {
+                if target == .duplex { engine.inputNode.removeTap(onBus: 0) }
+                return
+            }
             try engine.start()
             // Under the lock: the pump reads running + graph refs together and must
             // never observe running == true with half-assigned refs.
             lock.lock()
+            guard startVersion == lifecycleVersion else {
+                lock.unlock()
+                if target == .duplex { engine.inputNode.removeTap(onBus: 0) }
+                engine.stop()
+                return
+            }
             self.engine = engine
             self.player = player
             self.mode = target
             running = true
-            lock.unlock()
             lastStartFailure = nil
-            let watchdog = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            lock.unlock()
+            let watchdog = DispatchSource.makeTimerSource(queue: graphQueue)
+            watchdog.schedule(deadline: .now() + 1, repeating: 1)
+            watchdog.setEventHandler { [weak self] in
                 guard let self else { return }
                 self.lock.lock()
                 let stalled = self.playbackDeadline.map { $0 < Date() } ?? false
                 self.lock.unlock()
                 if stalled {
                     self.stopEngine(keepQueue: false)
-                    self.onError?("Audio playback stopped responding. Try speaking again.")
+                    self.reportError("Audio playback stopped responding. Try speaking again.")
                 }
             }
             playbackWatchdog = watchdog
-            RunLoop.main.add(watchdog, forMode: .common)
+            watchdog.resume()
             configurationObserver = NotificationCenter.default.addObserver(
-                forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+                forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
             ) { [weak self, weak engine] _ in
-                guard let self, let engine, engine === self.engine else { return }
-                self.configurationChanged()
+                self?.graphQueue.async { [weak self, weak engine] in
+                    guard let self, let engine, engine === self.engine else { return }
+                    self.configurationChangedNow()
+                }
             }
             NSLog("[audio] engine started (%@) — in %@, out %.0f Hz",
                   target == .duplex ? "duplex" : "playback-only", inDescription, hwRate)
@@ -455,12 +515,18 @@ final class AudioEngine {
     }
 
     func configurationChanged() {
+        graphQueue.async { [weak self] in self?.configurationChangedNow() }
+    }
+
+    private func configurationChangedNow() {
         guard let currentMode = mode else { return }
         lock.lock()
         let needsMic = armed
         lock.unlock()
         stopEngine(keepQueue: true)
+        lock.lock()
         lastStartFailure = nil
+        lock.unlock()
         setupAndStart(needsMic && currentMode == .duplex ? .duplex : .playbackOnly)
     }
 
@@ -513,11 +579,17 @@ final class AudioEngine {
     }
 
     private func failStart(_ message: String) {
+        lock.lock()
         lastStartFailure = Date()
+        lock.unlock()
         captureConverter = nil
         playbackConverter = nil
-        flushPlayback()
+        flushPlaybackNow()
         NSLog("[audio] %@", message)
-        onError?(message)
+        reportError(message)
+    }
+
+    private func reportError(_ message: String) {
+        DispatchQueue.main.async { [weak self] in self?.onError?(message) }
     }
 }

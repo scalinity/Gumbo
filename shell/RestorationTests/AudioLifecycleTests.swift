@@ -4,6 +4,30 @@ import AVFoundation
 
 final class AudioLifecycleTests: XCTestCase {
     @MainActor
+    func testColdAudioStartupLeavesMainQueueResponsiveAndCanBeCancelled() async throws {
+        let audio = AudioEngine()
+        let entered = expectation(description: "Cold device probe entered")
+        let mainResponded = expectation(description: "Main queue responds during device startup")
+        var active = false
+        audio.onPlaybackStateChange = { if $0 { active = true } }
+        audio.outputSampleRate = { engine in
+            XCTAssertFalse(Thread.isMainThread, "Device initialization must not block the notch or key releases")
+            entered.fulfill()
+            Thread.sleep(forTimeInterval: 0.8) // reproduce the blocking device call
+            return engine.outputNode.outputFormat(forBus: 0).sampleRate
+        }
+        audio.start(reason: .playback)
+        await fulfillment(of: [entered], timeout: 2)
+        let before = Date()
+        DispatchQueue.main.async { mainResponded.fulfill() }
+        await fulfillment(of: [mainResponded], timeout: 0.3)
+        XCTAssertLessThan(Date().timeIntervalSince(before), 0.3)
+        audio.stop() // cancellation must be accepted while the device call is blocked
+        try await Task.sleep(for: .milliseconds(1100))
+        XCTAssertFalse(active)
+    }
+
+    @MainActor
     func testTransientOutputFormatRetainsQueuedAudioAndStopCancelsRetry() async throws {
         let audio = AudioEngine()
         var probes = 0
@@ -25,6 +49,7 @@ final class AudioLifecycleTests: XCTestCase {
         audio.stop()
         probes = 0
         audio.start(reason: .playback)
+        try await Task.sleep(for: .milliseconds(50))
         audio.stop()
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(probes, 1, "A cancelled retry must not restart the graph")
