@@ -217,9 +217,14 @@ final class GumboController {
             guard let self else { return }
             self.armed = true
             self.audio.setArmed(true)
-            self.ws.sendJSON(["type": "ptt_press"])
-            self.audio.start(reason: .ptt)
             self.refreshState()
+            self.ws.sendJSON(["type": "ptt_press"])
+            // Let the local notch update enter the main queue before starting the
+            // cold audio graph, which may briefly block while the device starts.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.armed else { return }
+                self.audio.start(reason: .ptt)
+            }
         }
         hotkeys.onRelease = { [weak self] in
             guard let self else { return }
@@ -413,22 +418,18 @@ final class GumboController {
         refreshState()
     }
 
-    /// The daemon's 'speaking' tracks generation, which finishes seconds before playback —
-    /// so the shell holds 'speaking' while its own queue drains. While armed, listening wins.
+    /// Capture is local: its indicator must not wait for a daemon acknowledgment.
+    /// When released, actual playback drain keeps speaking visible.
+    static func displayState(armed: Bool, daemon: String, draining: Bool) -> NotchState {
+        if armed { return .listening }
+        if daemon == "thinking" { return .thinking }
+        if daemon == "speaking" || draining { return .speaking }
+        if daemon == "listening" { return .listening }
+        return .idle
+    }
+
     private func refreshState() {
-        let display: NotchState
-        if armed && daemonState == "listening" {
-            display = .listening
-        } else if daemonState == "thinking" {
-            display = .thinking
-        } else if daemonState == "speaking" || playbackDraining {
-            display = .speaking
-        } else if daemonState == "listening" {
-            display = .listening
-        } else {
-            display = .idle
-        }
-        notch.setState(display)
+        notch.setState(Self.displayState(armed: armed, daemon: daemonState, draining: playbackDraining))
         scheduleEngineIdleStop()
     }
 
