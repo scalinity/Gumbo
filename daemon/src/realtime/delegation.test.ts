@@ -59,3 +59,60 @@ test('client delegation uses the accumulated request, deduplicates IDs and ignor
   await new Promise(r => setTimeout(r, 450));
   assert.equal(calls.length, 1);
 });
+
+test('a transcribed turn without a Live reply falls back once and adopts a late delegation ID', { timeout: 2000 }, async () => {
+  const store = new Store(':memory:');
+  const o = new Orchestrator(store, { hasRole: () => false, broadcast() {} } as never,
+    {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+  const state = o as any; const commentary: unknown[][] = [];
+  const session = { close() {}, append: async (...args: unknown[]) => { commentary.push(args); } };
+  state.session = session; state.responding = true; state.inputGeneration = 1;
+  let deliver!: (response: Response) => void; let arrived!: () => void;
+  const requestArrived = new Promise<void>(resolve => { arrived = resolve; });
+  const original = globalThis.fetch; let requests = 0;
+  globalThis.fetch = (() => { requests++; arrived(); return new Promise<Response>(resolve => { deliver = resolve; }); }) as typeof fetch;
+  try {
+    for (const delta of ['Tell me ', 'a five sentence ', 'story.']) {
+      state.handleLiveEvent(session, { type: 'session.input_transcript.delta', delta });
+    }
+    assert.equal(store.recentTranscripts(0).length, 0, 'word deltas must not become separate feed rows');
+    state.lastInputAt = Date.now() - 1000;
+    state.scheduleMissingResponse(1);
+    await requestArrived;
+    assert.equal(store.recentTranscripts(0)[0].text, 'Tell me a five sentence story.');
+    state.handleLiveEvent(session, { type: 'session.delegation.created', delegation: { id: 'late_id', target: 'client' } });
+    deliver(reply('A short story.'));
+    while (state.backendAbort) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests, 1);
+    assert.deepEqual(commentary, [['commentary', 'A short story.', 'late_id']]);
+    assert.equal(store.listEvents({ limit: 20 }).filter(e => e.type === 'voice.backend_fallback').length, 1);
+  } finally { globalThis.fetch = original; o.shutdown(); }
+});
+
+test('a Live answer or newer input prevents a stale missing-response fallback', async () => {
+  const o = new Orchestrator(new Store(':memory:'), { hasRole: () => false, broadcast() {} } as never,
+    {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+  const state = o as any; const session = { close() {} }; state.session = session;
+  state.responding = true; state.inputText = 'Hello'; state.lastInputAt = 0;
+  state.runBackend = async () => assert.fail('A completed or superseded turn must not run again');
+  state.scheduleMissingResponse(1);
+  state.handleLiveEvent(session, { type: 'session.output_transcript.delta', delta: 'Hello.' });
+  await new Promise(resolve => setTimeout(resolve,5));
+  state.responding = true; state.scheduleMissingResponse(1); state.inputGeneration++;
+  await new Promise(resolve => setTimeout(resolve,5));
+  o.shutdown();
+});
+
+test('an acknowledgment alone does not disable missing-response recovery', async () => {
+  const store = new Store(':memory:');
+  const o = new Orchestrator(store, { hasRole: () => false, broadcast() {} } as never,
+    {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+  const state = o as any; const session = { close() {} }; state.session = session;
+  state.responding = true; state.inputText = 'Tell me a story'; state.lastInputAt = 0;
+  let requests = 0; state.runBackend = async () => { requests++; };
+  state.scheduleMissingResponse(1);
+  state.handleLiveEvent(session, { type: 'session.output_transcript.delta', delta: 'Sure...' });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(requests, 1);
+  o.shutdown();
+});

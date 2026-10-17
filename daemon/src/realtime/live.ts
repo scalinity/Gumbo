@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
+import { Tiktoken } from 'js-tiktoken/lite';
+import o200kBase from 'js-tiktoken/ranks/o200k_base';
 import { config } from '../config.ts';
 import { recordUsage } from '../usage/recorder.ts';
 
@@ -33,11 +35,25 @@ export function liveContext(text: string): string {
   return result;
 }
 
-function spokenContext(text: string): string {
-  if (Buffer.byteLength(text) <= 480) return text;
-  const excerpt = liveContext(text).slice(0, 330);
-  const end = Math.max(excerpt.lastIndexOf('. '), excerpt.lastIndexOf('! '), excerpt.lastIndexOf('? '));
-  return `${end > 0 ? excerpt.slice(0, end + 1) : excerpt.slice(0, excerpt.lastIndexOf(' ')) + '…'} More detail is in the activity view.`;
+const contextEncoder = new Tiktoken(o200kBase);
+
+function commentaryChunks(text: string): string[] {
+  const chunks: string[] = [];
+  let remaining = text.trim();
+  while (remaining) {
+    const tokens = contextEncoder.encode(remaining, [], []);
+    // Leave headroom under Live's 500-token limit. The conservative byte limit
+    // used for small control messages would split even a five-sentence answer.
+    let end = Math.min(tokens.length, 450);
+    let prefix = contextEncoder.decode(tokens.slice(0, end));
+    while (!remaining.startsWith(prefix)) prefix = contextEncoder.decode(tokens.slice(0, --end));
+    if (prefix.length === remaining.length) { chunks.push(prefix); break; }
+    const sentence = Math.max(prefix.lastIndexOf('. '), prefix.lastIndexOf('! '), prefix.lastIndexOf('? '));
+    const boundary = sentence >= 0 ? sentence + 1 : prefix.lastIndexOf(' ');
+    const chunk = boundary > 0 ? prefix.slice(0, boundary) : prefix;
+    chunks.push(chunk); remaining = remaining.slice(chunk.length).trimStart();
+  }
+  return chunks;
 }
 
 /** Primary GPT-Live WebSocket. No Realtime commit/create events or synthetic turn-done.
@@ -126,6 +142,9 @@ export class LiveSession extends EventEmitter {
     if (event.type === 'session.output_audio.delta' && event.delta && !this.closing) this.output(Buffer.from(event.delta, 'base64'));
     if (event.type === 'session.closed') { this.finish(true); this.socket?.close(); }
     if (event.type === 'error') this.emit('fault', new Error(`GPT-Live error (${event.error?.code ?? 'unknown'})`));
+    // Audio and text for the interrupted reply share the suppression window. A late
+    // old caption must not mark the new request answered or replace its notch caption.
+    if (event.type === 'session.output_transcript.delta' && this.suppressOutput) return;
     this.emit('event', event);
   }
 
@@ -186,8 +205,21 @@ export class LiveSession extends EventEmitter {
     this.send({ type: 'session.input_audio.append', audio: frame.toString('base64') });
   }
 
-  append(kind: 'commentary' | 'thinking' | 'instructions', text: string, delegationId: string | null = null) {
-    return this.command(`session.${kind}.append`, { content: kind === 'commentary' ? spokenContext(text) : liveContext(text), delegation_id: delegationId });
+  async append(kind: 'commentary' | 'thinking' | 'instructions', text: string, delegationId: string | null = null) {
+    const chunks = kind === 'commentary' ? commentaryChunks(text) : [liveContext(text)];
+    if (kind === 'commentary' && chunks.length > 1) {
+      // Back-to-back spoken updates can supersede one another. Supply the complete
+      // answer quietly first, then trigger one reply after every part is accepted.
+      for (const [index, chunk] of chunks.entries()) {
+        await this.command('session.thinking.append', { content: `Backend answer, part ${index + 1}/${chunks.length}: ${chunk}`, delegation_id: delegationId });
+      }
+      await this.command('session.commentary.append', {
+        content: `The backend answer is complete in the preceding ${chunks.length} numbered parts. Deliver that answer in order, preserving its content.`,
+        delegation_id: delegationId,
+      });
+      return;
+    }
+    for (const content of chunks) await this.command(`session.${kind}.append`, { content, delegation_id: delegationId });
   }
 
   private waitForOutputGap() {
@@ -200,7 +232,7 @@ export class LiveSession extends EventEmitter {
   interrupt() {
     this.suppressOutput = true; this.suppressedAt = Date.now(); this.quietMs = 0; this.preRoll = [];
     this.waitForOutputGap();
-    void this.append('instructions', 'Stop speaking immediately and listen to the user. Wait for the backend before answering a request that needs tools.').catch(error => this.emit('fault', error));
+    void this.append('instructions', 'Stop the current reply and listen to the new request. When the user finishes, answer the new request or delegate it to the backend normally.').catch(error => this.emit('fault', error));
   }
 
   close() {
