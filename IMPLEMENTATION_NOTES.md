@@ -3056,3 +3056,10 @@ places the fixes had looked, and both lessons generalize:
 - Known post-merge operational note: debug rebuilds of the shell drop the Apple-events
   (Automation) TCC grant — re-grant per app after a rebuild; a stable code-signing identity is
   the durable fix and belongs to post-M8 work.
+
+
+## 2026-10-17 — Notch restoration verification
+
+- DynamicNotchKit 1.1.0 remains the latest stable upstream release; retain the existing pin. Its `hide()` includes a 250 ms collapse plus a 150 ms window fade. Reopening during that operation can cancel the close continuation or race the outgoing fade. The pre-existing local visibility serialization and disabled hover hold address that lifecycle; they remain outside this session's commits.
+- A targeted native test exercised ten expansion/collapse cycles on the attached display, including five reopen-during-fade cases, plus listening/thinking/speaking transitions. All cycles retained one opaque, centered, top-anchored panel and settled hidden. Recording and completion-pulse persistence also passed (two native tests, zero failures). These checks ran against the current local checkout, including its pre-existing notch changes; they do not establish flicker-free motion or seam-free pixels.
+- No click-catcher geometry defect was demonstrated. No clipping, padding, or dependency changes were made without a reproduction. Motion acceptance and external-display/scaling checks remain unverified.
