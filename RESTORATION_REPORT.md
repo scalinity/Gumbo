@@ -17,7 +17,7 @@ M9 and later features were not started. This report distinguishes executed check
 | First hotkey press appears ignored | Local capture was hidden behind a daemon acknowledgment. After correcting that, native timing showed immediate shortcut detection followed by a 4.15-second UI stall during cold audio startup. Graph startup, teardown and route recovery now run on one dedicated queue; local capture controls the notch immediately. | A regression deliberately blocks device initialization while checking main-queue responsiveness and cancellation. Physical retesting of the installed fix confirms that the first press opens the notch after idle. Temporary tracing was removed. |
 | Mac task stops while the computer is in use | Ordinary input triggered takeover cancellation. Control–Shift–Escape is now the explicit stop shortcut; ordinary keyboard/mouse use leaves tasks running. | Native shortcut tests and a real Finder task that created/opened a disposable folder, read back its location and persisted its report. |
 | Transparent notch compositing | The clear DynamicNotchKit panel reported `isOpaque=true`, despite its masked transparent surface. A native attachment now marks that containing window nonopaque before drawing. The original caption dimensions remain. | Native test verifies transparent backing, stable position and full window alpha across 30 caption/level/state updates. Physical flicker retesting remains pending. |
-| Notch reopening/fade behavior | DynamicNotchKit 1.1.0 is the latest stable upstream release checked. Existing local serialization of visibility transitions and disabled hover holding passed repeated native checks. No additional padding or clipping fix was justified by a reproduced geometry defect. | Ten expansion/collapse cycles, including five reopen-during-fade cases: one opaque, centered, top-anchored panel, with final hidden state. These establish lifecycle/geometry, not frame-by-frame visual perfection. |
+| Notch reopening/fade behavior | DynamicNotchKit 1.1.0 is the latest stable upstream release checked. Existing local serialization of visibility transitions and disabled hover holding passed repeated native checks. No additional padding or clipping fix was justified by a reproduced geometry defect. | Ten expansion/collapse cycles, including five reopen-during-fade cases: one visible, centered, top-anchored panel at full window alpha, with final hidden state. These establish lifecycle/geometry, not frame-by-frame visual perfection. |
 
 ## Provider and architecture changes
 
@@ -86,7 +86,7 @@ Official protocol references: [Live migration](https://developers.openai.com/api
 
 - Voice: `daemon/src/realtime/{live,session,backend-prompt}.ts`, focused Live/delegation/lifecycle/session tests, `config.ts`, `index.ts` and `ws/protocol.ts`.
 - Workers/authentication: `daemon/src/agents/{anthropic,anthropic-relay,claude-runner,egress-proxy,openai-runner,supervisor,procedures,vision}.ts`, adapter/relay/worker regressions, `files/edit.ts`, `tasks/manager.ts` and `usage/pricing.ts`.
-- Native lifecycle/UI: `shell/Sources/App.swift`, `Audio/AudioEngine.swift`, `Daemon/WSClient.swift`, `DashboardWindow.swift`, `Mac/{KillSwitch,MacBridge}.swift`; daemon `ws/mac.ts` and its tests.
+- Native lifecycle/UI: `shell/Sources/App.swift`, `Audio/AudioEngine.swift`, `Daemon/WSClient.swift`, `DashboardWindow.swift`, `Notch/NotchController.swift`, `Mac/{KillSwitch,MacBridge}.swift`; daemon `ws/mac.ts` and its tests.
 - Native tests/build instructions: `shell/RestorationTests/`, `shell/tests.yml` and `shell/README.md`.
 - Dependencies/documentation: `daemon/package.json`, `package-lock.json`, `.gitignore`, `SPEC.md`, `AGENTS.md`, `CLAUDE.md`, `IMPLEMENTATION_NOTES.md` and this report.
 
@@ -97,3 +97,26 @@ Raw test logs and disposable probes remain locally under `/tmp/gumbo-restoration
 ## Remaining limits
 
 Physical first-press acceptance passed after moving cold audio startup off the UI thread. The installed build contains no temporary key/notch instrumentation. The latest physical notch test failed before the nonopaque-window correction; the corrected build awaits visual retesting. Cold-start speech needs a new physical retest after the capture/resume correction. Seam and multi-display acceptance remain unverified. Occasional backend latency remains audible; selecting a cheaper/faster worker was not substituted for the requested Opus model. Long spoken answers can be paraphrased by Live. Full typechecking still fails on existing issues, and new-SDK coding edit/approval/resume plus every M1–M8 live feature were not fully exercised. The app remains a local development installation tied to its checkout.
+
+## Commit record
+
+The following completed units were pushed to `origin/main`. The final report-only commit follows this list in repository history.
+
+- `1048b26` — fix: recover voice and native requests after connection loss
+- `4964782` — docs: record native notch lifecycle verification
+- `0cb89bd` — feat: add Anthropic Messages transport for agent tools
+- `db256cc` — feat: route reasoning workers through Claude Opus 5.5
+- `dc7084d` — feat: authenticate coding sessions through a scoped API relay
+- `b50a097` — feat: connect GPT-Live voice to the Opus tool backend
+- `98e6993` — fix: load the native dashboard from its loopback endpoint
+- `9651f17` — fix: reset Live captions and surface connection failures
+- `d2ee772` — fix: retry transient audio output transitions
+- `6072c64` — fix: keep Mac tasks running during ordinary input
+- `5d04960` — fix: recover unanswered Live turns and preserve spoken answers
+- `7380fcb` — fix: show push-to-talk immediately before daemon acknowledgment
+- `b73a9b5` — fix: align computer-task guidance with explicit stopping
+- `8a58f88` — docs: record provider migration and remaining verification gaps
+- `401ff08` — fix: keep cold audio startup off the interface thread
+- `e1695e6` — fix: retain stopped microphone graphs and recover pending retries
+- `0815c42` — test: wait for the audio retry before cancelling
+- `72f65c0` — fix: use transparent backing for the native notch panel
