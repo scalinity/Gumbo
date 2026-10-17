@@ -7,6 +7,18 @@
 /** USD for `tokens` at a per-1M `rate`. */
 const perM = (tokens: number, rate: number) => (tokens / 1_000_000) * rate;
 
+/** Opus 5.5 API rates, verified 2026-10-17. Anthropic input excludes cache tokens. */
+export function priceOpusUsage(u: {
+  input_tokens: number; output_tokens: number;
+  cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null;
+  cache_creation?: { ephemeral_5m_input_tokens: number; ephemeral_1h_input_tokens: number } | null;
+}): number {
+  const hour = u.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+  const short = u.cache_creation?.ephemeral_5m_input_tokens ?? Math.max(0, (u.cache_creation_input_tokens ?? 0) - hour);
+  return perM(u.input_tokens, 4) + perM(u.output_tokens, 20) +
+    perM(u.cache_read_input_tokens ?? 0, 0.2) + perM(short, 5) + perM(hour, 8);
+}
+
 // ── OpenAI ──────────────────────────────────────────────────────────────────────
 
 // gpt-realtime-2.1 — the voice session. Cached audio input is $0.40 vs $32 uncached (80×),

@@ -111,6 +111,7 @@ export const config = {
   home,
   dbPath: join(home.db, 'gumbo.db'),
   models: {
+    worker: 'claude-opus-5-5',
     realtime: 'gpt-realtime-2.1',
     subagent: 'gpt-5.6-terra',
     supervisor: 'gpt-5.6-terra',
