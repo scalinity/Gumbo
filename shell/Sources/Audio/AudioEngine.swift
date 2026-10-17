@@ -20,6 +20,7 @@ final class AudioEngine {
     private enum Mode { case duplex, playbackOnly }
 
     var onMicFrame: ((Data) -> Void)?
+    var onCaptureReady: (() -> Void)?
     var onMicLevel: ((Float) -> Void)?
     var onPlaybackLevel: ((Float) -> Void)?
     var onPlaybackStateChange: ((Bool) -> Void)? // true while queued audio is draining
@@ -42,6 +43,7 @@ final class AudioEngine {
     private var mode: Mode?
     private var captureConverter: AVAudioConverter?
     private var captureMonoFormat: AVAudioFormat?
+    private var captureInputFormat: AVAudioFormat?
     private var playbackConverter: AVAudioConverter?
     private var playFormat: AVAudioFormat?
     private var loggedChannelPeaks = false
@@ -66,6 +68,7 @@ final class AudioEngine {
     // Device formats can briefly be zero while VPIO releases/reacquires the output.
     var outputSampleRate: (AVAudioEngine) -> Double = { $0.outputNode.outputFormat(forBus: 0).sampleRate }
     private var captureRequest = 0
+    private var captureReadySent = false
     private var lifecycleVersion = 0
     private var configurationObserver: NSObjectProtocol?
     private var playbackWatchdog: DispatchSourceTimer?
@@ -108,7 +111,7 @@ final class AudioEngine {
         case .playback:
             // Playback never needs the mic. If a duplex engine is already up (armed
             // conversation), play through it — VPIO's echo cancellation even helps.
-            if !running { setupAndStart(.playbackOnly) }
+            if !running { switchTo(.playbackOnly) }
         case .ptt:
             lock.lock()
             let needsCapture = armed
@@ -152,15 +155,35 @@ final class AudioEngine {
         graphQueue.async { self.stopEngine(keepQueue: false) }
     }
 
+    /// Close hardware I/O while retaining the configured graph for the next press.
+    /// Rebuilding VPIO on every idle timeout adds seconds before input can arrive.
+    func suspend() {
+        setArmed(false)
+        lock.lock()
+        lifecycleVersion += 1
+        lock.unlock()
+        graphQueue.async { self.stopEngine(keepQueue: false, keepGraph: true) }
+    }
+
     private func switchTo(_ target: Mode) {
-        if running {
-            if mode == target { return }
+        if mode == target {
+            if running { return }
+            if let engine, outputSampleRate(engine) == playFormat?.sampleRate,
+               target != .duplex || engine.inputNode.outputFormat(forBus: 0) == captureInputFormat {
+                lock.lock()
+                let version = lifecycleVersion
+                lock.unlock()
+                activateGraph(startVersion: version)
+                return
+            }
+        }
+        if engine != nil {
             stopEngine(keepQueue: true) // keep queued audio: press-and-stay-silent must still hear the rest
         }
         setupAndStart(target)
     }
 
-    private func stopEngine(keepQueue: Bool) {
+    private func stopEngine(keepQueue: Bool, keepGraph: Bool = false) {
         startRetry?.cancel()
         startRetry = nil
         playbackWatchdog?.cancel()
@@ -171,6 +194,8 @@ final class AudioEngine {
         }
         lock.lock()
         running = false
+        captureRequest += 1
+        captureReadySent = false
         generation += 1
         inFlight = 0
         inFlightFrames = 0
@@ -189,16 +214,21 @@ final class AudioEngine {
         let queueEmpty = queueIsEmpty
         lock.unlock()
         pumpQueue.sync {}
-        if mode == .duplex { engine?.inputNode.removeTap(onBus: 0) }
+        if !keepGraph, mode == .duplex { engine?.inputNode.removeTap(onBus: 0) }
         player?.stop()
         engine?.stop()
-        engine = nil
-        player = nil
-        mode = nil
-        captureConverter = nil
-        captureMonoFormat = nil
-        playbackConverter = nil
-        playFormat = nil
+        captureConverter?.reset()
+        playbackConverter?.reset()
+        if !keepGraph {
+            engine = nil
+            player = nil
+            mode = nil
+            captureConverter = nil
+            captureMonoFormat = nil
+            captureInputFormat = nil
+            playbackConverter = nil
+            playFormat = nil
+        }
         if queueEmpty { setDraining(false) }
         NSLog("[audio] engine stopped%@", keepQueue && !queueEmpty ? " (graph switch, queue retained)" : "")
     }
@@ -207,6 +237,7 @@ final class AudioEngine {
         lock.lock()
         if !value { captureRequest += 1 }
         armed = value
+        captureReadySent = false
         lock.unlock()
         if !value { onMicLevel?(0) }
     }
@@ -402,13 +433,14 @@ final class AudioEngine {
         // a 24 kHz connection here is the exact -10851 trap from the spike.
         let hwRate = outputSampleRate(engine)
         if hwRate <= 0 && attempt < 6 {
-            let startGeneration = generation
             let retry = DispatchWorkItem { [weak self] in
-                guard let self, self.generation == startGeneration else { return }
+                guard let self else { return }
                 self.startRetry = nil
                 self.lock.lock()
+                let current = self.lifecycleVersion == startVersion
                 let needsMic = self.armed
                 self.lock.unlock()
+                guard current else { return }
                 let nextMode: Mode = needsMic && self.micPermission ? .duplex : .playbackOnly
                 self.setupAndStart(nextMode, attempt: attempt + 1)
             }
@@ -426,7 +458,6 @@ final class AudioEngine {
         self.playFormat = playFormat
         playbackConverter = outputConverter
 
-        var inDescription = "none (playback-only, mic untouched)"
         if target == .duplex {
             let input = engine.inputNode
             do {
@@ -434,6 +465,9 @@ final class AudioEngine {
             } catch {
                 NSLog("[audio] voice processing unavailable (\(error)) — echo cancellation degraded")
             }
+            // Preparation settles VPIO's discrete input layout before the tap is
+            // installed; reading it earlier can see the pre-switch three-channel bus.
+            engine.prepare()
 
             // Input format only settles after the VPIO switch — here a 48 kHz **9-channel**
             // array with a discrete layout. AVAudioConverter does NOT downmix discrete
@@ -448,23 +482,40 @@ final class AudioEngine {
                 return
             }
             captureMonoFormat = monoIn
+            captureInputFormat = hwInFormat
             captureConverter = inputConverter
             loggedChannelPeaks = false
 
             input.installTap(onBus: 0, bufferSize: 1024, format: hwInFormat) { [weak self] buffer, _ in
                 self?.captureTapped(buffer)
             }
-            inDescription = String(format: "%.0f Hz/%d ch, VPIO %@", hwInFormat.sampleRate,
-                                   hwInFormat.channelCount, input.isVoiceProcessingEnabled ? "on" : "OFF")
+            NSLog("[audio] input %.0f Hz/%d ch, VPIO %@", hwInFormat.sampleRate,
+                  hwInFormat.channelCount, input.isVoiceProcessingEnabled ? "on" : "OFF")
         }
 
         engine.prepare()
+        lock.lock()
+        let startStillWanted = startVersion == lifecycleVersion
+        if startStillWanted {
+            self.engine = engine
+            self.player = player
+            self.mode = target
+        }
+        lock.unlock()
+        guard startStillWanted else {
+            if target == .duplex { engine.inputNode.removeTap(onBus: 0) }
+            return
+        }
+        activateGraph(startVersion: startVersion)
+    }
+
+    private func activateGraph(startVersion: Int) {
+        guard let engine, player != nil, let target = mode else { return }
         do {
             lock.lock()
             let startStillWanted = startVersion == lifecycleVersion
             lock.unlock()
             guard startStillWanted else {
-                if target == .duplex { engine.inputNode.removeTap(onBus: 0) }
                 return
             }
             try engine.start()
@@ -473,13 +524,9 @@ final class AudioEngine {
             lock.lock()
             guard startVersion == lifecycleVersion else {
                 lock.unlock()
-                if target == .duplex { engine.inputNode.removeTap(onBus: 0) }
                 engine.stop()
                 return
             }
-            self.engine = engine
-            self.player = player
-            self.mode = target
             running = true
             lastStartFailure = nil
             lock.unlock()
@@ -505,11 +552,11 @@ final class AudioEngine {
                     self.configurationChangedNow()
                 }
             }
-            NSLog("[audio] engine started (%@) — in %@, out %.0f Hz",
-                  target == .duplex ? "duplex" : "playback-only", inDescription, hwRate)
+            NSLog("[audio] engine started (%@), output %.0f Hz",
+                  target == .duplex ? "duplex" : "playback-only", playFormat?.sampleRate ?? 0)
             pumpPlayback() // drain anything queued before/across the start
         } catch {
-            if target == .duplex { engine.inputNode.removeTap(onBus: 0) }
+            stopEngine(keepQueue: false)
             failStart("Audio engine could not start (\((error as NSError).code)).")
         }
     }
@@ -575,6 +622,20 @@ final class AudioEngine {
         }
         guard out.frameLength > 0, let samples = out.int16ChannelData else { return }
         let data = Data(bytes: samples[0], count: Int(out.frameLength) * MemoryLayout<Int16>.size)
+        lock.lock()
+        let announceReady = armed && !captureReadySent
+        captureReadySent = true
+        let request = captureRequest
+        lock.unlock()
+        if announceReady {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                let current = self.armed && self.captureRequest == request
+                self.lock.unlock()
+                if current { self.onCaptureReady?() }
+            }
+        }
         onMicFrame?(data)
     }
 

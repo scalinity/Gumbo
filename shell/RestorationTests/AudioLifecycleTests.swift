@@ -4,6 +4,58 @@ import AVFoundation
 
 final class AudioLifecycleTests: XCTestCase {
     @MainActor
+    func testDuplexGraphDeliversMicrophoneFramesAndStopsOnRelease() async throws {
+        let audio = AudioEngine()
+        let captured = expectation(description: "Actual microphone PCM arrives")
+        let resumed = expectation(description: "Stopped microphone resumes promptly")
+        let frameLock = NSLock()
+        var frames = 0
+        var failures: [String] = []
+        var readyCount = 0
+        var resumeAt: Date?
+        audio.onError = { failures.append($0) }
+        audio.onCaptureReady = {
+            readyCount += 1
+            if let resumeAt {
+                XCTAssertLessThan(Date().timeIntervalSince(resumeAt), 1.5,
+                                  "An idle stop must retain the warm graph")
+                resumed.fulfill()
+            }
+        }
+        audio.onMicFrame = { data in
+            frameLock.lock()
+            frames += 1
+            let first = frames == 1
+            frameLock.unlock()
+            if first {
+                XCTAssertGreaterThan(data.count, 0)
+                captured.fulfill()
+            }
+        }
+        audio.setArmed(true)
+        audio.start(reason: .ptt)
+        await fulfillment(of: [captured], timeout: 15)
+        XCTAssertTrue(failures.isEmpty, "Microphone startup failures: \(failures)")
+        audio.setArmed(false)
+        try await Task.sleep(for: .milliseconds(150))
+        let releasedCount = frames
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(frames, releasedCount, "Release must stop microphone delivery")
+        audio.suspend()
+        try await Task.sleep(for: .milliseconds(500))
+        let suspendedCount = frames
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(frames, suspendedCount)
+        resumeAt = Date()
+        audio.setArmed(true)
+        audio.start(reason: .ptt)
+        await fulfillment(of: [resumed], timeout: 3)
+        XCTAssertEqual(readyCount, 2)
+        audio.stop()
+        try await Task.sleep(for: .milliseconds(300))
+    }
+
+    @MainActor
     func testColdAudioStartupLeavesMainQueueResponsiveAndCanBeCancelled() async throws {
         let audio = AudioEngine()
         let entered = expectation(description: "Cold device probe entered")
@@ -33,19 +85,27 @@ final class AudioLifecycleTests: XCTestCase {
         var probes = 0
         var states: [Bool] = []
         var failure: String?
+        let drained = expectation(description: "Retried audio drains after a playback flush")
         audio.outputSampleRate = { engine in
             probes += 1
             return probes < 3 ? 0 : engine.outputNode.outputFormat(forBus: 0).sampleRate
         }
-        audio.onPlaybackStateChange = { states.append($0) }
+        audio.onPlaybackStateChange = {
+            states.append($0)
+            if !$0, states.contains(true) { drained.fulfill() }
+        }
         audio.onError = { failure = $0 }
         audio.start(reason: .playback)
         audio.playChunk(Data(repeating: 0, count: 4800))
-        try await Task.sleep(for: .milliseconds(1100))
-        XCTAssertEqual(probes, 3)
+        try await Task.sleep(for: .milliseconds(50))
+        audio.flushPlayback() // a new turn must not strand a pending device retry
+        audio.playChunk(Data(repeating: 0, count: 4800))
+        await fulfillment(of: [drained], timeout: 4)
+        XCTAssertGreaterThanOrEqual(probes, 3)
         XCTAssertTrue(states.contains(true))
         XCTAssertEqual(states.last, false)
         XCTAssertNil(failure)
+        audio.onPlaybackStateChange = { states.append($0) }
         audio.stop()
         probes = 0
         audio.start(reason: .playback)
@@ -79,12 +139,19 @@ final class AudioLifecycleTests: XCTestCase {
         defer { audio.stop() }
         XCTAssertNil(failure)
         for _ in 0..<3 {
+            let drained = expectation(description: "Playback drains after route recovery")
+            var active = false
+            audio.onPlaybackStateChange = { draining in
+                states.append(draining)
+                if draining { active = true }
+                else if active { active = false; drained.fulfill() }
+            }
             audio.playChunk(Data(repeating: 0, count: 9_600))
             try await Task.sleep(for: .milliseconds(40))
             audio.flushPlayback()
             audio.configurationChanged()
             audio.playChunk(Data(repeating: 0, count: 4_800))
-            try await Task.sleep(for: .milliseconds(600))
+            await fulfillment(of: [drained], timeout: 4)
             XCTAssertEqual(states.last, false)
         }
         XCTAssertTrue(states.contains(true))

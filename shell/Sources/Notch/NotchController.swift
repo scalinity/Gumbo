@@ -124,6 +124,10 @@ final class NotchController {
         }
     }
 
+    func setStartingMicrophone(_ starting: Bool) {
+        DispatchQueue.main.async { [self] in model.startingMicrophone = starting }
+    }
+
     func appendTranscript(itemId: String, delta: String) {
         DispatchQueue.main.async { [self] in
             if itemId != model.transcriptItem {
@@ -236,6 +240,7 @@ private final class NotchClickCatcherView: NSView {
 
 final class NotchModel: ObservableObject {
     @Published var state: NotchState = .idle
+    @Published var startingMicrophone = false
     @Published var level: Float = 0
     @Published var recording = false // M8: watch-me recorder live (persistent badge)
     @Published var transcript = "" // full text (newline-flattened)
@@ -310,7 +315,7 @@ struct NotchContentView: View {
         if model.recording && model.state == .idle { return "Watching…" }
         switch model.state {
         case .idle: return "Gumbo"
-        case .listening: return "Listening…"
+        case .listening: return model.startingMicrophone ? "Starting mic…" : "Listening…"
         case .thinking: return "Thinking…"
         case .speaking: return "Gumbo"
         }

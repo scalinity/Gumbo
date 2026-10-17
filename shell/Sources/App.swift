@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let launcher = DaemonLauncher()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hosted tests create their own controllers and must not join the live daemon.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         let controller = GumboController()
         self.controller = controller
         setupMainMenu()
@@ -148,6 +150,7 @@ final class GumboController {
     private var daemonState = "idle"
     private var playbackDraining = false
     private var armed = false
+    private var microphoneReady = false
     private var engineIdleTimer: Timer?
 
     func start() {
@@ -216,6 +219,7 @@ final class GumboController {
         hotkeys.onPress = { [weak self] in
             guard let self else { return }
             self.armed = true
+            self.microphoneReady = false
             self.audio.setArmed(true)
             self.refreshState()
             self.ws.sendJSON(["type": "ptt_press"])
@@ -235,6 +239,11 @@ final class GumboController {
     }
 
     private func wireAudio() {
+        audio.onCaptureReady = { [weak self] in
+            guard let self, self.armed else { return }
+            self.microphoneReady = true
+            self.refreshState()
+        }
         audio.onMicFrame = { [weak self] data in
             self?.ws.sendBinary(data)
         }
@@ -403,6 +412,7 @@ final class GumboController {
 
     private func resetVoice() {
         armed = false
+        microphoneReady = false
         daemonState = "idle"
         playbackDraining = false
         engineIdleTimer?.invalidate()
@@ -424,6 +434,7 @@ final class GumboController {
     }
 
     private func refreshState() {
+        notch.setStartingMicrophone(armed && !microphoneReady)
         notch.setState(Self.displayState(armed: armed, daemon: daemonState, draining: playbackDraining))
         scheduleEngineIdleStop()
     }
@@ -432,12 +443,13 @@ final class GumboController {
     /// after the conversation is over: idle daemon state, not armed, playback drained.
     /// 8 s covers quick follow-up turns without paying an engine restart; anything longer
     /// and the mic indicator has no business staying lit (playback-only starts are mic-free).
+    /// Keep the stopped graph so the next press avoids a cold VPIO rebuild.
     private func scheduleEngineIdleStop() {
         engineIdleTimer?.invalidate()
         guard !armed, !playbackDraining, daemonState == "idle" else { return }
         engineIdleTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
             guard let self, !self.armed, !self.playbackDraining, self.daemonState == "idle" else { return }
-            self.audio.stop()
+            self.audio.suspend()
         }
     }
 }

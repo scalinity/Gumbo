@@ -1,6 +1,6 @@
 # Gumbo restoration — 2026-10-17
 
-A signed build of the restored app is installed at `~/Applications/Gumbo.app`. Voice uses GPT-Live-1; the tool backend, research/Mac workers and coding sessions use Claude Opus 5.5 through the Anthropic API. Physical speech and interruptions work in repeated use. Physical retesting confirms that the notch now opens on the first press after idle. Some Opus answers have a noticeable pause.
+A signed build of the restored app is installed at `~/Applications/Gumbo.app`. Voice uses GPT-Live-1; the tool backend, research/Mac workers and coding sessions use Claude Opus 5.5 through the Anthropic API. Physical speech and interruptions passed earlier repeated checks, and the notch now opens on the first press after idle. Later testing reported missed cold-start speech and a flickering extended notch; these remain under verification. Some Opus answers have a noticeable pause.
 
 M9 and later features were not started. This report distinguishes executed checks from behavior retained through tests or source inspection.
 
@@ -9,7 +9,8 @@ M9 and later features were not started. This report distinguishes executed check
 | Symptom | Finding and correction | Verification |
 |---|---|---|
 | Stuck voice/playback after cancellation or connection loss | Stale connection callbacks, pending native requests and audio completion accounting needed explicit invalidation. Added connection/capture generations, pending-request settlement, queue accounting and a playback watchdog. | Daemon lifecycle tests, native playback tests and repeated physical conversations. |
-| Transient audio startup failure | Real use reported an unavailable output format while VPIO released/reacquired the device. A bounded retry retains unscheduled PCM; stopping invalidates that retry. Persistent failure remains visible. | Native test forces two zero-rate probes and then drains audio; another test cancels the pending retry. Physical output was audible at normal speed. |
+| Transient audio startup failure | Real use reported an unavailable output format while VPIO released/reacquired the device. A bounded retry retains unscheduled PCM; stopping invalidates that retry. Playback flushes no longer invalidate device retries; only lifecycle cancellation does. Persistent failure remains visible. | Native test forces two zero-rate probes, interrupts playback during the retry, then drains new audio; another test cancels the pending retry. Physical output was audible at normal speed. |
+| Speech missed after a cold microphone start | Actual hardware testing took about six seconds to deliver input from a newly built VPIO graph. Reusing a stopped graph resumed in 0.18 seconds in an isolated probe. Idle now stops hardware I/O while retaining that graph, and “Starting mic…” remains visible until actual PCM arrives. Input format is read after VPIO preparation. | Native test captures real microphone PCM, verifies release/suspension stop delivery, and resumes within 1.5 seconds. End-to-end physical speech after this correction remains pending. |
 | Blank native activity window | WebKit returned navigation error -1008 for `localhost:5173` despite successful HTTP responses. `127.0.0.1:5173` restored the rendered dashboard. The underlying hostname-specific OS failure is unknown. | Direct native inspection shows the activity feed and “daemon connected.” No OS protection or TCC setting was disabled. |
 | Missing replies after Live migration | A complete user transcript sometimes produced neither an answer nor a delegation before the response watchdog expired. The provider's internal cause is unknown. One fallback dispatches the settled request to Opus; late delegation IDs attach to the same execution. Old interrupted captions cannot mark a new request answered. | Regression tests, a three-request live sequence with interruptions, a forced fallback through real Opus/Live, and repeated physical use. |
 | Pauses after “Sure”; incomplete spoken story | Acknowledgments could disable recovery. Separate short commentary updates could also omit earlier answer content. Acknowledgments now leave recovery active. Short answers travel in one update; longer answers are supplied as quiet numbered context before one speech request. | A live five-sentence story arrived complete. Long-answer staging is unit tested; extended spoken fidelity is not yet verified. |
@@ -44,7 +45,7 @@ Official protocol references: [Live migration](https://developers.openai.com/api
 
 | Criterion | Status | Method / result |
 |---|---|---|
-| Real microphone → GPT-Live → audible speaker output | PASS | Physical Control–Option speech produced input/output transcripts; direct listening confirmed audible normal-speed output. |
+| Real microphone → GPT-Live → audible speaker output | NOT VERIFIED | Earlier physical conversations passed, but the latest check reported no captured speech after restart. Local hardware capture/resume now passes; a fresh end-to-end physical retest is pending. |
 | Repeated replies and conversational interruption | PASS | Repeated physical tests, including changing story length mid-reply; latest feedback reports working answers with occasional slight lag. |
 | First press visibly opens the notch after idle | PASS | Physical retesting confirms the installed fix. Native tests cover immediate local visibility plus UI responsiveness and cancellation during deliberately blocked cold audio initialization. |
 | Silent/short presses and rapid capture cancellation | PASS | Daemon PTT/VAD tests and native generation/cancellation tests. Not every case was repeated physically. |
@@ -69,15 +70,16 @@ Official protocol references: [Live migration](https://developers.openai.com/api
 | Provider/model usage accounting | PASS | Real usage rows plus mocked cumulative/finalization and token/cache pricing tests. Container charges remain outside token totals. |
 | Context/tool association and persisted state | PASS | Delegation ID, late delegation, history/tool-result tests; real follow-up speech and persisted Mac task report. |
 | Native notch geometry and repeated lifecycle | PASS | Ten cycles, including five fade/reopen cases, and recording/pulse checks. |
-| Seam-free, flicker-free animation across appearances/displays | NOT VERIFIED | No frame-by-frame native motion capture or external-display/scaling qualification. Static geometry is not a substitute. |
+| Steady extended notch during use | FAIL | Physical use still reports flickering/jitter that resembles detachment. A fixed caption footprint did not resolve it and was reverted. Static geometry checks do not establish visual acceptance. |
+| Seam-free transitions across appearances/displays | NOT VERIFIED | No frame-by-frame native motion capture or external-display/scaling qualification. |
 | Transcript generation resets and state presentation | PASS | Caption-generation tests, native state tests and physical interactions. |
 | Microphone privacy and local PTT boundaries | PASS | Capture gating, short/silent input and late permission callback tests; playback-only graph does not request microphone capture. OS-indicator behavior was not exhaustively exercised on every route. |
 | M1–M8 regression suite | PASS | 557 daemon tests: **556 passed, one intentional skip**. Covers tasks, search, reminders, images/files, procedures, approvals, sandbox policy and costs. These are not fresh live demos of every feature. |
-| Native regression suite | PASS | **12 tests passed**: nine restoration tests and three pre-existing local input/notch tests. Two additional earlier notch lifecycle tests also passed. |
+| Native regression suite | PASS | **13 tests passed**: ten restoration tests and three pre-existing local input/notch tests. Two additional earlier notch lifecycle tests also passed. |
 | Full TypeScript check | FAIL | Existing test typing and teaching-protocol mismatches remain. No diagnostic names the new Live/Anthropic adapters. Runtime tests pass; typechecking is not reported green. |
 | Installed signing identity and permission continuity | PASS | Exact designated requirements matched; strict signature verification passed before and after replacement. No TCC reset. |
 | Unrelated working changes | PASS | Pre-existing changes remain outside the commits except overlapping behavior explicitly superseded by the requested provider/stop-control changes. |
-| Credential exposure / test spending | PASS | Added-line public-push scans found no credentials or private-path/link hits. Approximately **$3.70** was recorded across checks and physical use at this review; small direct probes add cents. No paid test was allowed to run unbounded; the assignment ceiling was $5. |
+| Credential exposure / test spending | PASS | Added-line public-push scans found no credentials or private-path/link hits. Approximately **$4.04** was recorded across checks and physical use at this review; small direct probes add cents. No paid test was allowed to run unbounded; the assignment ceiling was $5. |
 
 ## Changed files and retained boundaries
 
@@ -93,4 +95,4 @@ Raw test logs and disposable probes remain locally under `/tmp/gumbo-restoration
 
 ## Remaining limits
 
-Physical first-press acceptance passed after moving cold audio startup off the UI thread. The installed build contains no temporary key/notch instrumentation. Seam/flicker and multi-display acceptance remain unverified. Occasional backend latency remains audible; selecting a cheaper/faster worker was not substituted for the requested Opus model. Long spoken answers can be paraphrased by Live. Full typechecking still fails on existing issues, and new-SDK coding edit/approval/resume plus every M1–M8 live feature were not fully exercised. The app remains a local development installation tied to its checkout.
+Physical first-press acceptance passed after moving cold audio startup off the UI thread. The installed build contains no temporary key/notch instrumentation. The extended notch still flickers in reported physical use. Cold-start speech needs a new physical retest after the capture/resume correction. Seam and multi-display acceptance remain unverified. Occasional backend latency remains audible; selecting a cheaper/faster worker was not substituted for the requested Opus model. Long spoken answers can be paraphrased by Live. Full typechecking still fails on existing issues, and new-SDK coding edit/approval/resume plus every M1–M8 live feature were not fully exercised. The app remains a local development installation tied to its checkout.
