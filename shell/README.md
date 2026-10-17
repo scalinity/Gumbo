@@ -47,3 +47,7 @@ For native restoration regressions, generate with `xcodegen generate --spec test
 then use `xcodebuild -project Gumbo.xcodeproj -scheme GumboRestorationTests -configuration Debug
 -derivedDataPath "$HOME/Library/Caches/Gumbo/Build.noindex" test`. These tests exercise the
 real playback engine with silent PCM and require an available audio output device.
+
+Computer tasks continue while the keyboard and mouse are in use. Press **Control–Shift–Escape**
+to stop all active computer tasks immediately; voice and dashboard cancellation also remain
+available. The stop shortcut stays active during a handoff or confirmation.

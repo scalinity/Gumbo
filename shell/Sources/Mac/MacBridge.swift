@@ -68,11 +68,9 @@ final class MacBridge {
             // just-copied image mid-save.
             return true
         case "mac_handoff":
-            // M7: the user is doing a step themselves — stand the kill switch down and hide
-            // the ghost (their real cursor is the one that matters right now).
+            // During a handoff the real cursor is the relevant one; keep the stop shortcut active.
             let active = msg["active"] as? Bool ?? false
             DispatchQueue.main.async {
-                self.killSwitch.handoffActive = active
                 if active {
                     self.ghost.hide()
                 } else if self.sessionArmed {
@@ -209,7 +207,7 @@ final class MacBridge {
             return
         }
         // Fail CLOSED: if the kill switch can't arm (PostEvent grant missing), we must not
-        // let the task drive the machine with no human-input abort — tell the daemon to
+        // let the task drive the machine without its explicit stop shortcut — tell the daemon to
         // cancel it, and don't show the ghost cursor (nothing will be driving).
         // Ordering assumption: the abort races the task's FIRST action, but that action
         // needs a full model turn (seconds) while this abort is one loopback frame — the
@@ -224,7 +222,6 @@ final class MacBridge {
 
     private func disarmSession() {
         sessionArmed = false
-        killSwitch.handoffActive = false // a task ending mid-handoff must not leave the tap soft
         // M8: recording owns the tap — resync broadcasts a mac_task active:false on every
         // shell hello, and that must not tear down an active recording mid-teach.
         if killSwitch.mode != .record { killSwitch.disarm() }

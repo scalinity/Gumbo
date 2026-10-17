@@ -234,9 +234,8 @@ hub.onMessage((msg, role) => {
     // M6: the executor's answer to a mac_action — payload is sanitized inside the bridge.
     macBridge.handleResult(msg.id, msg.result);
   } else if (msg.type === 'mac_abort' && role === 'shell') {
-    // M6 kill switch: the user touched the machine (or hit the hotkey) while a computer-use
-    // task was driving it — cancel every running computer task, instantly and audibly.
-    manager.cancelComputerTasks(String(msg.reason ?? 'human_input'));
+    // Explicit stop shortcut or unavailable native stop control: cancel computer tasks.
+    manager.cancelComputerTasks(String(msg.reason ?? 'hotkey'));
   } else if (msg.type === 'teach_event' && role === 'shell') {
     // M8: one demonstration step from the record-mode tap — sanitized inside teachEvent.
     manager.teachEvent((msg as { step?: unknown }).step);

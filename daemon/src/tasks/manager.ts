@@ -782,7 +782,7 @@ export class TaskManager {
     void this.macBridge?.request({ kind: 'record_stop' });
   }
 
-  /** M6 kill switch: untagged HID input (the user) or the abort hotkey — stop every
+  /** Explicit stop shortcut or unavailable native stop control — stop every
    *  running computer-use task at once. The abort propagates through each task's
    *  AbortController into in-flight MacBridge RPCs and script children. */
   cancelComputerTasks(reason: string) {
@@ -797,7 +797,7 @@ export class TaskManager {
       // finishWithReport('done') won the label race. finish() is idempotent (first writer
       // wins), so the runner's own settlement no-ops afterward; its finally still tears
       // the browser down. This is what makes the kill switch a HARD stop, audibly and
-      // in the store, the instant the user touches the machine.
+      // in the store, the instant the stop request arrives.
       this.finish(id, 'cancelled', { reason: `kill_switch:${reason}` });
     }
   }

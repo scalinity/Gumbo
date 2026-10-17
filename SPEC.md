@@ -505,15 +505,15 @@ the RPC so the daemon can tell "action failed" from "permission silently dead".
   the ghost cursor animates to each target's `AXFrame` with a brief highlight ring before the
   action fires. Never intercepts real clicks.
 - **Guardrails:** free navigation/typing/drafting; send/delete/pay/off-allowlist app → **notch
-  confirm**; **kill switch = hotkey or HUMAN input — synthetic input must be distinguishable**
-  (research correction 2026-07-16: "any mouse movement aborts" self-triggers once the dispatch
-  ladder's global rung moves the real pointer). Tag every agent-synthesized event (dedicated
-  `CGEventSource` user-data), run a listen-only event tap, and any UNTAGGED HID input = the user =
-  instant abort (event tap → `AbortController`, propagating through the existing task-cancel
-  path). Secure-field deny (executor-level); one audit line per performed action.
+  confirm**. Ordinary keyboard and mouse use leaves background tasks running. **Control–Shift–Escape**
+  stops all computer tasks through the existing `AbortController` cancellation path, including
+  in-flight native requests and scripts. Voice/dashboard cancellation remains available. The
+  listen-only tap ignores tagged synthetic events and also serves demonstration recording.
+  Secure-field deny (executor-level); one audit line per performed action.
 
-**Demo:** "open Notes and draft a packing list" with the visible fake cursor; jiggle the real mouse
-and it halts instantly. Notes scenario completes AX-only (no screenshots in the event log). Hot
+**Demo:** "open Notes and draft a packing list" with the visible fake cursor; continue using
+another app while it runs, or press Control–Shift–Escape to stop it. Notes scenario completes
+AX-only (no screenshots in the event log). Hot
 tier: "open Chrome and go to claude.ai" → a single `mac_do`, sub-second, no sub-agent spawned.
 
 ### M7 — Computer use v2: full-surface coverage + cooperation (specced 2026-07-16; build after M6)
@@ -558,8 +558,7 @@ Same loop, same guardrails, same audit — new LANES only; nothing here changes 
   are the documented #1 cause of offset clicks.
 - **Cooperative handoff:** M6 classifies login/permission/secure-field as pause states; v2
   completes the round trip. The notch shows why it paused and what happens next; the user performs
-  the one step THEMSELVES — the kill-switch tap already distinguishes their input, so their manual step
-  is *detected as the handoff*, not an abort — then the agent verifies the state diff and
+  the one step THEMSELVES, then the agent verifies the state diff and
   resumes. Pause → human step → verify → resume.
 - **Voice steering:** the `send_to_session` idiom, extended to computer-use tasks — a PTT turn
   while a watched task runs can inject guidance ("use the personal account", "skip that dialog")
