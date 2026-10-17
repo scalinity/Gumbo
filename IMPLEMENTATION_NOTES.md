@@ -3097,3 +3097,8 @@ places the fixes had looked, and both lessons generalize:
 
 - The installed activity window stayed blank while its dev server answered HTTP 200. WebKit repeatedly reported provisional-navigation error -1008 for `localhost:5173`. Loading `127.0.0.1:5173`, the same loopback endpoint checked by DaemonLauncher, restored the rendered activity feed and connected status. The hostname-specific WebKit failure is observed; its underlying OS resolver/filter cause is not established. No network protection or TCC setting was changed.
 - The signed rebuild passed all eight native tests. Its designated signing requirements match the installed app; strict bundle verification passed before and after installation. The canonical application was reopened and its rendered dashboard was inspected directly.
+
+### Live interaction presentation (2026-10-17)
+
+- Native interaction exposed reused caption IDs across spoken turns. Live captions now include the input generation so the notch resets its reveal baseline for each new utterance or typed request. Backend results remain in a dedicated event instead of duplicating the spoken answer as a second main-feed message. Provider connection failures also produce the existing failed notch pulse.
+- Verification: all 59 focused realtime, delegation and tool-registry tests passed. Physical speech reached Live and produced input/output transcripts during the installed-app check; speaker speed and subjective sound quality still require a direct listening result.

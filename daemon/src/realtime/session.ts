@@ -157,6 +157,7 @@ export class Orchestrator {
     this.hub.broadcast({ type: 'playback_flush' }, 'shell');
     this.shellDraining = false;
     this.closeSession();
+    this.hub.broadcast({ type: 'notch_pulse', status: 'failed' }, 'shell');
   }
 
   private async ensureSession(): Promise<LiveSession> {
@@ -205,7 +206,7 @@ export class Orchestrator {
       this.store.addEvent(null, 'transcript.user', { text: event.delta, start_ms: event.start_ms, end_ms: event.end_ms });
     } else if (event.type === 'session.output_transcript.delta' && event.delta) {
       this.assistantText += event.delta;
-      this.hub.broadcast({ type: 'assistant_delta', item_id: `live-${this.connectionGeneration}`, delta: event.delta });
+      this.hub.broadcast({ type: 'assistant_delta', item_id: `live-${this.connectionGeneration}-${this.inputGeneration}`, delta: event.delta });
       if (this.assistantTimer) clearTimeout(this.assistantTimer);
       this.assistantTimer = setTimeout(() => this.persistAssistant(), 1500);
       if (this.turnTimer) clearTimeout(this.turnTimer);
@@ -259,7 +260,7 @@ export class Orchestrator {
         input: [...this.backendHistory, { role: 'user', content: `${context}\n${systemNotice ? 'Application task update: ' : ''}${text}` }],
         tools: this.tools(), signal: AbortSignal.any([abort.signal, AbortSignal.timeout(90_000)]),
         kind: 'voice_backend', effort: 'medium', maxTokens: 4096, maxTurns: 8,
-        onEvent: (type, payload) => this.store.addEvent(null, type, payload),
+        onEvent: (type, payload) => this.store.addEvent(null, type === 'subagent.message' ? 'voice.backend_result' : type, payload),
       });
       if (abort.signal.aborted || this.backendAbort !== abort) return;
       this.backendHistory = result.history;
@@ -351,6 +352,7 @@ export class Orchestrator {
   }
 
   async handleDebugText(text: string) {
+    this.inputGeneration++;
     if (this.shellDraining) { this.hub.broadcast({ type: 'playback_flush' }, 'shell'); this.session?.interrupt(); }
     this.store.addEvent(null, 'transcript.user', { text });
     // Text works with the microphone off and never starts a paid voice connection.
