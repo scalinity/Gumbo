@@ -7,7 +7,12 @@ final class AudioLifecycleTests: XCTestCase {
     func testDuplexGraphDeliversMicrophoneFramesAndStopsOnRelease() async throws {
         let audio = AudioEngine()
         let captured = expectation(description: "Actual microphone PCM arrives")
-        let resumed = expectation(description: "Stopped microphone resumes promptly")
+        let resumed = expectation(description: "Released microphone starts again")
+        weak var graph: AVAudioEngine?
+        audio.outputSampleRate = { engine in
+            graph = engine
+            return engine.outputNode.outputFormat(forBus: 0).sampleRate
+        }
         let frameLock = NSLock()
         var frames = 0
         var failures: [String] = []
@@ -17,8 +22,7 @@ final class AudioLifecycleTests: XCTestCase {
         audio.onCaptureReady = {
             readyCount += 1
             if let resumeAt {
-                XCTAssertLessThan(Date().timeIntervalSince(resumeAt), 1.5,
-                                  "An idle stop must retain the warm graph")
+                NSLog("[audio-test] fresh capture after idle release %.3fs", Date().timeIntervalSince(resumeAt))
                 resumed.fulfill()
             }
         }
@@ -36,21 +40,26 @@ final class AudioLifecycleTests: XCTestCase {
         audio.start(reason: .ptt)
         await fulfillment(of: [captured], timeout: 15)
         XCTAssertTrue(failures.isEmpty, "Microphone startup failures: \(failures)")
+        XCTAssertTrue(try XCTUnwrap(graph).inputNode.isVoiceProcessingEnabled, "Capture must retain echo cancellation")
+        XCTAssertEqual(try XCTUnwrap(graph).inputNode.voiceProcessingOtherAudioDuckingConfiguration.duckingLevel, .min)
+        XCTAssertFalse(try XCTUnwrap(graph).inputNode.voiceProcessingOtherAudioDuckingConfiguration.enableAdvancedDucking.boolValue)
         audio.setArmed(false)
         try await Task.sleep(for: .milliseconds(150))
         let releasedCount = frames
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(frames, releasedCount, "Release must stop microphone delivery")
-        audio.suspend()
+        audio.stop()
         try await Task.sleep(for: .milliseconds(500))
         let suspendedCount = frames
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(frames, suspendedCount)
+        XCTAssertNil(graph, "Idle must release the voice-processing instance, not retain its effect on other apps")
         resumeAt = Date()
         audio.setArmed(true)
         audio.start(reason: .ptt)
-        await fulfillment(of: [resumed], timeout: 3)
+        await fulfillment(of: [resumed], timeout: 15)
         XCTAssertEqual(readyCount, 2)
+        XCTAssertEqual(try XCTUnwrap(graph).inputNode.voiceProcessingOtherAudioDuckingConfiguration.duckingLevel, .min)
         audio.stop()
         try await Task.sleep(for: .milliseconds(300))
     }

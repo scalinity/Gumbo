@@ -43,7 +43,6 @@ final class AudioEngine {
     private var mode: Mode?
     private var captureConverter: AVAudioConverter?
     private var captureMonoFormat: AVAudioFormat?
-    private var captureInputFormat: AVAudioFormat?
     private var playbackConverter: AVAudioConverter?
     private var playFormat: AVAudioFormat?
     private var loggedChannelPeaks = false
@@ -155,35 +154,15 @@ final class AudioEngine {
         graphQueue.async { self.stopEngine(keepQueue: false) }
     }
 
-    /// Close hardware I/O while retaining the configured graph for the next press.
-    /// Rebuilding VPIO on every idle timeout adds seconds before input can arrive.
-    func suspend() {
-        setArmed(false)
-        lock.lock()
-        lifecycleVersion += 1
-        lock.unlock()
-        graphQueue.async { self.stopEngine(keepQueue: false, keepGraph: true) }
-    }
-
     private func switchTo(_ target: Mode) {
-        if mode == target {
-            if running { return }
-            if let engine, outputSampleRate(engine) == playFormat?.sampleRate,
-               target != .duplex || engine.inputNode.outputFormat(forBus: 0) == captureInputFormat {
-                lock.lock()
-                let version = lifecycleVersion
-                lock.unlock()
-                activateGraph(startVersion: version)
-                return
-            }
-        }
+        if running && mode == target { return }
         if engine != nil {
             stopEngine(keepQueue: true) // keep queued audio: press-and-stay-silent must still hear the rest
         }
         setupAndStart(target)
     }
 
-    private func stopEngine(keepQueue: Bool, keepGraph: Bool = false) {
+    private func stopEngine(keepQueue: Bool) {
         startRetry?.cancel()
         startRetry = nil
         playbackWatchdog?.cancel()
@@ -214,21 +193,18 @@ final class AudioEngine {
         let queueEmpty = queueIsEmpty
         lock.unlock()
         pumpQueue.sync {}
-        if !keepGraph, mode == .duplex { engine?.inputNode.removeTap(onBus: 0) }
+        if mode == .duplex { engine?.inputNode.removeTap(onBus: 0) }
         player?.stop()
         engine?.stop()
         captureConverter?.reset()
         playbackConverter?.reset()
-        if !keepGraph {
-            engine = nil
-            player = nil
-            mode = nil
-            captureConverter = nil
-            captureMonoFormat = nil
-            captureInputFormat = nil
-            playbackConverter = nil
-            playFormat = nil
-        }
+        engine = nil
+        player = nil
+        mode = nil
+        captureConverter = nil
+        captureMonoFormat = nil
+        playbackConverter = nil
+        playFormat = nil
         if queueEmpty { setDraining(false) }
         NSLog("[audio] engine stopped%@", keepQueue && !queueEmpty ? " (graph switch, queue retained)" : "")
     }
@@ -462,6 +438,10 @@ final class AudioEngine {
             let input = engine.inputNode
             do {
                 try input.setVoiceProcessingEnabled(true)
+                // VPIO otherwise applies its voice-chat ducking level to other apps.
+                // Keep their output as loud as this API permits while AEC is needed.
+                input.voiceProcessingOtherAudioDuckingConfiguration = .init(
+                    enableAdvancedDucking: false, duckingLevel: .min)
             } catch {
                 NSLog("[audio] voice processing unavailable (\(error)) — echo cancellation degraded")
             }
@@ -482,7 +462,6 @@ final class AudioEngine {
                 return
             }
             captureMonoFormat = monoIn
-            captureInputFormat = hwInFormat
             captureConverter = inputConverter
             loggedChannelPeaks = false
 
