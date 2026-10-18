@@ -345,7 +345,8 @@ struct SimmerBars: View {
     var recording: Bool = false // M8: steady red while the watch-me recorder is live
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0,
+                                paused: state == .idle && pulse == nil && !recording)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             HStack(alignment: .center, spacing: 3) {
                 ForEach(0..<5, id: \.self) { i in
